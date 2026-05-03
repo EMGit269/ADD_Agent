@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Input;
@@ -23,6 +24,7 @@ namespace ADDGH
         private static ScrollViewer _chatScroll;
         private static TextBox _txtInput;
         private static Button _btnSend;
+        private static System.Windows.Threading.DispatcherTimer _scrollHideTimer;
         
         private static Grid _settingsOverlay;
         private static TextBox _txtApiKey;
@@ -48,6 +50,7 @@ namespace ADDGH
         private static StackPanel _skillContent;
         private static TextBlock _txtSkillCount;
         private static bool _isSkillVisible = false;
+        private static Window _referenceLibraryWindow;
         
         private static Border _warningBar;
         private static TextBlock _txtWarning;
@@ -60,6 +63,8 @@ namespace ADDGH
    - 🟡 中风险（自主判定）：添加 5-8 个电池的功能分支、修改密集型交叉连线、替换现有逻辑块。
    - 🟢 低风险（直接操作）：修改 Slider/Panel 数值、添加单个辅助电池、电池对齐或整理分组。
 3. 命名规范：数值条 (Number Slider) 必须设 label。普通电池严禁改 label。
+4. 最终总结请使用结构化 Markdown：短标题、列表、重点加粗；涉及代码、JSON、表达式或关键参数时使用 ``` 代码块，不要把大段技术内容挤在普通段落中。
+5. 在开始建模、修改画布或设计 GH 逻辑前，应主动检查 reference_index.md；若有相关参考，先用 read_reference_json 读取对应 JSON，再复用或改造其中的建模逻辑。
 优先批量处理，直接行动。";
 
         private static List<object> _messages = new List<object>();
@@ -112,6 +117,79 @@ namespace ADDGH
             }));
         }
 
+        private static void InitializeFloatingScrollbars()
+        {
+            if (_window == null) return;
+
+            _scrollHideTimer = new System.Windows.Threading.DispatcherTimer {
+                Interval = TimeSpan.FromMilliseconds(700)
+            };
+            _scrollHideTimer.Tick += (s, e) => {
+                _scrollHideTimer.Stop();
+                HideFloatingScrollbars();
+            };
+
+            _window.Loaded += (s, e) => AttachFloatingScrollbarHandlers();
+            _window.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler((s, e) => {
+                if (Math.Abs(e.VerticalChange) < 0.01 && Math.Abs(e.HorizontalChange) < 0.01) return;
+                ShowFloatingScrollbars(e.OriginalSource as DependencyObject);
+            }), true);
+        }
+
+        private static void AttachFloatingScrollbarHandlers()
+        {
+            if (_window == null) return;
+
+            foreach (var viewer in FindVisualChildren<ScrollViewer>(_window)) {
+                viewer.ScrollChanged -= ScrollViewer_ScrollChanged;
+                viewer.ScrollChanged += ScrollViewer_ScrollChanged;
+            }
+        }
+
+        private static void ScrollViewer_ScrollChanged(object sender, ScrollChangedEventArgs e)
+        {
+            if (Math.Abs(e.VerticalChange) < 0.01 && Math.Abs(e.HorizontalChange) < 0.01) return;
+            ShowFloatingScrollbars(sender as DependencyObject);
+        }
+
+        private static void ShowFloatingScrollbars(DependencyObject scope)
+        {
+            if (_window == null) return;
+            var root = scope ?? _window;
+
+            foreach (var bar in FindVisualChildren<ScrollBar>(root)) {
+                bar.Opacity = 0.45;
+            }
+
+            _scrollHideTimer?.Stop();
+            _scrollHideTimer?.Start();
+        }
+
+        private static void HideFloatingScrollbars()
+        {
+            if (_window == null) return;
+
+            foreach (var bar in FindVisualChildren<ScrollBar>(_window)) {
+                if (bar.IsMouseOver || bar.IsMouseCaptureWithin) continue;
+                bar.ClearValue(UIElement.OpacityProperty);
+            }
+        }
+
+        private static IEnumerable<T> FindVisualChildren<T>(DependencyObject parent) where T : DependencyObject
+        {
+            if (parent == null) yield break;
+
+            int count = VisualTreeHelper.GetChildrenCount(parent);
+            for (int i = 0; i < count; i++) {
+                DependencyObject child = VisualTreeHelper.GetChild(parent, i);
+                if (child is T match) yield return match;
+
+                foreach (T descendant in FindVisualChildren<T>(child)) {
+                    yield return descendant;
+                }
+            }
+        }
+
         public static void Show()
         {
             if (_window != null)
@@ -132,23 +210,58 @@ namespace ADDGH
         Topmost=""True"" WindowStartupLocation=""CenterScreen"" x:Name=""MagpieWindow"">
     <Window.Resources>
         <Style TargetType=""ScrollBar"">
-            <Setter Property=""Width"" Value=""6""/>
             <Setter Property=""Background"" Value=""Transparent""/>
+            <Setter Property=""MinWidth"" Value=""0""/>
+            <Setter Property=""MinHeight"" Value=""0""/>
+            <Setter Property=""Opacity"" Value=""0""/>
             <Setter Property=""Template"">
                 <Setter.Value>
                     <ControlTemplate TargetType=""ScrollBar"">
-                        <Grid>
-                            <Track x:Name=""PART_Track"" IsDirectionReversed=""True"">
+                        <Grid x:Name=""Bg"" Background=""Transparent"">
+                            <Track x:Name=""PART_Track"" IsDirectionReversed=""true"">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command=""ScrollBar.PageUpCommand"" Opacity=""0""/>
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command=""ScrollBar.PageDownCommand"" Opacity=""0""/>
+                                </Track.IncreaseRepeatButton>
                                 <Track.Thumb>
-                                    <Thumb>
+                                    <Thumb MinWidth=""0"" MinHeight=""0"" Background=""Transparent"">
                                         <Thumb.Template>
                                             <ControlTemplate TargetType=""Thumb"">
-                                                <Border Background=""#40FFFFFF"" CornerRadius=""3""/>
+                                                <Border Background=""#88FFFFFF"" Width=""6"" HorizontalAlignment=""Right"" CornerRadius=""3"" Margin=""0,2""/>
                                             </ControlTemplate>
                                         </Thumb.Template>
                                     </Thumb>
                                 </Track.Thumb>
                             </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property=""Orientation"" Value=""Vertical"">
+                    <Setter Property=""Width"" Value=""6""/>
+                </Trigger>
+                <Trigger Property=""Orientation"" Value=""Horizontal"">
+                    <Setter Property=""Height"" Value=""6""/>
+                </Trigger>
+                <Trigger Property=""IsMouseOver"" Value=""True"">
+                    <Setter Property=""Opacity"" Value=""0.45""/>
+                </Trigger>
+                <Trigger Property=""IsMouseCaptureWithin"" Value=""True"">
+                    <Setter Property=""Opacity"" Value=""0.45""/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style TargetType=""ScrollViewer"">
+            <Setter Property=""Template"">
+                <Setter.Value>
+                    <ControlTemplate TargetType=""ScrollViewer"">
+                        <Grid>
+                            <ScrollContentPresenter x:Name=""PART_ScrollContentPresenter"" CanContentScroll=""{TemplateBinding CanContentScroll}""/>
+                            <ScrollBar x:Name=""PART_VerticalScrollBar"" HorizontalAlignment=""Right"" Maximum=""{TemplateBinding ScrollableHeight}"" ViewportSize=""{TemplateBinding ViewportHeight}"" Value=""{Binding VerticalOffset, Mode=OneWay, RelativeSource={RelativeSource TemplatedParent}}"" Visibility=""{TemplateBinding ComputedVerticalScrollBarVisibility}""/>
+                            <ScrollBar x:Name=""PART_HorizontalScrollBar"" VerticalAlignment=""Bottom"" Orientation=""Horizontal"" Maximum=""{TemplateBinding ScrollableWidth}"" ViewportSize=""{TemplateBinding ViewportWidth}"" Value=""{Binding HorizontalOffset, Mode=OneWay, RelativeSource={RelativeSource TemplatedParent}}"" Visibility=""{TemplateBinding ComputedHorizontalScrollBarVisibility}""/>
                         </Grid>
                     </ControlTemplate>
                 </Setter.Value>
@@ -164,11 +277,7 @@ namespace ADDGH
                         <Border Background=""{TemplateBinding Background}"" CornerRadius=""6"">
                             <ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/>
                         </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property=""IsMouseOver"" Value=""True"">
-                                <Setter Property=""Background"" Value=""#2A2A2A""/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
+                        
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -278,11 +387,7 @@ namespace ADDGH
                                         <Border Background=""{TemplateBinding Background}"" CornerRadius=""6"" Padding=""8,5"">
                                         <ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/>
                                         </Border>
-                                        <ControlTemplate.Triggers>
-                                            <Trigger Property=""IsMouseOver"" Value=""True"">
-                                                <Setter Property=""Background"" Value=""#2A2A2A""/>
-                                            </Trigger>
-                                        </ControlTemplate.Triggers>
+                                        
                                     </ControlTemplate>
                                 </Button.Template>
                             <Path Data=""M9.4,16.6L4.8,12l4.6-4.6L8,6l-6,6l6,6L9.4,16.6z M14.6,16.6l4.6-4.6l-4.6-4.6L16,6l6,6l-6,6L14.6,16.6z"" Fill=""White"" Width=""16"" Height=""16"" Stretch=""Uniform""/>
@@ -293,11 +398,7 @@ namespace ADDGH
                                         <Border Background=""{TemplateBinding Background}"" CornerRadius=""6"" Padding=""8,5"">
                                         <ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/>
                                         </Border>
-                                        <ControlTemplate.Triggers>
-                                            <Trigger Property=""IsMouseOver"" Value=""True"">
-                                                <Setter Property=""Background"" Value=""#2A2A2A""/>
-                                            </Trigger>
-                                        </ControlTemplate.Triggers>
+                                        
                                     </ControlTemplate>
                                 </Button.Template>
                             <TextBlock Text=""+"" Foreground=""White"" FontWeight=""Bold""/>
@@ -308,11 +409,7 @@ namespace ADDGH
                                         <Border Background=""{TemplateBinding Background}"" CornerRadius=""6"" Padding=""8,5"">
                                         <ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/>
                                         </Border>
-                                        <ControlTemplate.Triggers>
-                                            <Trigger Property=""IsMouseOver"" Value=""True"">
-                                                <Setter Property=""Background"" Value=""#2A2A2A""/>
-                                            </Trigger>
-                                        </ControlTemplate.Triggers>
+                                        
                                     </ControlTemplate>
                                 </Button.Template>
                             <Path Data=""M11,2L11,3.07C11.68,3.12,12.34,3.28,12.95,3.54L13.72,2.77L15.15,4.22L14.4,4.98C14.73,5.54,14.95,6.15,15.03,6.79L16.07,6.93L16.07,8.93L15.03,9.07C14.95,9.71,14.73,10.32,14.4,10.88L15.15,11.64L13.72,13.09L12.95,12.32C12.34,12.58,11.68,12.74,11,12.79L11,14L9,14L9,12.79C8.32,12.74,7.66,12.58,7.05,12.32L6.28,13.09L4.85,11.64L5.6,10.88C5.27,10.32,5.05,9.71,4.97,9.07L3.93,8.93L3.93,6.93L4.97,6.79C5.05,6.15,5.27,5.54,5.6,4.98L4.85,4.22L6.28,2.77L7.05,3.54C7.66,3.28,8.32,3.12,9,3.07L9,2L11,2z M10,7C8.9,7,8,7.9,8,9C8,10.1,8.9,11,10,11C11.1,11,12,10.1,12,9C12,7.9,11.1,7,10,7z"" Fill=""White"" Width=""16"" Height=""16"" Stretch=""Uniform""/>
@@ -323,11 +420,7 @@ namespace ADDGH
                                         <Border Background=""{TemplateBinding Background}"" CornerRadius=""6"" Padding=""8,5"">
                                         <ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/>
                                         </Border>
-                                        <ControlTemplate.Triggers>
-                                            <Trigger Property=""IsMouseOver"" Value=""True"">
-                                                <Setter Property=""Background"" Value=""#E81123""/>
-                                            </Trigger>
-                                        </ControlTemplate.Triggers>
+                                        
                                     </ControlTemplate>
                                 </Button.Template>
                             <Path Data=""M4,4L8,8M8,4L4,8"" Stroke=""White"" StrokeThickness=""2"" Width=""16"" Height=""16"" Stretch=""Uniform""/>
@@ -359,11 +452,12 @@ namespace ADDGH
                             <TextBlock x:Name=""TxtImageAttached"" Text=""已选择图片"" Foreground=""#4CAF50"" FontSize=""11"" VerticalAlignment=""Center"" Visibility=""Collapsed""/>
                             <Button x:Name=""BtnClearImage"" Content=""✕"" Foreground=""#FF6B6B"" Background=""Transparent"" BorderThickness=""0"" FontSize=""11"" Cursor=""Hand"" Margin=""5,0,0,0"" Visibility=""Collapsed""/>
                         </StackPanel>
-                        <Border Background=""#2A2A2A"" CornerRadius=""8"" Margin=""0,0,0,8"">
-                            <TextBox x:Name=""TxtInput"" Background=""Transparent"" Foreground=""#FFF"" BorderThickness=""0"" Padding=""10,8,10,8"" FontSize=""14"" AcceptsReturn=""True"" VerticalScrollBarVisibility=""Auto"" TextWrapping=""Wrap"" Height=""36"" CaretBrush=""White""/>
+                        <Border Background=""#2A2A2A"" BorderBrush=""#333333"" BorderThickness=""1"" CornerRadius=""8"" Padding=""4"" Margin=""0,0,0,8"">
+                            <TextBox x:Name=""TxtInput"" Background=""Transparent"" Foreground=""#FFF"" BorderThickness=""0"" Padding=""14,10,14,10"" FontSize=""14"" AcceptsReturn=""True"" VerticalScrollBarVisibility=""Auto"" TextWrapping=""Wrap"" MinHeight=""36"" MaxHeight=""116"" CaretBrush=""White""/>
                         </Border>
                         <Grid>
                             <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width=""Auto""/>
                                 <ColumnDefinition Width=""Auto""/>
                                 <ColumnDefinition Width=""Auto""/>
                                 <ColumnDefinition Width=""Auto""/>
@@ -372,22 +466,54 @@ namespace ADDGH
                                 <ColumnDefinition Width=""Auto""/>
                             </Grid.ColumnDefinitions>
                             
-                            <Button x:Name=""BtnUploadImage"" Grid.Column=""0"" Content=""+"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""22"" FontWeight=""Medium"" Cursor=""Hand"" ToolTip=""上传图片"" Margin=""0,0,10,0""/>
+                            <Button x:Name=""BtnUploadImage"" Grid.Column=""0"" Style=""{StaticResource IconButtonStyle}"" Content=""+"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""22"" FontWeight=""Medium"" Cursor=""Hand"" ToolTip=""上传图片"" Margin=""0,0,10,0""/>
                             <Button x:Name=""BtnStop"" Grid.Column=""1"" Content=""停止"" Visibility=""Collapsed"" Foreground=""#FF6B6B"" Background=""Transparent"" BorderThickness=""0"" FontSize=""16"" Cursor=""Hand"" ToolTip=""停止按钮"" Margin=""0,0,10,0""/>
-                            <Button x:Name=""BtnContinue"" Grid.Column=""2"" Content=""继续"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""继续生成""/>
-                            <Button x:Name=""BtnToggleLibrary"" Grid.Column=""3"" Content=""电池库"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""展开/收起电池库"" Margin=""8,0,0,0""/>
+                            <Button x:Name=""BtnContinue"" Grid.Column=""2"" Style=""{StaticResource IconButtonStyle}"" Content=""继续"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""继续生成""/>
+                            <Button x:Name=""BtnToggleLibrary"" Grid.Column=""3"" Style=""{StaticResource IconButtonStyle}"" Content=""电池库"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""展开/收起电池库"" Margin=""8,0,0,0""/>
+                            <Button x:Name=""BtnReference"" Grid.Column=""4"" Style=""{StaticResource IconButtonStyle}"" Content=""参考"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""参考菜单"" Margin=""8,0,0,0"">
+                                <Button.ContextMenu>
+                                    <ContextMenu Background=""#1E1E1E"" Foreground=""#E0E0E0"" BorderBrush=""#333"" BorderThickness=""1"" Padding=""4"">
+                                        <ContextMenu.Template>
+                                            <ControlTemplate TargetType=""ContextMenu"">
+                                                <Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""4"" Padding=""{TemplateBinding Padding}"">
+                                                    <ItemsPresenter/>
+                                                </Border>
+                                            </ControlTemplate>
+                                        </ContextMenu.Template>
+                                        <ContextMenu.Resources>
+                                            <Style TargetType=""MenuItem"">
+                                                <Setter Property=""Foreground"" Value=""#E0E0E0""/>
+                                                <Setter Property=""Background"" Value=""Transparent""/>
+                                                <Setter Property=""Padding"" Value=""12,8""/>
+                                                <Setter Property=""Template"">
+                                                    <Setter.Value>
+                                                        <ControlTemplate TargetType=""MenuItem"">
+                                                            <Border x:Name=""Bg"" Background=""{TemplateBinding Background}"" CornerRadius=""4"">
+                                                                <ContentPresenter Content=""{TemplateBinding Header}"" Margin=""{TemplateBinding Padding}""/>
+                                                            </Border>
+                                                            <ControlTemplate.Triggers>
+                                                                <Trigger Property=""IsHighlighted"" Value=""True"">
+                                                                    <Setter TargetName=""Bg"" Property=""Background"" Value=""#333333""/>
+                                                                </Trigger>
+                                                            </ControlTemplate.Triggers>
+                                                        </ControlTemplate>
+                                                    </Setter.Value>
+                                                </Setter>
+                                            </Style>
+                                        </ContextMenu.Resources>
+                                        <MenuItem x:Name=""MenuCreateReference"" Header=""创建参考""/>
+                                        <MenuItem x:Name=""MenuMyReferences"" Header=""我的参考""/>
+                                    </ContextMenu>
+                                </Button.ContextMenu>
+                            </Button>
                             
-                            <Button x:Name=""BtnSend"" Grid.Column=""5"" Content=""➤"" Foreground=""Black"" FontSize=""18"" Margin=""0"" Width=""36"" Height=""36"" Cursor=""Hand"" VerticalAlignment=""Center"">
+                            <Button x:Name=""BtnSend"" Grid.Column=""6"" Content=""➤"" Foreground=""Black"" FontSize=""18"" Margin=""0"" Width=""36"" Height=""36"" Cursor=""Hand"" VerticalAlignment=""Center"">
                                 <Button.Template>
                                     <ControlTemplate TargetType=""Button"">
                                         <Border x:Name=""bg"" Background=""White"" CornerRadius=""18"">
                                         <ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center"" Margin=""2,0,0,0""/>
                                         </Border>
-                                        <ControlTemplate.Triggers>
-                                            <Trigger Property=""IsMouseOver"" Value=""True"">
-                                                <Setter TargetName=""bg"" Property=""Background"" Value=""#E0E0E0""/>
-                                            </Trigger>
-                                        </ControlTemplate.Triggers>
+                                        
                                     </ControlTemplate>
                                 </Button.Template>
                             </Button>
@@ -512,6 +638,7 @@ namespace ADDGH
             }
 
             _window.Closed += (s, e) => _window = null;
+            InitializeFloatingScrollbars();
             
             var headerBorder = (Border)_window.FindName("HeaderBorder");
             if (headerBorder != null) headerBorder.MouseLeftButtonDown += (s, e) => { if (e.LeftButton == MouseButtonState.Pressed && e.ClickCount == 1) _window.DragMove(); };
@@ -631,14 +758,21 @@ namespace ADDGH
             if (_btnSend != null) _btnSend.Click += BtnSend_Click;
             
             if (_txtInput != null) {
-            _txtInput.PreviewKeyDown += (s, e) => {
-                if (e.Key == Key.Enter) {
-                    if (!Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) {
+                _txtInput.TextChanged += (s, e) => UpdateInputHeight();
+                _txtInput.PreviewKeyDown += (s, e) => {
+                    if (e.Key == Key.Enter && Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) {
                         e.Handled = true;
-                        BtnSend_Click(null, null);
+                        int caret = _txtInput.CaretIndex;
+                        _txtInput.SelectedText = Environment.NewLine;
+                        _txtInput.CaretIndex = caret + Environment.NewLine.Length;
+                        UpdateInputHeight();
                     }
-                }
-            };
+                    else if (e.Key == Key.Enter) {
+                        e.Handled = true;
+                        if (!_isGenerating) BtnSend_Click(null, null);
+                    }
+                };
+                UpdateInputHeight();
             }
 
             var btnUploadImage = (Button)_window.FindName("BtnUploadImage");
@@ -736,6 +870,32 @@ namespace ADDGH
 
             if (btnRefreshLib != null) {
                 btnRefreshLib.Click += (s, e) => SyncComponentLibrary();
+            }
+
+            var btnReference = (Button)_window.FindName("BtnReference");
+            if (btnReference != null) {
+                btnReference.Click += (s, e) => {
+                    if (btnReference.ContextMenu != null) {
+                        btnReference.ContextMenu.PlacementTarget = btnReference;
+                        btnReference.ContextMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.Top;
+                        btnReference.ContextMenu.IsOpen = true;
+                    }
+                };
+            }
+
+            var menuCreateReference = (MenuItem)_window.FindName("MenuCreateReference");
+            if (menuCreateReference != null) {
+                menuCreateReference.Click += (s, e) => {
+                    string prompt = "请对当前画布内容进行总结，生成五个简短的画布描述（围绕当前画布什么典型建模操作，比如某种gh电池使用、基于某种建模逻辑的曲线生成方法等等），描述以卡片形式供我选择。请调用 show_reference_options 工具来展示选项。用户选择后，程序会把画布 JSON 保存到项目 reference 文件夹，并更新 skills/reference_index.md。";
+                    SendHiddenPromptAsync("保存当前画布为参考", prompt);
+                };
+            }
+
+            var menuMyReferences = (MenuItem)_window.FindName("MenuMyReferences");
+            if (menuMyReferences != null) {
+                menuMyReferences.Click += (s, e) => {
+                    ShowReferenceLibraryUI();
+                };
             }
 
             try {
@@ -1093,6 +1253,17 @@ namespace ADDGH
             return s;
         }
 
+        private static void UpdateInputHeight()
+        {
+            if (_txtInput == null) return;
+
+            _txtInput.UpdateLayout();
+            int lineCount = Math.Max(1, _txtInput.LineCount);
+            double lineHeight = Math.Max(20, _txtInput.FontSize * 1.45);
+            double desiredHeight = 24 + (lineCount * lineHeight);
+            _txtInput.Height = Math.Min(116, Math.Max(36, desiredHeight));
+        }
+
         private static async void BtnSend_Click(object sender, RoutedEventArgs e)
         {
             if (_isGenerating) { _cts?.Cancel(); return; }
@@ -1273,6 +1444,13 @@ namespace ADDGH
                     temperature = 0.3,
                     tools = new object[]
                     {
+                        new {
+                            type = "function",
+                            function = new {
+                                name = "ensure_gh_canvas",
+                                description = "确保当前存在可用的 Grasshopper 画布。若未检测到可用画布，则新建一个空白 GH 画布并设为当前画布。"
+                            }
+                        },
                         new {
                             type = "function",
                             function = new {
@@ -1532,6 +1710,38 @@ namespace ADDGH
                         new {
                             type = "function",
                             function = new {
+                                name = "read_reference_json",
+                                description = "读取 reference 目录中的参考画布 JSON。通常先读取 reference_index.md，根据描述选定 file_name 后再调用本工具。",
+                                parameters = new {
+                                    type = "object",
+                                    properties = new {
+                                        file_name = new { type = "string", description = "reference 目录下的 JSON 文件名，如 'ref_20260503123000.json'" }
+                                    },
+                                    required = new[] { "file_name" }
+                                }
+                            }
+                        },
+                        new {
+                            type = "function",
+                            function = new {
+                                name = "show_reference_options",
+                                description = "显示五个画布描述选项供用户选择，用于创建参考。",
+                                parameters = new {
+                                    type = "object",
+                                    properties = new {
+                                        options = new {
+                                            type = "array",
+                                            items = new { type = "string" },
+                                            description = "5个简短的画布描述"
+                                        }
+                                    },
+                                    required = new[] { "options" }
+                                }
+                            }
+                        },
+                        new {
+                            type = "function",
+                            function = new {
                                 name = "apply_gh_sandbox",
                                 description = "将沙箱模式中的修改应用到主画布。这会删除回收站中的电池，并将沙箱组中的电池移回原位并解除沙箱组。"
                             }
@@ -1623,7 +1833,8 @@ namespace ADDGH
                         try
                         {
                             var args = JsonConvert.DeserializeObject<Dictionary<string, object>>(argsJson);
-                            if (funcName == "get_gh_components") toolResult = ExecuteGetGhComponents();
+                            if (funcName == "ensure_gh_canvas") toolResult = ExecuteEnsureGhCanvas();
+                            else if (funcName == "get_gh_components") toolResult = ExecuteGetGhComponents();
                             else if (funcName == "add_gh_component") { 
                                 string label = args.ContainsKey("label") ? args["label"].ToString() : null;
                                 toolResult = ExecuteAddGhComponent(args["name"].ToString(), (float)Convert.ToDouble(args["x"]), (float)Convert.ToDouble(args["y"]), label); 
@@ -1674,8 +1885,22 @@ namespace ADDGH
                             else if (funcName == "read_skill_file") {
                                 toolResult = ExecuteReadSkillFile(args["file_name"].ToString());
                             }
+                            else if (funcName == "read_reference_json") {
+                                toolResult = ExecuteReadReferenceJson(args["file_name"].ToString());
+                            }
                             else if (funcName == "create_gh_skill") {
                                 toolResult = ExecuteCreateGhSkill(args["file_name"].ToString(), args["name"].ToString(), args["description"].ToString(), args["content"].ToString());
+                            }
+                            else if (funcName == "show_reference_options") {
+                                var options = args["options"] as Newtonsoft.Json.Linq.JArray;
+                                System.Collections.Generic.List<string> optList = new System.Collections.Generic.List<string>();
+                                if (options != null) {
+                                    foreach(var opt in options) optList.Add(opt.ToString());
+                                }
+                                AppendReferenceOptionsBubble(optList);
+                                toolResult = "已向用户展示参考选项卡片，等待用户选择。";
+                                _messages.Add(new { role = "tool", tool_call_id = callId, name = funcName, content = toolResult });
+                                return new ApiResponse { Content = fullContent, Reasoning = fullReasoning };
                             }
                             else if (funcName == "apply_gh_sandbox") {
                                 toolResult = ExecuteApplyGhSandbox();
@@ -1698,6 +1923,80 @@ namespace ADDGH
                     Content = fullContent, 
                     Reasoning = fullReasoning 
                 };
+        }
+
+        private static string ExecuteEnsureGhCanvas()
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                try
+                {
+                    var currentDoc = Grasshopper.Instances.ActiveCanvas?.Document;
+                    if (currentDoc != null)
+                    {
+                        result = "当前已存在可用 Grasshopper 画布。";
+                        return;
+                    }
+
+                    try
+                    {
+                        var editor = Grasshopper.Instances.DocumentEditor;
+                        if (editor != null)
+                        {
+                            var showMethod = editor.GetType().GetMethod("Show", Type.EmptyTypes);
+                            showMethod?.Invoke(editor, null);
+                        }
+                    }
+                    catch { }
+
+                    var doc = new Grasshopper.Kernel.GH_Document();
+                    bool addedToServer = false;
+
+                    var server = Grasshopper.Instances.DocumentServer;
+                    if (server != null)
+                    {
+                        foreach (var method in server.GetType().GetMethods().Where(m => m.Name == "AddDocument"))
+                        {
+                            var parameters = method.GetParameters();
+                            if (parameters.Length == 0 || !parameters[0].ParameterType.IsAssignableFrom(typeof(Grasshopper.Kernel.GH_Document))) continue;
+
+                            object[] callArgs = new object[parameters.Length];
+                            callArgs[0] = doc;
+                            for (int i = 1; i < parameters.Length; i++)
+                            {
+                                callArgs[i] = parameters[i].ParameterType == typeof(bool) ? (object)true : Type.Missing;
+                            }
+
+                            method.Invoke(server, callArgs);
+                            addedToServer = true;
+                            break;
+                        }
+                    }
+
+                    var canvas = Grasshopper.Instances.ActiveCanvas;
+                    if (canvas != null)
+                    {
+                        var docProp = canvas.GetType().GetProperty("Document");
+                        if (docProp != null && docProp.CanWrite)
+                        {
+                            docProp.SetValue(canvas, doc, null);
+                        }
+                        canvas.Refresh();
+                    }
+
+                    _canvasChanged = true;
+                    _cachedCanvasState = null;
+                    result = addedToServer
+                        ? "未检测到可用画布，已新建空白 Grasshopper 画布。"
+                        : "未检测到可用画布，已创建空白 Grasshopper 文档，但未能加入文档服务器。";
+                }
+                catch (Exception ex)
+                {
+                    result = "Error: 新建 Grasshopper 画布失败 - " + ex.Message;
+                }
+            }));
+            return result;
         }
 
         private static string ExecuteGetGhComponents()
@@ -2766,14 +3065,7 @@ namespace ADDGH
                     MaxWidth = 380
                 };
 
-                var tb = new TextBlock { 
-                    Foreground = Brushes.White, 
-                    TextWrapping = TextWrapping.Wrap, 
-                    FontSize = 14,
-                    LineHeight = 22
-                };
-                ParseMarkdown(tb, text);
-                bubble.Child = tb;
+                bubble.Child = BuildMarkdownPanel(text);
                 container.Children.Add(bubble);
                 if (_thinkingBubble != null) {
                     _chatPanel.Children.Remove(_thinkingBubble);
@@ -2883,7 +3175,714 @@ namespace ADDGH
             }
         }
 
-        private static void AppendColoredStatsMessage(int addComp, int delComp, int addConn, int delConn)
+        private static StackPanel BuildMarkdownPanel(string text)
+        {
+            var panel = new StackPanel { Orientation = Orientation.Vertical };
+            if (string.IsNullOrEmpty(text)) return panel;
+
+            var lines = text.Replace("\r\n", "\n").Split('\n');
+            bool inCode = false;
+            string codeLang = "";
+            var code = new StringBuilder();
+
+            Action flushCode = () => {
+                var codeText = code.ToString().TrimEnd('\n');
+                code.Clear();
+
+                var header = new TextBlock {
+                    Text = string.IsNullOrWhiteSpace(codeLang) ? "CODE" : codeLang.ToUpperInvariant(),
+                    Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 150)),
+                    FontSize = 10,
+                    FontWeight = FontWeights.SemiBold,
+                    Margin = new Thickness(0, 0, 0, 6)
+                };
+
+                var codeBlock = new TextBox {
+                    Text = codeText,
+                    IsReadOnly = true,
+                    TextWrapping = TextWrapping.NoWrap,
+                    AcceptsReturn = true,
+                    FontFamily = new FontFamily("Consolas"),
+                    FontSize = 12,
+                    Foreground = new SolidColorBrush(Color.FromRgb(230, 230, 230)),
+                    Background = Brushes.Transparent,
+                    BorderThickness = new Thickness(0),
+                    Padding = new Thickness(0),
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    MaxHeight = 220
+                };
+
+                var inner = new StackPanel();
+                inner.Children.Add(header);
+                inner.Children.Add(codeBlock);
+
+                panel.Children.Add(new Border {
+                    Background = new SolidColorBrush(Color.FromRgb(22, 22, 22)),
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(48, 48, 48)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(8),
+                    Padding = new Thickness(12),
+                    Margin = new Thickness(0, 8, 0, 10),
+                    Child = inner
+                });
+            };
+
+            foreach (string rawLine in lines) {
+                string line = rawLine;
+                if (line.TrimStart().StartsWith("```")) {
+                    if (!inCode) {
+                        inCode = true;
+                        codeLang = line.Trim().Trim('`').Trim();
+                    } else {
+                        inCode = false;
+                        flushCode();
+                        codeLang = "";
+                    }
+                    continue;
+                }
+
+                if (inCode) {
+                    code.AppendLine(line);
+                    continue;
+                }
+
+                var tb = new TextBlock {
+                    Foreground = new SolidColorBrush(Color.FromRgb(235, 235, 235)),
+                    TextWrapping = TextWrapping.Wrap,
+                    FontSize = 14,
+                    LineHeight = 22,
+                    Margin = new Thickness(0, 2, 0, 2)
+                };
+
+                string trimmed = line.Trim();
+                if (string.IsNullOrWhiteSpace(trimmed)) {
+                    panel.Children.Add(new Border { Height = 6, Opacity = 0 });
+                    continue;
+                }
+
+                if (trimmed.StartsWith("### ")) {
+                    tb.FontSize = 15;
+                    tb.FontWeight = FontWeights.SemiBold;
+                    tb.Foreground = new SolidColorBrush(Color.FromRgb(255, 220, 150));
+                    ParseMarkdown(tb, trimmed.Substring(4));
+                } else if (trimmed.StartsWith("## ")) {
+                    tb.FontSize = 16;
+                    tb.FontWeight = FontWeights.SemiBold;
+                    tb.Foreground = new SolidColorBrush(Color.FromRgb(255, 220, 150));
+                    tb.Margin = new Thickness(0, 8, 0, 4);
+                    ParseMarkdown(tb, trimmed.Substring(3));
+                } else if (trimmed.StartsWith("# ")) {
+                    tb.FontSize = 17;
+                    tb.FontWeight = FontWeights.Bold;
+                    tb.Foreground = new SolidColorBrush(Color.FromRgb(255, 220, 150));
+                    tb.Margin = new Thickness(0, 8, 0, 4);
+                    ParseMarkdown(tb, trimmed.Substring(2));
+                } else if (trimmed.StartsWith("- ") || trimmed.StartsWith("* ")) {
+                    tb.Inlines.Add(new System.Windows.Documents.Run("• ") { Foreground = new SolidColorBrush(Color.FromRgb(255, 200, 100)) });
+                    var inline = new TextBlock();
+                    ParseMarkdown(inline, trimmed.Substring(2));
+                    foreach (var item in inline.Inlines.ToList()) {
+                        inline.Inlines.Remove(item);
+                        tb.Inlines.Add(item);
+                    }
+                } else if (trimmed.StartsWith("> ")) {
+                    tb.Foreground = new SolidColorBrush(Color.FromRgb(190, 190, 190));
+                    ParseMarkdown(tb, trimmed.Substring(2));
+                    panel.Children.Add(new Border {
+                        BorderBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
+                        BorderThickness = new Thickness(2, 0, 0, 0),
+                        Padding = new Thickness(10, 2, 0, 2),
+                        Margin = new Thickness(0, 4, 0, 4),
+                        Child = tb
+                    });
+                    continue;
+                } else {
+                    ParseMarkdown(tb, line);
+                }
+
+                panel.Children.Add(tb);
+            }
+
+            if (inCode) flushCode();
+            return panel;
+        }
+
+        private static void AppendReferenceOptionsBubble(System.Collections.Generic.List<string> options)
+        {
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                var container = new StackPanel { Margin = new Thickness(0, 0, 0, 20), HorizontalAlignment = HorizontalAlignment.Left };
+                
+                var header = new TextBlock { 
+                    Text = "选择参考描述", 
+                    Foreground = new SolidColorBrush(Color.FromRgb(170, 170, 170)),
+                    FontSize = 11,
+                    FontWeight = FontWeights.SemiBold,
+                    Margin = new Thickness(2, 0, 0, 8)
+                };
+                container.Children.Add(header);
+
+                var optionsPanel = new StackPanel { Orientation = Orientation.Vertical };
+                
+                foreach (var opt in options) {
+                    var btn = new Button {
+                        Content = opt,
+                        Background = Brushes.Transparent,
+                        Foreground = new SolidColorBrush(Color.FromRgb(235, 235, 235)),
+                        BorderThickness = new Thickness(1),
+                        BorderBrush = new SolidColorBrush(Color.FromRgb(54, 54, 54)),
+                        Padding = new Thickness(12, 10, 12, 10),
+                        Margin = new Thickness(0, 0, 0, 7),
+                        Cursor = Cursors.Hand,
+                        HorizontalContentAlignment = HorizontalAlignment.Left,
+                        FontSize = 13
+                    };
+                    btn.Template = (ControlTemplate)System.Windows.Markup.XamlReader.Parse(@"
+                        <ControlTemplate TargetType=""Button"" xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation"">
+                            <Border x:Name=""Bd"" Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""9"">
+                                <ContentPresenter HorizontalAlignment=""{TemplateBinding HorizontalContentAlignment}"" VerticalAlignment=""Center"" Margin=""{TemplateBinding Padding}""/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property=""IsMouseOver"" Value=""True"">
+                                    <Setter TargetName=""Bd"" Property=""Background"" Value=""#242424""/>
+                                    <Setter TargetName=""Bd"" Property=""BorderBrush"" Value=""#666666""/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>");
+                    btn.Click += (s, e) => {
+                        SaveReference(opt);
+                        AppendBubble($"已选择: {opt}", true);
+                        container.IsEnabled = false;
+                    };
+                    optionsPanel.Children.Add(btn);
+                }
+
+                var customPanel = new Grid { Margin = new Thickness(0, 6, 0, 0) };
+                customPanel.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                customPanel.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                
+                var txtCustom = new TextBox {
+                    Background = new SolidColorBrush(Color.FromRgb(22, 22, 22)),
+                    Foreground = new SolidColorBrush(Color.FromRgb(235, 235, 235)),
+                    BorderThickness = new Thickness(1),
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(54, 54, 54)),
+                    Padding = new Thickness(10, 8, 10, 8),
+                    VerticalContentAlignment = VerticalAlignment.Center,
+                    CaretBrush = Brushes.White
+                };
+                Grid.SetColumn(txtCustom, 0);
+                customPanel.Children.Add(txtCustom);
+
+                var btnCustom = new Button {
+                    Content = "确定",
+                    Background = new SolidColorBrush(Color.FromRgb(230, 230, 230)),
+                    Foreground = Brushes.Black,
+                    BorderThickness = new Thickness(0),
+                    Padding = new Thickness(16, 0, 16, 0),
+                    Margin = new Thickness(5, 0, 0, 0),
+                    Cursor = Cursors.Hand,
+                    FontWeight = FontWeights.SemiBold
+                };
+                Grid.SetColumn(btnCustom, 1);
+                btnCustom.Click += (s, e) => {
+                    string customText = txtCustom.Text.Trim();
+                    if (!string.IsNullOrEmpty(customText)) {
+                        SaveReference(customText);
+                        AppendBubble($"已选择: {customText}", true);
+                        container.IsEnabled = false;
+                    }
+                };
+                customPanel.Children.Add(btnCustom);
+                
+                optionsPanel.Children.Add(customPanel);
+
+                var bubble = new Border {
+                    Background = new SolidColorBrush(Color.FromRgb(18, 18, 18)),
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(42, 42, 42)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(12),
+                    Padding = new Thickness(14),
+                    MaxWidth = 380,
+                    Child = optionsPanel
+                };
+                
+                container.Children.Add(bubble);
+
+                if (_thinkingBubble != null) {
+                    _chatPanel.Children.Remove(_thinkingBubble);
+                    _chatPanel.Children.Add(container);
+                    _chatPanel.Children.Add(_thinkingBubble);
+                } else {
+                    _chatPanel.Children.Add(container);
+                }
+                _chatScroll.ScrollToEnd();
+            }));
+        }
+
+        private static void SaveReference(string description)
+        {
+            string canvasJson = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                canvasJson = ExecuteGetGhComponents();
+            }));
+
+            System.Threading.Tasks.Task.Run(() => {
+                try {
+                    if (string.IsNullOrEmpty(canvasJson)) {
+                        AppendSystemMessage("保存参考失败: 无法获取画布内容", true);
+                        return;
+                    }
+                    
+                    string refPath = GetReferenceDirectory();
+                    if (!System.IO.Directory.Exists(refPath)) System.IO.Directory.CreateDirectory(refPath);
+                    string timestamp = DateTime.Now.ToString("yyyyMMddHHmmss");
+                    string fileName = "ref_" + timestamp + ".json";
+                    string filePath = System.IO.Path.Combine(refPath, fileName);
+                    System.IO.File.WriteAllText(filePath, canvasJson, System.Text.Encoding.UTF8);
+
+                    string result = UpdateReferenceIndexSkill(description, fileName);
+                    
+                    AppendSystemMessage($"参考已保存：{fileName}\n{result}");
+                } catch (Exception ex) {
+                    AppendSystemMessage($"保存参考失败: {ex.Message}", true);
+                }
+            });
+        }
+
+        private static string GetProjectRootDirectory()
+        {
+            string dir = AppDomain.CurrentDomain.BaseDirectory;
+            for (int i = 0; i < 8 && !string.IsNullOrEmpty(dir); i++)
+            {
+                if (System.IO.File.Exists(System.IO.Path.Combine(dir, "ADDGH.csproj")))
+                {
+                    return System.IO.Directory.GetParent(dir)?.FullName ?? dir;
+                }
+                dir = System.IO.Directory.GetParent(dir)?.FullName;
+            }
+
+            return Environment.CurrentDirectory;
+        }
+
+        private static string GetSkillsDirectory()
+        {
+            return System.IO.Path.Combine(GetProjectRootDirectory(), "skills");
+        }
+
+        private static string GetReferenceDirectory()
+        {
+            return System.IO.Path.Combine(GetProjectRootDirectory(), "reference");
+        }
+
+        private class ReferenceEntry
+        {
+            public string Description { get; set; }
+            public string FileName { get; set; }
+            public bool JsonExists { get; set; }
+        }
+
+        private static string GetReferenceIndexTemplate()
+        {
+            return "---\n" +
+                "name: reference-index\n" +
+                "description: 在处理建模、修改画布、生成 GH 逻辑或判断可复用方案时应主动检查；若条目描述与当前任务相关，调用 read_reference_json 读取对应 JSON。\n" +
+                "---\n\n" +
+                "# Reference Index\n\n" +
+                "使用流程：\n" +
+                "1. 在开始建模、修改画布或设计 GH 逻辑前，主动浏览下面的参考条目。\n" +
+                "2. 如果某个描述与当前任务相关，调用 `read_reference_json`，传入对应 `file_name`。\n" +
+                "3. 读取 JSON 后，基于其中的电池、连线和建模逻辑复用或改造方案。\n\n" +
+                "## References\n";
+        }
+
+        private static string GetReferenceIndexPath()
+        {
+            return System.IO.Path.Combine(GetSkillsDirectory(), "reference_index.md");
+        }
+
+        private static void EnsureReferenceIndexSkill()
+        {
+            string skillsPath = GetSkillsDirectory();
+            if (!System.IO.Directory.Exists(skillsPath)) System.IO.Directory.CreateDirectory(skillsPath);
+
+            string indexPath = GetReferenceIndexPath();
+            if (!System.IO.File.Exists(indexPath))
+            {
+                System.IO.File.WriteAllText(indexPath, GetReferenceIndexTemplate(), Encoding.UTF8);
+            }
+        }
+
+        private static string FormatReferenceEntry(string description, string jsonFileName)
+        {
+            string safeDescription = (description ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
+            if (string.IsNullOrWhiteSpace(safeDescription)) safeDescription = "未命名参考画布";
+            string safeFileName = System.IO.Path.GetFileName(jsonFileName ?? "");
+
+            return $"- 描述：{safeDescription}\n" +
+                $"  文件：reference/{safeFileName}\n" +
+                $"  调用：read_reference_json(file_name=\"{safeFileName}\")\n";
+        }
+
+        private static List<ReferenceEntry> ReadReferenceIndexEntries()
+        {
+            EnsureReferenceIndexSkill();
+
+            string content = System.IO.File.ReadAllText(GetReferenceIndexPath(), Encoding.UTF8);
+            var entries = new List<ReferenceEntry>();
+            var matches = System.Text.RegularExpressions.Regex.Matches(
+                content,
+                @"-\s*描述：(?<desc>.*?)\r?\n\s*文件：reference/(?<file>[^\r\n]+)\r?\n\s*调用：read_reference_json\(file_name=""(?<call>[^""]+)""\)",
+                System.Text.RegularExpressions.RegexOptions.Singleline);
+
+            string referencePath = GetReferenceDirectory();
+            foreach (System.Text.RegularExpressions.Match match in matches)
+            {
+                string fileName = System.IO.Path.GetFileName(match.Groups["file"].Value.Trim());
+                if (string.IsNullOrWhiteSpace(fileName)) continue;
+
+                entries.Add(new ReferenceEntry
+                {
+                    Description = match.Groups["desc"].Value.Trim(),
+                    FileName = fileName,
+                    JsonExists = System.IO.File.Exists(System.IO.Path.Combine(referencePath, fileName))
+                });
+            }
+
+            return entries;
+        }
+
+        private static void WriteReferenceIndexEntries(IEnumerable<ReferenceEntry> entries)
+        {
+            EnsureReferenceIndexSkill();
+            var sb = new StringBuilder(GetReferenceIndexTemplate());
+
+            foreach (var entry in entries)
+            {
+                sb.Append(FormatReferenceEntry(entry.Description, entry.FileName));
+            }
+
+            System.IO.File.WriteAllText(GetReferenceIndexPath(), sb.ToString(), Encoding.UTF8);
+        }
+
+        private static string UpdateReferenceIndexSkill(string description, string jsonFileName)
+        {
+            EnsureReferenceIndexSkill();
+            string indexPath = GetReferenceIndexPath();
+            string safeFileName = System.IO.Path.GetFileName(jsonFileName ?? "");
+
+            string content = System.IO.File.Exists(indexPath)
+                ? System.IO.File.ReadAllText(indexPath, Encoding.UTF8)
+                : GetReferenceIndexTemplate();
+
+            if (!content.Contains($"reference/{safeFileName}"))
+            {
+                if (!content.Contains("## References")) content = GetReferenceIndexTemplate() + content;
+                if (!content.EndsWith("\n")) content += "\n";
+                content += FormatReferenceEntry(description, safeFileName);
+                System.IO.File.WriteAllText(indexPath, content, Encoding.UTF8);
+            }
+
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                UpdateSkillLibraryUI();
+            }));
+
+            return "已更新统一参考索引 skills/reference_index.md。";
+        }
+
+        private static void ShowReferenceLibraryUI()
+        {
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                EnsureReferenceIndexSkill();
+
+                if (_referenceLibraryWindow != null)
+                {
+                    _referenceLibraryWindow.Close();
+                    _referenceLibraryWindow = null;
+                }
+
+                var root = new Grid { Background = new SolidColorBrush(Color.FromRgb(16, 16, 16)), Margin = new Thickness(0) };
+                root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+                var header = new Grid { Margin = new Thickness(18, 16, 18, 10) };
+                header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                var titlePanel = new StackPanel { Orientation = Orientation.Vertical };
+                titlePanel.Children.Add(new TextBlock
+                {
+                    Text = "我的参考",
+                    Foreground = Brushes.White,
+                    FontSize = 18,
+                    FontWeight = FontWeights.SemiBold
+                });
+                titlePanel.Children.Add(new TextBlock
+                {
+                    Text = "从 reference_index.md 管理已保存的画布参考",
+                    Foreground = new SolidColorBrush(Color.FromRgb(145, 145, 145)),
+                    FontSize = 11,
+                    Margin = new Thickness(0, 4, 0, 0)
+                });
+                Grid.SetColumn(titlePanel, 0);
+                header.Children.Add(titlePanel);
+
+                var refreshButton = CreateReferenceLibraryButton("刷新", false);
+                refreshButton.Click += (s, e) => ShowReferenceLibraryUI();
+                Grid.SetColumn(refreshButton, 1);
+                header.Children.Add(refreshButton);
+
+                var closeButton = CreateReferenceLibraryButton("关闭", false);
+                closeButton.Margin = new Thickness(8, 0, 0, 0);
+                closeButton.Click += (s, e) => _referenceLibraryWindow?.Close();
+                Grid.SetColumn(closeButton, 2);
+                header.Children.Add(closeButton);
+
+                Grid.SetRow(header, 0);
+                root.Children.Add(header);
+
+                var entries = ReadReferenceIndexEntries();
+                var content = new StackPanel { Margin = new Thickness(18, 0, 18, 18) };
+
+                if (entries.Count == 0)
+                {
+                    content.Children.Add(new Border
+                    {
+                        Background = new SolidColorBrush(Color.FromRgb(24, 24, 24)),
+                        BorderBrush = new SolidColorBrush(Color.FromRgb(44, 44, 44)),
+                        BorderThickness = new Thickness(1),
+                        CornerRadius = new CornerRadius(12),
+                        Padding = new Thickness(18),
+                        Child = new TextBlock
+                        {
+                            Text = "还没有保存的参考。点击“创建参考”后，这里会显示对应 JSON 和描述。",
+                            Foreground = new SolidColorBrush(Color.FromRgb(170, 170, 170)),
+                            FontSize = 13,
+                            TextWrapping = TextWrapping.Wrap
+                        }
+                    });
+                }
+                else
+                {
+                    foreach (var entry in entries)
+                    {
+                        content.Children.Add(CreateReferenceCard(entry));
+                    }
+                }
+
+                var scroll = new ScrollViewer
+                {
+                    Content = content,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                    Padding = new Thickness(0)
+                };
+                Grid.SetRow(scroll, 1);
+                root.Children.Add(scroll);
+
+                _referenceLibraryWindow = new Window
+                {
+                    Title = "我的参考",
+                    Width = 560,
+                    Height = 520,
+                    MinWidth = 460,
+                    MinHeight = 360,
+                    WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                    Background = new SolidColorBrush(Color.FromRgb(16, 16, 16)),
+                    Content = root,
+                    Owner = _window
+                };
+                _referenceLibraryWindow.Closed += (s, e) => _referenceLibraryWindow = null;
+                _referenceLibraryWindow.Show();
+            }));
+        }
+
+        private static Button CreateReferenceLibraryButton(string text, bool danger)
+        {
+            var button = new Button
+            {
+                Content = text,
+                Background = new SolidColorBrush(danger ? Color.FromRgb(60, 28, 28) : Color.FromRgb(34, 34, 34)),
+                Foreground = new SolidColorBrush(danger ? Color.FromRgb(255, 170, 170) : Color.FromRgb(230, 230, 230)),
+                BorderBrush = new SolidColorBrush(danger ? Color.FromRgb(95, 42, 42) : Color.FromRgb(56, 56, 56)),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(12, 6, 12, 6),
+                Cursor = Cursors.Hand,
+                FontSize = 12
+            };
+
+            button.Template = (ControlTemplate)System.Windows.Markup.XamlReader.Parse(@"
+                <ControlTemplate TargetType=""Button"" xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation"">
+                    <Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""8"">
+                        <ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center"" Margin=""{TemplateBinding Padding}""/>
+                    </Border>
+                </ControlTemplate>");
+
+            return button;
+        }
+
+        private static Border CreateReferenceCard(ReferenceEntry entry)
+        {
+            var card = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(24, 24, 24)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(46, 46, 46)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(12),
+                Padding = new Thickness(14),
+                Margin = new Thickness(0, 0, 0, 10)
+            };
+
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var info = new StackPanel { Orientation = Orientation.Vertical };
+            info.Children.Add(new TextBlock
+            {
+                Text = entry.Description,
+                Foreground = Brushes.White,
+                FontSize = 14,
+                FontWeight = FontWeights.SemiBold,
+                TextWrapping = TextWrapping.Wrap
+            });
+            info.Children.Add(new TextBlock
+            {
+                Text = $"reference/{entry.FileName}",
+                Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 150)),
+                FontSize = 11,
+                Margin = new Thickness(0, 6, 0, 0),
+                TextTrimming = TextTrimming.CharacterEllipsis
+            });
+            if (!entry.JsonExists)
+            {
+                info.Children.Add(new TextBlock
+                {
+                    Text = "JSON 文件缺失，删除会清理索引条目",
+                    Foreground = new SolidColorBrush(Color.FromRgb(255, 180, 90)),
+                    FontSize = 11,
+                    Margin = new Thickness(0, 5, 0, 0)
+                });
+            }
+
+            Grid.SetColumn(info, 0);
+            grid.Children.Add(info);
+
+            var actions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0) };
+            var useButton = CreateReferenceLibraryButton("使用", false);
+            useButton.Click += (s, e) => {
+                if (_txtInput != null)
+                {
+                    _txtInput.Text = $"请参考 reference_index.md 中的 {entry.FileName}，读取对应参考 JSON 后复用建模逻辑。";
+                    _txtInput.Focus();
+                }
+                _referenceLibraryWindow?.Close();
+            };
+            actions.Children.Add(useButton);
+
+            var deleteButton = CreateReferenceLibraryButton("删除", true);
+            deleteButton.Margin = new Thickness(8, 0, 0, 0);
+            deleteButton.Click += (s, e) => DeleteReferenceEntryWithConfirmation(entry);
+            actions.Children.Add(deleteButton);
+
+            Grid.SetColumn(actions, 1);
+            grid.Children.Add(actions);
+
+            card.Child = grid;
+            return card;
+        }
+
+        private static void DeleteReferenceEntryWithConfirmation(ReferenceEntry entry)
+        {
+            var result = System.Windows.MessageBox.Show(
+                $"确定删除参考“{entry.Description}”？\n\n将同时删除 reference/{entry.FileName} 并清理 reference_index.md 中的对应条目。",
+                "删除参考",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+
+            if (result != MessageBoxResult.Yes) return;
+
+            try
+            {
+                DeleteReferenceEntry(entry.FileName);
+                ShowReferenceLibraryUI();
+                AppendSystemMessage($"已删除参考：{entry.FileName}");
+            }
+            catch (Exception ex)
+            {
+                AppendSystemMessage($"删除参考失败: {ex.Message}", true);
+            }
+        }
+
+        private static void DeleteReferenceEntry(string fileName)
+        {
+            string safeFileName = System.IO.Path.GetFileName(fileName ?? "");
+            if (string.IsNullOrWhiteSpace(safeFileName)) throw new InvalidOperationException("参考文件名为空。");
+
+            string referencePath = GetReferenceDirectory();
+            string jsonPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(referencePath, safeFileName));
+            string referenceFullPath = System.IO.Path.GetFullPath(referencePath);
+
+            if (!jsonPath.StartsWith(referenceFullPath, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("非法 reference 文件路径。");
+
+            if (System.IO.File.Exists(jsonPath)) System.IO.File.Delete(jsonPath);
+
+            var remaining = ReadReferenceIndexEntries()
+                .Where(entry => !entry.FileName.Equals(safeFileName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            WriteReferenceIndexEntries(remaining);
+
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                UpdateSkillLibraryUI();
+            }));
+        }
+
+        private static async void SendHiddenPromptAsync(string displayText, string actualPrompt)
+        {
+            if (_isGenerating) { _cts?.Cancel(); return; }
+
+            _isGenerating = true;
+            if (_btnSend != null) {
+                _btnSend.Content = "■";
+                var bg = _btnSend.Template.FindName("bg", _btnSend) as Border;
+                if (bg != null) bg.CornerRadius = new CornerRadius(8);
+                var cp = _btnSend.Template.FindName("cp", _btnSend) as ContentPresenter;
+                if (cp != null) cp.Margin = new Thickness(0);
+            }
+            _txtInput.Text = "";
+
+            if (_messages.Count == 0) {
+                string skillsSummary = GetSkillsSummary();
+                _messages.Add(new { role = "system", content = SYSTEM_PROMPT + skillsSummary });
+            }
+
+            _messages.Add(new { role = "user", content = actualPrompt });
+            AppendBubble(displayText, true);
+
+            _currentBase64Image = null;
+            _txtImageAttached.Visibility = Visibility.Collapsed;
+            _btnClearImage.Visibility = Visibility.Collapsed;
+
+            _cts = new System.Threading.CancellationTokenSource();
+            string apiKey = Grasshopper.Instances.Settings.GetValue("AI_API_Key", "");
+
+            try {
+                ShowThinkingAnimation();
+                await CallLLMAPI(apiKey, 0, _cts.Token);
+            } catch (OperationCanceledException) {
+                AppendSystemMessage("已停止生成。");
+            } catch (Exception ex) {
+                AppendSystemMessage("Error: " + ex.Message, true);
+            } finally {
+                HideThinkingAnimation();
+                _isGenerating = false;
+                if (_btnSend != null) _btnSend.Content = "➤";
+            }
+        }
+
+private static void AppendColoredStatsMessage(int addComp, int delComp, int addConn, int delConn)
         {
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
                 var card = new Border {
@@ -3021,12 +4020,9 @@ namespace ADDGH
         private static string ExecuteReadSkillFile(string fileName)
         {
             try {
-                string skillsPath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Grasshopper", "Libraries", "skills");
-                if (!System.IO.Directory.Exists(skillsPath)) {
-                    skillsPath = System.IO.Path.Combine(Environment.CurrentDirectory, "skills");
-                }
+                string skillsPath = GetSkillsDirectory();
                 if (!fileName.EndsWith(".md")) fileName += ".md";
-                string filePath = System.IO.Path.Combine(skillsPath, fileName);
+                string filePath = System.IO.Path.GetFullPath(System.IO.Path.Combine(skillsPath, System.IO.Path.GetFileName(fileName)));
                 
                 if (System.IO.File.Exists(filePath)) {
                     return System.IO.File.ReadAllText(filePath);
@@ -3037,16 +4033,36 @@ namespace ADDGH
             }
         }
 
+        private static string ExecuteReadReferenceJson(string fileName)
+        {
+            try {
+                if (string.IsNullOrWhiteSpace(fileName)) return "Error: file_name 不能为空。";
+                if (!fileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase)) fileName += ".json";
+
+                string referencePath = GetReferenceDirectory();
+                string safeName = System.IO.Path.GetFileName(fileName);
+                string filePath = System.IO.Path.GetFullPath(System.IO.Path.Combine(referencePath, safeName));
+                string referenceFullPath = System.IO.Path.GetFullPath(referencePath);
+
+                if (!filePath.StartsWith(referenceFullPath, StringComparison.OrdinalIgnoreCase))
+                    return "Error: 非法 reference 文件路径。";
+
+                if (!System.IO.File.Exists(filePath))
+                    return $"Error: 找不到参考 JSON 文件 {safeName}";
+
+                return System.IO.File.ReadAllText(filePath, Encoding.UTF8);
+            } catch (Exception ex) {
+                return "Error: " + ex.Message;
+            }
+        }
+
         private static string ExecuteCreateGhSkill(string fileName, string name, string description, string content)
         {
             try {
-                string skillsPath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Grasshopper", "Libraries", "skills");
-                if (!System.IO.Directory.Exists(skillsPath)) {
-                    skillsPath = System.IO.Path.Combine(Environment.CurrentDirectory, "skills");
-                    if (!System.IO.Directory.Exists(skillsPath)) System.IO.Directory.CreateDirectory(skillsPath);
-                }
+                string skillsPath = GetSkillsDirectory();
+                if (!System.IO.Directory.Exists(skillsPath)) System.IO.Directory.CreateDirectory(skillsPath);
                 if (!fileName.EndsWith(".md")) fileName += ".md";
-                string filePath = System.IO.Path.Combine(skillsPath, fileName);
+                string filePath = System.IO.Path.GetFullPath(System.IO.Path.Combine(skillsPath, System.IO.Path.GetFileName(fileName)));
                 
                 string fileContent = $"---\nname: {name}\ndescription: {description}\n---\n\n{content}";
                 System.IO.File.WriteAllText(filePath, fileContent, Encoding.UTF8);
@@ -3066,8 +4082,7 @@ namespace ADDGH
             if (_skillContent == null) return;
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
                 _skillContent.Children.Clear();
-                string skillsPath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Grasshopper", "Libraries", "skills");
-                if (!System.IO.Directory.Exists(skillsPath)) skillsPath = System.IO.Path.Combine(Environment.CurrentDirectory, "skills");
+                string skillsPath = GetSkillsDirectory();
                 if (!System.IO.Directory.Exists(skillsPath)) return;
 
                 var files = System.IO.Directory.GetFiles(skillsPath, "*.md");
@@ -3120,20 +4135,8 @@ namespace ADDGH
         private static string GetSkillsSummary()
         {
             try {
-                // 获取当前 DLL 所在目录，并向上寻找项目根目录中的 skills 文件夹
-                string assemblyLoc = System.Reflection.Assembly.GetExecutingAssembly().Location;
-                string dir = System.IO.Path.GetDirectoryName(assemblyLoc);
-                
-                // 尝试在不同层级寻找 skills 目录 (兼容开发环境和部署环境)
-                string skillsPath = "";
-                for (int i = 0; i < 5; i++) {
-                    string testPath = System.IO.Path.Combine(dir, "skills");
-                    if (System.IO.Directory.Exists(testPath)) { skillsPath = testPath; break; }
-                    dir = System.IO.Path.GetDirectoryName(dir);
-                    if (dir == null) break;
-                }
-
-                if (string.IsNullOrEmpty(skillsPath)) return "";
+                string skillsPath = GetSkillsDirectory();
+                if (!System.IO.Directory.Exists(skillsPath)) return "";
 
                 var summaries = new List<string>();
                 foreach (var file in System.IO.Directory.GetFiles(skillsPath, "*.md")) {
