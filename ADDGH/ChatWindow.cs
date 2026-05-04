@@ -10,6 +10,12 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Input;
 using System.Net.Http;
+using System.IO;
+using System.IO.Compression;
+using System.Windows.Media.Imaging;
+using System.Xml.Linq;
+using System.Text.RegularExpressions;
+using System.Reflection;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System.Windows.Markup;
@@ -17,7 +23,7 @@ using Grasshopper.Kernel;
 
 namespace ADDGH
 {
-    public static class ChatWindow
+    public static partial class ChatWindow
     {
         private static Window _window;
         private static StackPanel _chatPanel;
@@ -31,14 +37,14 @@ namespace ADDGH
         private static ComboBox _comboProvider;
         private static TextBox _txtApiBaseUrl;
         private static TextBox _txtModel;
+        private static bool _isLoadingProviderSettings = false;
         private static System.Threading.CancellationTokenSource _cts;
-        private static string _currentBase64Image = null;
-        private static string _currentImagePath = null;
-        private static TextBlock _txtImageAttached;
+        private static List<AttachmentItem> _pendingAttachments = new List<AttachmentItem>();
+        private static WrapPanel _attachmentPreviewPanel;
         private static Button _btnClearImage;
 
         private static Border _codeViewBorder;
-        private static TextBox _txtCodeView;
+        private static RichTextBox _richCodeView;
         private static ColumnDefinition _codeCol;
         private static bool _isCodeVisible = false;
         private static bool _isJsonMode = true;
@@ -64,7 +70,9 @@ namespace ADDGH
    - 🟢 低风险（直接操作）：修改 Slider/Panel 数值、添加单个辅助电池、电池对齐或整理分组。
 3. 命名规范：数值条 (Number Slider) 必须设 label。普通电池严禁改 label。
 4. 最终总结请使用结构化 Markdown：短标题、列表、重点加粗；涉及代码、JSON、表达式或关键参数时使用 ``` 代码块，不要把大段技术内容挤在普通段落中。
-5. 在开始建模、修改画布或设计 GH 逻辑前，应主动检查 reference_index.md；若有相关参考，先用 read_reference_json 读取对应 JSON，再复用或改造其中的建模逻辑。
+5. 参考画布（reference）使用顺序：先根据用户需求完成建模思路与 GH 逻辑规划（步骤、数据流、关键电池与风险点），再查阅 skills/reference_index.md；仅当某条条目与**已确定的方案**明显相关时，才调用 read_reference_json 读取对应 JSON，用于对照细节、补充实现或局部复用，勿用「先读参考再空想」代替前期规划。
+6. 每次调用任意 function 工具时，必须在参数中填写 **summary**（一句中文说明本次在做什么，勿写工具函数名或 API）；需要时可填 **summary_detail**（卡片右侧次要短语，如「批量连线」「检索库」）。**例外**：`show_reference_options` 仅需 `options`（5 个字符串的数组），可不填 summary。
+7. **脚本与目录类能力（克制）**：仅当任务**明确需要**在画布上新增或修改「脚本/表达式类电池」的代码与公式，或 **add 已失败且确认** 存在同名类型必须用 `component_guid` 区分时，才使用 `search_gh_component_catalog`、以及向脚本类实例写入代码/公式的 `set_gh_component_value`。**简单几何、常规连线、改 Slider/Panel、用标准电池名即可完成的建模**：只用 `get_gh_components`、`search_component_library`、`add_gh_component` / `connect_gh_components` / `create_component_graph` 等即可；**不要**把搜 C#/Script/Python、查 JSON 目录当作习惯步骤，也不要为「保险」而先 catalog 再放置普通电池。
 优先批量处理，直接行动。";
 
         private static List<object> _messages = new List<object>();
@@ -282,6 +290,62 @@ namespace ADDGH
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style TargetType=""ComboBox"" x:Key=""DarkComboBoxStyle"">
+            <Setter Property=""Background"" Value=""#2A2A2A""/>
+            <Setter Property=""Foreground"" Value=""#EDEDED""/>
+            <Setter Property=""BorderBrush"" Value=""#3A3A3A""/>
+            <Setter Property=""BorderThickness"" Value=""1""/>
+            <Setter Property=""Padding"" Value=""10,6""/>
+            <Setter Property=""Template"">
+                <Setter.Value>
+                    <ControlTemplate TargetType=""ComboBox"">
+                        <Grid>
+                            <ToggleButton x:Name=""ToggleButton"" Focusable=""False"" IsChecked=""{Binding Path=IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType=""ToggleButton"">
+                                        <Border Background=""#2A2A2A"" BorderBrush=""#3A3A3A"" BorderThickness=""1"" CornerRadius=""8"">
+                                            <Grid>
+                                                <ContentPresenter Margin=""10,0,30,0"" VerticalAlignment=""Center"" HorizontalAlignment=""Left"" Content=""{Binding Path=SelectionBoxItem, RelativeSource={RelativeSource AncestorType=ComboBox}}""/>
+                                                <TextBlock Text=""▼"" Foreground=""#888"" FontSize=""9"" HorizontalAlignment=""Right"" VerticalAlignment=""Center"" Margin=""0,0,10,0""/>
+                                            </Grid>
+                                        </Border>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <Popup x:Name=""PART_Popup"" IsOpen=""{TemplateBinding IsDropDownOpen}"" Placement=""Bottom"" AllowsTransparency=""True"" Focusable=""False"" PopupAnimation=""Fade"">
+                                <Border Background=""#202020"" BorderBrush=""#3A3A3A"" BorderThickness=""1"" CornerRadius=""8"" Margin=""0,4,0,0"">
+                                    <ScrollViewer MaxHeight=""220"">
+                                        <ItemsPresenter/>
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType=""ComboBoxItem"">
+            <Setter Property=""Foreground"" Value=""#EDEDED""/>
+            <Setter Property=""Background"" Value=""#202020""/>
+            <Setter Property=""Padding"" Value=""10,8""/>
+            <Setter Property=""Template"">
+                <Setter.Value>
+                    <ControlTemplate TargetType=""ComboBoxItem"">
+                        <Border x:Name=""Bd"" Background=""{TemplateBinding Background}"" CornerRadius=""6"" Padding=""{TemplateBinding Padding}"">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property=""IsHighlighted"" Value=""True"">
+                                <Setter TargetName=""Bd"" Property=""Background"" Value=""#333333""/>
+                            </Trigger>
+                            <Trigger Property=""IsSelected"" Value=""True"">
+                                <Setter TargetName=""Bd"" Property=""Background"" Value=""#3A3A3A""/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     
         <Style TargetType=""Expander"">
             <Setter Property=""Foreground"" Value=""#EEE""/>
@@ -360,9 +424,9 @@ namespace ADDGH
                                 </StackPanel>
                             </Grid>
                         </Border>
-                        <TextBox Grid.Row=""1"" x:Name=""TxtCodeView"" Background=""Transparent"" Foreground=""#888"" BorderThickness=""0"" 
-                                 FontSize=""12"" FontFamily=""Consolas, Monaco, 'Courier New'"" Padding=""20,0,20,20"" 
-                                 IsReadOnly=""True"" TextWrapping=""Wrap"" AcceptsReturn=""True"" VerticalScrollBarVisibility=""Auto"" HorizontalScrollBarVisibility=""Disabled""/>
+                        <RichTextBox Grid.Row=""1"" x:Name=""RichCodeView"" Background=""Transparent"" Foreground=""#B8B8B8"" BorderThickness=""0""
+                                 FontSize=""12"" FontFamily=""Consolas, Monaco, Courier New"" IsReadOnly=""True"" IsDocumentEnabled=""True""
+                                 VerticalScrollBarVisibility=""Auto"" HorizontalScrollBarVisibility=""Disabled"" CaretBrush=""#888""/>
                     </Grid>
                 </Border>
 
@@ -448,10 +512,7 @@ namespace ADDGH
                     </Grid>
                 </Border>
                 
-                        <StackPanel Orientation=""Horizontal"" Margin=""0,0,0,5"">
-                            <TextBlock x:Name=""TxtImageAttached"" Text=""已选择图片"" Foreground=""#4CAF50"" FontSize=""11"" VerticalAlignment=""Center"" Visibility=""Collapsed""/>
-                            <Button x:Name=""BtnClearImage"" Content=""✕"" Foreground=""#FF6B6B"" Background=""Transparent"" BorderThickness=""0"" FontSize=""11"" Cursor=""Hand"" Margin=""5,0,0,0"" Visibility=""Collapsed""/>
-                        </StackPanel>
+                        <WrapPanel x:Name=""AttachmentPreviewPanel"" Margin=""0,0,0,8"" Visibility=""Collapsed""/>
                         <Border Background=""#2A2A2A"" BorderBrush=""#333333"" BorderThickness=""1"" CornerRadius=""8"" Padding=""4"" Margin=""0,0,0,8"">
                             <TextBox x:Name=""TxtInput"" Background=""Transparent"" Foreground=""#FFF"" BorderThickness=""0"" Padding=""14,10,14,10"" FontSize=""14"" AcceptsReturn=""True"" VerticalScrollBarVisibility=""Auto"" TextWrapping=""Wrap"" MinHeight=""36"" MaxHeight=""116"" CaretBrush=""White""/>
                         </Border>
@@ -466,7 +527,7 @@ namespace ADDGH
                                 <ColumnDefinition Width=""Auto""/>
                             </Grid.ColumnDefinitions>
                             
-                            <Button x:Name=""BtnUploadImage"" Grid.Column=""0"" Style=""{StaticResource IconButtonStyle}"" Content=""+"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""22"" FontWeight=""Medium"" Cursor=""Hand"" ToolTip=""上传图片"" Margin=""0,0,10,0""/>
+                            <Button x:Name=""BtnUploadImage"" Grid.Column=""0"" Style=""{StaticResource IconButtonStyle}"" Content=""+"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""22"" FontWeight=""Medium"" Cursor=""Hand"" ToolTip=""上传图片或文件"" Margin=""0,0,10,0""/>
                             <Button x:Name=""BtnStop"" Grid.Column=""1"" Content=""停止"" Visibility=""Collapsed"" Foreground=""#FF6B6B"" Background=""Transparent"" BorderThickness=""0"" FontSize=""16"" Cursor=""Hand"" ToolTip=""停止按钮"" Margin=""0,0,10,0""/>
                             <Button x:Name=""BtnContinue"" Grid.Column=""2"" Style=""{StaticResource IconButtonStyle}"" Content=""继续"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""继续生成""/>
                             <Button x:Name=""BtnToggleLibrary"" Grid.Column=""3"" Style=""{StaticResource IconButtonStyle}"" Content=""电池库"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""展开/收起电池库"" Margin=""8,0,0,0""/>
@@ -546,18 +607,13 @@ namespace ADDGH
     </Grid> <!-- End MainLayout Grid -->
 
     <!-- 配置悬浮层 -->
-            <Grid x:Name=""SettingsOverlay"" Grid.ColumnSpan=""2"" Background=""#A5000000"" Visibility=""Collapsed"">
+            <Grid x:Name=""SettingsOverlay"" Grid.Column=""0"" Panel.ZIndex=""20"" Margin=""0,60,0,0"" Background=""#A5000000"" Visibility=""Collapsed"">
             <Border Background=""#1E1E1E"" CornerRadius=""12"" Width=""380"" Height=""550"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"" Padding=""20"">
                 <StackPanel>
                     <TextBlock Text=""配置 API"" Foreground=""White"" FontSize=""16"" FontWeight=""SemiBold"" Margin=""0,0,0,15""/>
                     
                     <TextBlock Text=""提供商 (Provider)"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
-                    <ComboBox x:Name=""ComboProvider"" Height=""32"" Margin=""0,0,0,10"" Background=""#2A2A2A"" Foreground=""Black"">
-                        <ComboBoxItem Content=""DeepSeek""/>
-                        <ComboBoxItem Content=""Qwen (通义千问)""/>
-                        <ComboBoxItem Content=""Seed (商汤)""/>
-                        <ComboBoxItem Content=""Custom""/>
-                    </ComboBox>
+                    <ComboBox x:Name=""ComboProvider"" Height=""36"" Margin=""0,0,0,10"" Style=""{StaticResource DarkComboBoxStyle}""/>
 
                     <TextBlock Text=""API Base URL"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
                     <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
@@ -674,7 +730,9 @@ namespace ADDGH
             }
 
             _codeViewBorder = (Border)_window.FindName("CodeViewBorder");
-            _txtCodeView = (TextBox)_window.FindName("TxtCodeView");
+            _richCodeView = (RichTextBox)_window.FindName("RichCodeView");
+            if (_richCodeView != null)
+                _richCodeView.SizeChanged += (s, ev) => SyncFlowDocumentPageWidthToViewport(_richCodeView);
             _codeCol = (ColumnDefinition)_window.FindName("CodeCol");
             var btnToggleCode = (Button)_window.FindName("BtnToggleCode");
 
@@ -712,15 +770,24 @@ namespace ADDGH
             _comboProvider = (ComboBox)_window.FindName("ComboProvider");
             _txtApiBaseUrl = (TextBox)_window.FindName("TxtApiBaseUrl");
             _txtModel = (TextBox)_window.FindName("TxtModel");
+            _attachmentPreviewPanel = (WrapPanel)_window.FindName("AttachmentPreviewPanel");
             var txtLibraryPath = (TextBox)_window.FindName("TxtLibraryPath");
+            PopulateProviderCombo();
+
+            if (_comboProvider != null) {
+                _comboProvider.SelectionChanged += (s, e) => {
+                    if (_isLoadingProviderSettings) return;
+                    LoadProviderSettingsToUI(GetSelectedProviderId());
+                };
+            }
 
             if (btnSettings != null) {
             btnSettings.Click += (s, e) => {
-                    if (_txtApiKey != null) _txtApiKey.Text = Grasshopper.Instances.Settings.GetValue("AI_API_Key", "");
-                    if (_txtApiBaseUrl != null) _txtApiBaseUrl.Text = Grasshopper.Instances.Settings.GetValue("AI_API_BaseUrl", "https://api.deepseek.com/chat/completions");
-                    if (_txtModel != null) _txtModel.Text = Grasshopper.Instances.Settings.GetValue("AI_ModelName", "deepseek-reasoner");
+                    string providerId = GetCurrentProviderId();
+                    SelectProviderComboItem(providerId);
+                    LoadProviderSettingsToUI(providerId);
                     if (txtLibraryPath != null) txtLibraryPath.Text = Grasshopper.Instances.Settings.GetValue("Library_Path", "");
-                    if (_settingsOverlay != null) _settingsOverlay.Visibility = Visibility.Visible;
+                    SetSettingsOverlayVisible(true);
                 };
             }
 
@@ -740,18 +807,16 @@ namespace ADDGH
             var btnSaveSettings = (Button)_window.FindName("BtnSaveSettings");
             if (btnSaveSettings != null) {
                 btnSaveSettings.Click += (s, e) => {
-                    if (_txtApiKey != null) Grasshopper.Instances.Settings.SetValue("AI_API_Key", _txtApiKey.Text);
-                    if (_txtApiBaseUrl != null) Grasshopper.Instances.Settings.SetValue("AI_API_BaseUrl", _txtApiBaseUrl.Text);
-                    if (_txtModel != null) Grasshopper.Instances.Settings.SetValue("AI_ModelName", "deepseek-reasoner");
+                    SaveSelectedProviderSettings();
                     if (txtLibraryPath != null) Grasshopper.Instances.Settings.SetValue("Library_Path", txtLibraryPath.Text);
-                    if (_settingsOverlay != null) _settingsOverlay.Visibility = Visibility.Collapsed;
+                    SetSettingsOverlayVisible(false);
                 };
             }
 
             var btnCancelSettings = (Button)_window.FindName("BtnCancelSettings");
             if (btnCancelSettings != null) {
                 btnCancelSettings.Click += (s, e) => {
-                    if (_settingsOverlay != null) _settingsOverlay.Visibility = Visibility.Collapsed;
+                    SetSettingsOverlayVisible(false);
                 };
             }
 
@@ -776,26 +841,24 @@ namespace ADDGH
             }
 
             var btnUploadImage = (Button)_window.FindName("BtnUploadImage");
-            _txtImageAttached = (TextBlock)_window.FindName("TxtImageAttached");
             _btnClearImage = (Button)_window.FindName("BtnClearImage");
 
             if (btnUploadImage != null) {
             btnUploadImage.Click += (s, e) => {
-                var ofd = new Microsoft.Win32.OpenFileDialog { Filter = "Image Files|*.png;*.jpg;*.jpeg;*.bmp" };
+                var ofd = new Microsoft.Win32.OpenFileDialog {
+                    Filter = "Supported Files|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp;*.txt;*.md;*.json;*.csv;*.xml;*.ghx;*.pdf;*.docx;*.xlsx;*.pptx;*.doc;*.xls;*.ppt|All Files|*.*",
+                    Multiselect = true
+                };
                 if (ofd.ShowDialog() == true) {
-                    _currentImagePath = ofd.FileName;
-                    _currentBase64Image = Convert.ToBase64String(System.IO.File.ReadAllBytes(_currentImagePath));
-                        if (_txtImageAttached != null) _txtImageAttached.Visibility = Visibility.Visible;
-                        if (_btnClearImage != null) _btnClearImage.Visibility = Visibility.Visible;
+                    AddPendingAttachments(ofd.FileNames);
                 }
             };
             }
 
             if (_btnClearImage != null) {
             _btnClearImage.Click += (s, e) => {
-                _currentImagePath = null;
-                _currentBase64Image = null;
-                    if (_txtImageAttached != null) _txtImageAttached.Visibility = Visibility.Collapsed;
+                _pendingAttachments.Clear();
+                    RefreshAttachmentPreview();
                     if (_btnClearImage != null) _btnClearImage.Visibility = Visibility.Collapsed;
             };
             }
@@ -822,7 +885,7 @@ namespace ADDGH
             var btnCancelSettings2 = (Button)_window.FindName("BtnCancelSettings");
             if (btnCancelSettings2 != null) {
                 btnCancelSettings2.Click += (s, e) => {
-                    _settingsOverlay.Visibility = Visibility.Collapsed;
+                    SetSettingsOverlayVisible(false);
                 };
             }
 
@@ -886,7 +949,10 @@ namespace ADDGH
             var menuCreateReference = (MenuItem)_window.FindName("MenuCreateReference");
             if (menuCreateReference != null) {
                 menuCreateReference.Click += (s, e) => {
-                    string prompt = "请对当前画布内容进行总结，生成五个简短的画布描述（围绕当前画布什么典型建模操作，比如某种gh电池使用、基于某种建模逻辑的曲线生成方法等等），描述以卡片形式供我选择。请调用 show_reference_options 工具来展示选项。用户选择后，程序会把画布 JSON 保存到项目 reference 文件夹，并更新 skills/reference_index.md。";
+                    if (!ShowReferenceOptionsTool.TryEnsureCanvasReadyForCreateReference()) return;
+                    string prompt = "请对当前画布内容进行总结，生成五个简短的画布描述（围绕当前画布什么典型建模操作，比如某种 gh 电池使用、基于某种建模逻辑的曲线生成方法等等），描述以卡片形式供我选择。\n" +
+                        "【顺序限定】须先调用 get_gh_components 与 check_gh_errors：若画布无法读取、没有电池，或检查中含 Error，则只用文字提醒用户处理，**禁止**调用 " + ShowReferenceOptionsTool.FunctionName + "；仅当画布有内容且无 Error 时，再调用 " + ShowReferenceOptionsTool.FunctionName + "，且 arguments 仅需 JSON 数组 options（恰好 5 个字符串，勿传单个长字符串）。\n" +
+                        "用户选择后，程序会把画布 JSON 保存到项目 reference 文件夹，并更新 skills/reference_index.md。";
                     SendHiddenPromptAsync("保存当前画布为参考", prompt);
                 };
             }
@@ -1268,7 +1334,8 @@ namespace ADDGH
         {
             if (_isGenerating) { _cts?.Cancel(); return; }
             string input = _txtInput.Text.Trim();
-            if (string.IsNullOrEmpty(input) && _currentBase64Image == null) return;
+            var attachmentsToSend = _pendingAttachments.ToList();
+            if (string.IsNullOrEmpty(input) && attachmentsToSend.Count == 0) return;
 
             _isGenerating = true;
             if (_btnSend != null) {
@@ -1285,22 +1352,21 @@ namespace ADDGH
                 _messages.Add(new { role = "system", content = SYSTEM_PROMPT + skillsSummary });
             }
 
-            if (_currentBase64Image != null) {
-                var contentArr = new List<object> { new { type = "text", text = input } };
-                contentArr.Add(new { type = "image_url", image_url = new { url = $"data:image/jpeg;base64,{_currentBase64Image}" } });
+            if (attachmentsToSend.Count > 0) {
+                var contentArr = BuildUserMessageContent(input, attachmentsToSend);
                 _messages.Add(new { role = "user", content = contentArr });
-                AppendBubble(string.IsNullOrEmpty(input) ? "发送了图片" : input, true);
+                AppendUserMessageWithAttachments(input, attachmentsToSend);
             } else {
                 _messages.Add(new { role = "user", content = input });
                 AppendBubble(input, true);
             }
 
-            _currentBase64Image = null;
-            _txtImageAttached.Visibility = Visibility.Collapsed;
-            _btnClearImage.Visibility = Visibility.Collapsed;
+            _pendingAttachments.Clear();
+            RefreshAttachmentPreview();
+            if (_btnClearImage != null) _btnClearImage.Visibility = Visibility.Collapsed;
 
             _cts = new System.Threading.CancellationTokenSource();
-            string apiKey = Grasshopper.Instances.Settings.GetValue("AI_API_Key", "");
+            string apiKey = GetProviderRuntimeSettings().ApiKey;
 
             try {
             ShowThinkingAnimation();
@@ -1317,6 +1383,602 @@ namespace ADDGH
         }
 
         private class ApiResponse { public string Content; public string Reasoning; }
+
+        private enum AttachmentKind
+        {
+            Image,
+            Text,
+            Document,
+            Unsupported
+        }
+
+        private class AttachmentItem
+        {
+            public string Path { get; set; }
+            public string FileName { get; set; }
+            public string MimeType { get; set; }
+            public AttachmentKind Kind { get; set; }
+            public string Base64 { get; set; }
+            public string ExtractedText { get; set; }
+            public long SizeBytes { get; set; }
+            public string Error { get; set; }
+        }
+
+        private class ModelProviderConfig
+        {
+            public string ProviderId { get; set; }
+            public string DisplayName { get; set; }
+            public string DefaultBaseUrl { get; set; }
+            public string DefaultModel { get; set; }
+            public bool SupportsTools { get; set; } = true;
+            public bool SupportsVision { get; set; } = true;
+            public string DefaultReasoningEffort { get; set; }
+            public bool EnableThinking { get; set; }
+            public string ImageContentFormat { get; set; } = "image_url";
+        }
+
+        private class ProviderRuntimeSettings
+        {
+            public ModelProviderConfig Config { get; set; }
+            public string ApiKey { get; set; }
+            public string BaseUrl { get; set; }
+            public string ModelName { get; set; }
+        }
+
+        private static List<ModelProviderConfig> GetProviderConfigs()
+        {
+            return new List<ModelProviderConfig>
+            {
+                new ModelProviderConfig
+                {
+                    ProviderId = "deepseek",
+                    DisplayName = "DeepSeek",
+                    DefaultBaseUrl = "https://api.deepseek.com/chat/completions",
+                    DefaultModel = "deepseek-v4-flash",
+                    EnableThinking = true,
+                    DefaultReasoningEffort = "high"
+                },
+                new ModelProviderConfig
+                {
+                    ProviderId = "seed",
+                    DisplayName = "Seed / 火山方舟",
+                    DefaultBaseUrl = "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+                    DefaultModel = "doubao-seed-2-0-lite-260215",
+                    DefaultReasoningEffort = "medium"
+                },
+                new ModelProviderConfig
+                {
+                    ProviderId = "qwen",
+                    DisplayName = "Qwen / 通义千问",
+                    DefaultBaseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+                    DefaultModel = "qwen3.6-plus"
+                },
+                new ModelProviderConfig
+                {
+                    ProviderId = "kimi",
+                    DisplayName = "Kimi / Moonshot",
+                    DefaultBaseUrl = "https://api.moonshot.cn/v1/chat/completions",
+                    DefaultModel = "kimi-k2.6"
+                },
+                new ModelProviderConfig
+                {
+                    ProviderId = "custom",
+                    DisplayName = "Custom",
+                    DefaultBaseUrl = "https://api.deepseek.com/chat/completions",
+                    DefaultModel = "deepseek-v4-flash"
+                }
+            };
+        }
+
+        private static ModelProviderConfig GetProviderConfig(string providerId)
+        {
+            var config = GetProviderConfigs().FirstOrDefault(p => p.ProviderId.Equals(providerId, StringComparison.OrdinalIgnoreCase));
+            return config ?? GetProviderConfigs().First();
+        }
+
+        private static string GetCurrentProviderId()
+        {
+            return Grasshopper.Instances.Settings.GetValue("AI_CurrentProvider", "deepseek");
+        }
+
+        private static string GetProviderSettingKey(string providerId, string name)
+        {
+            return $"AI_{providerId}_{name}";
+        }
+
+        private static ProviderRuntimeSettings GetProviderRuntimeSettings()
+        {
+            string providerId = GetCurrentProviderId();
+            var config = GetProviderConfig(providerId);
+            string legacyApiKey = providerId == "deepseek" ? Grasshopper.Instances.Settings.GetValue("AI_API_Key", "") : "";
+            string legacyBaseUrl = providerId == "deepseek" ? Grasshopper.Instances.Settings.GetValue("AI_API_BaseUrl", config.DefaultBaseUrl) : config.DefaultBaseUrl;
+            string legacyModel = providerId == "deepseek" ? Grasshopper.Instances.Settings.GetValue("AI_ModelName", config.DefaultModel) : config.DefaultModel;
+
+            return new ProviderRuntimeSettings
+            {
+                Config = config,
+                ApiKey = Grasshopper.Instances.Settings.GetValue(GetProviderSettingKey(providerId, "API_Key"), legacyApiKey),
+                BaseUrl = Grasshopper.Instances.Settings.GetValue(GetProviderSettingKey(providerId, "BaseUrl"), legacyBaseUrl),
+                ModelName = Grasshopper.Instances.Settings.GetValue(GetProviderSettingKey(providerId, "ModelName"), legacyModel)
+            };
+        }
+
+        private static void PopulateProviderCombo()
+        {
+            if (_comboProvider == null) return;
+
+            _comboProvider.Items.Clear();
+            foreach (var provider in GetProviderConfigs())
+            {
+                _comboProvider.Items.Add(new ComboBoxItem { Content = provider.DisplayName, Tag = provider.ProviderId });
+            }
+        }
+
+        private static string GetSelectedProviderId()
+        {
+            if (_comboProvider?.SelectedItem is ComboBoxItem item && item.Tag != null) return item.Tag.ToString();
+            return GetCurrentProviderId();
+        }
+
+        private static void SelectProviderComboItem(string providerId)
+        {
+            if (_comboProvider == null) return;
+
+            foreach (var item in _comboProvider.Items.OfType<ComboBoxItem>())
+            {
+                if ((item.Tag?.ToString() ?? "").Equals(providerId, StringComparison.OrdinalIgnoreCase))
+                {
+                    _comboProvider.SelectedItem = item;
+                    return;
+                }
+            }
+
+            if (_comboProvider.Items.Count > 0) _comboProvider.SelectedIndex = 0;
+        }
+
+        private static void LoadProviderSettingsToUI(string providerId)
+        {
+            if (_txtApiKey == null || _txtApiBaseUrl == null || _txtModel == null) return;
+
+            _isLoadingProviderSettings = true;
+            try
+            {
+                var config = GetProviderConfig(providerId);
+                string legacyApiKey = providerId == "deepseek" ? Grasshopper.Instances.Settings.GetValue("AI_API_Key", "") : "";
+                string legacyBaseUrl = providerId == "deepseek" ? Grasshopper.Instances.Settings.GetValue("AI_API_BaseUrl", config.DefaultBaseUrl) : config.DefaultBaseUrl;
+                string legacyModel = providerId == "deepseek" ? Grasshopper.Instances.Settings.GetValue("AI_ModelName", config.DefaultModel) : config.DefaultModel;
+
+                _txtApiKey.Text = Grasshopper.Instances.Settings.GetValue(GetProviderSettingKey(providerId, "API_Key"), legacyApiKey);
+                _txtApiBaseUrl.Text = Grasshopper.Instances.Settings.GetValue(GetProviderSettingKey(providerId, "BaseUrl"), legacyBaseUrl);
+                _txtModel.Text = Grasshopper.Instances.Settings.GetValue(GetProviderSettingKey(providerId, "ModelName"), legacyModel);
+            }
+            finally
+            {
+                _isLoadingProviderSettings = false;
+            }
+        }
+
+        private static void SaveSelectedProviderSettings()
+        {
+            string providerId = GetSelectedProviderId();
+            Grasshopper.Instances.Settings.SetValue("AI_CurrentProvider", providerId);
+            if (_txtApiKey != null) Grasshopper.Instances.Settings.SetValue(GetProviderSettingKey(providerId, "API_Key"), _txtApiKey.Text);
+            if (_txtApiBaseUrl != null) Grasshopper.Instances.Settings.SetValue(GetProviderSettingKey(providerId, "BaseUrl"), _txtApiBaseUrl.Text);
+            if (_txtModel != null) Grasshopper.Instances.Settings.SetValue(GetProviderSettingKey(providerId, "ModelName"), _txtModel.Text);
+
+            // Keep legacy keys populated so older builds can still use the last saved provider settings.
+            if (_txtApiKey != null) Grasshopper.Instances.Settings.SetValue("AI_API_Key", _txtApiKey.Text);
+            if (_txtApiBaseUrl != null) Grasshopper.Instances.Settings.SetValue("AI_API_BaseUrl", _txtApiBaseUrl.Text);
+            if (_txtModel != null) Grasshopper.Instances.Settings.SetValue("AI_ModelName", _txtModel.Text);
+        }
+
+        private static void SetSettingsOverlayVisible(bool visible)
+        {
+            if (_settingsOverlay != null) _settingsOverlay.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+
+            // Keep the header available for dragging, but block actions that would mutate chat state.
+            string[] headerActionNames = { "BtnNewChat", "BtnToggleCode", "BtnSettings" };
+            foreach (string name in headerActionNames)
+            {
+                if (_window?.FindName(name) is Button button) button.IsEnabled = !visible;
+            }
+        }
+
+        private static JObject BuildChatRequestBody(ProviderRuntimeSettings providerSettings, List<object> messagesToSend, object[] toolDefinitions)
+        {
+            var body = JObject.FromObject(new
+            {
+                model = providerSettings.ModelName,
+                messages = messagesToSend,
+                stream = false,
+                temperature = 0.3
+            });
+
+            if (providerSettings.Config.SupportsTools)
+            {
+                body["tools"] = JToken.FromObject(toolDefinitions);
+            }
+
+            if (providerSettings.Config.EnableThinking)
+            {
+                body["thinking"] = new JObject { { "type", "enabled" } };
+            }
+
+            if (!string.IsNullOrWhiteSpace(providerSettings.Config.DefaultReasoningEffort))
+            {
+                body["reasoning_effort"] = providerSettings.Config.DefaultReasoningEffort;
+            }
+
+            return body;
+        }
+
+        private static async Task<HttpResponseMessage> SendProviderRequestAsync(ProviderRuntimeSettings providerSettings, JObject requestBody, System.Threading.CancellationToken ct)
+        {
+            var request = new HttpRequestMessage(HttpMethod.Post, providerSettings.BaseUrl);
+            request.Headers.Add("Authorization", $"Bearer {providerSettings.ApiKey}");
+            request.Content = new StringContent(JsonConvert.SerializeObject(requestBody), Encoding.UTF8, "application/json");
+            return await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        }
+
+        private static void AddPendingAttachments(IEnumerable<string> paths)
+        {
+            foreach (string path in paths)
+            {
+                try
+                {
+                    _pendingAttachments.Add(CreateAttachmentItem(path));
+                }
+                catch (Exception ex)
+                {
+                    _pendingAttachments.Add(new AttachmentItem
+                    {
+                        Path = path,
+                        FileName = System.IO.Path.GetFileName(path),
+                        Kind = AttachmentKind.Unsupported,
+                        MimeType = "application/octet-stream",
+                        SizeBytes = System.IO.File.Exists(path) ? new FileInfo(path).Length : 0,
+                        Error = "读取失败: " + ex.Message
+                    });
+                }
+            }
+
+            RefreshAttachmentPreview();
+        }
+
+        private static AttachmentItem CreateAttachmentItem(string path)
+        {
+            var file = new FileInfo(path);
+            string ext = file.Extension.ToLowerInvariant();
+            var item = new AttachmentItem
+            {
+                Path = path,
+                FileName = file.Name,
+                SizeBytes = file.Exists ? file.Length : 0,
+                MimeType = GetMimeType(ext)
+            };
+
+            if (IsImageExtension(ext))
+            {
+                item.Kind = AttachmentKind.Image;
+                item.Base64 = Convert.ToBase64String(System.IO.File.ReadAllBytes(path));
+            }
+            else if (IsTextExtension(ext))
+            {
+                item.Kind = AttachmentKind.Text;
+                item.ExtractedText = TruncateAttachmentText(System.IO.File.ReadAllText(path, Encoding.UTF8), item.FileName);
+            }
+            else if (IsDocumentExtension(ext))
+            {
+                item.Kind = AttachmentKind.Document;
+                item.ExtractedText = TruncateAttachmentText(ExtractDocumentText(path, ext), item.FileName);
+            }
+            else
+            {
+                item.Kind = AttachmentKind.Unsupported;
+                item.ExtractedText = $"文件 {item.FileName} 已上传，但当前不支持读取该格式内容。";
+            }
+
+            return item;
+        }
+
+        private static bool IsImageExtension(string ext)
+        {
+            return new[] { ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp" }.Contains(ext);
+        }
+
+        private static bool IsTextExtension(string ext)
+        {
+            return new[] { ".txt", ".md", ".json", ".csv", ".xml", ".ghx" }.Contains(ext);
+        }
+
+        private static bool IsDocumentExtension(string ext)
+        {
+            return new[] { ".pdf", ".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt" }.Contains(ext);
+        }
+
+        private static string GetMimeType(string ext)
+        {
+            switch (ext)
+            {
+                case ".png": return "image/png";
+                case ".jpg":
+                case ".jpeg": return "image/jpeg";
+                case ".bmp": return "image/bmp";
+                case ".gif": return "image/gif";
+                case ".webp": return "image/webp";
+                case ".pdf": return "application/pdf";
+                case ".docx": return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+                case ".xlsx": return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+                case ".pptx": return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+                default: return "text/plain";
+            }
+        }
+
+        private static string TruncateAttachmentText(string text, string fileName)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return $"文件 {fileName} 未提取到可读文本。";
+            const int maxChars = 12000;
+            if (text.Length <= maxChars) return text;
+            return text.Substring(0, maxChars) + $"\n\n[附件 {fileName} 内容过长，已截断到 {maxChars} 字符。]";
+        }
+
+        private static string ExtractDocumentText(string path, string ext)
+        {
+            try
+            {
+                if (ext == ".docx") return ExtractTextFromZipXml(path, "word/document.xml");
+                if (ext == ".pptx") return ExtractPptxText(path);
+                if (ext == ".xlsx") return ExtractXlsxText(path);
+                if (ext == ".pdf") return ExtractPdfTextBestEffort(path);
+                return $"旧版 Office 文件 {System.IO.Path.GetFileName(path)} 已上传，但当前仅能稳定读取 .docx/.xlsx/.pptx。";
+            }
+            catch (Exception ex)
+            {
+                return $"文件 {System.IO.Path.GetFileName(path)} 内容解析失败: {ex.Message}";
+            }
+        }
+
+        private static string ExtractTextFromZipXml(string path, string entryName)
+        {
+            using (var archive = ZipFile.OpenRead(path))
+            {
+                var entry = archive.GetEntry(entryName);
+                if (entry == null) return "";
+                using (var stream = entry.Open())
+                using (var reader = new StreamReader(stream))
+                {
+                    return ExtractTextFromXml(reader.ReadToEnd());
+                }
+            }
+        }
+
+        private static string ExtractPptxText(string path)
+        {
+            var sb = new StringBuilder();
+            using (var archive = ZipFile.OpenRead(path))
+            {
+                foreach (var entry in archive.Entries.Where(e => e.FullName.StartsWith("ppt/slides/slide") && e.FullName.EndsWith(".xml")).OrderBy(e => e.FullName))
+                {
+                    using (var stream = entry.Open())
+                    using (var reader = new StreamReader(stream))
+                    {
+                        sb.AppendLine(ExtractTextFromXml(reader.ReadToEnd()));
+                    }
+                }
+            }
+            return sb.ToString();
+        }
+
+        private static string ExtractXlsxText(string path)
+        {
+            var sb = new StringBuilder();
+            using (var archive = ZipFile.OpenRead(path))
+            {
+                foreach (var entry in archive.Entries.Where(e => (e.FullName.StartsWith("xl/worksheets/") || e.FullName == "xl/sharedStrings.xml") && e.FullName.EndsWith(".xml")).OrderBy(e => e.FullName))
+                {
+                    using (var stream = entry.Open())
+                    using (var reader = new StreamReader(stream))
+                    {
+                        string text = ExtractTextFromXml(reader.ReadToEnd());
+                        if (!string.IsNullOrWhiteSpace(text)) sb.AppendLine(text);
+                    }
+                }
+            }
+            return sb.ToString();
+        }
+
+        private static string ExtractTextFromXml(string xml)
+        {
+            var doc = XDocument.Parse(xml);
+            return string.Join(" ", doc.DescendantNodes().OfType<XText>().Select(t => t.Value).Where(v => !string.IsNullOrWhiteSpace(v))).Trim();
+        }
+
+        private static string ExtractPdfTextBestEffort(string path)
+        {
+            byte[] bytes = System.IO.File.ReadAllBytes(path);
+            string raw = Encoding.GetEncoding("ISO-8859-1").GetString(bytes);
+            var matches = Regex.Matches(raw, @"\((?<text>(?:\\.|[^\\)])*)\)");
+            var text = string.Join(" ", matches.Cast<Match>().Select(m => m.Groups["text"].Value.Replace("\\)", ")").Replace("\\(", "(")).Where(v => v.Length > 1));
+            return string.IsNullOrWhiteSpace(text)
+                ? "PDF 已上传，但未提取到可读文本。若该 PDF 为扫描件，需要 OCR 后再上传文本。"
+                : text;
+        }
+
+        private static string FormatFileSize(long bytes)
+        {
+            if (bytes < 1024) return bytes + " B";
+            if (bytes < 1024 * 1024) return Math.Round(bytes / 1024.0, 1) + " KB";
+            return Math.Round(bytes / 1024.0 / 1024.0, 1) + " MB";
+        }
+
+        private static void RefreshAttachmentPreview()
+        {
+            if (_attachmentPreviewPanel == null) return;
+
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                _attachmentPreviewPanel.Children.Clear();
+                _attachmentPreviewPanel.Visibility = _pendingAttachments.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+                foreach (var attachment in _pendingAttachments.ToList())
+                {
+                    _attachmentPreviewPanel.Children.Add(CreateAttachmentCard(attachment, true));
+                }
+            }));
+        }
+
+        private static FrameworkElement CreateAttachmentCard(AttachmentItem attachment, bool removable)
+        {
+            var border = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(28, 28, 28)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(50, 50, 50)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(10),
+                Padding = new Thickness(8),
+                Margin = new Thickness(0, 0, 8, 8),
+                MaxWidth = 210
+            };
+
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            if (removable) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            FrameworkElement preview;
+            if (attachment.Kind == AttachmentKind.Image && System.IO.File.Exists(attachment.Path))
+            {
+                preview = new Image
+                {
+                    Source = LoadBitmapImage(attachment.Path),
+                    Width = 44,
+                    Height = 44,
+                    Stretch = Stretch.UniformToFill,
+                    ClipToBounds = true
+                };
+            }
+            else
+            {
+                preview = new Border
+                {
+                    Width = 44,
+                    Height = 44,
+                    CornerRadius = new CornerRadius(8),
+                    Background = new SolidColorBrush(Color.FromRgb(42, 42, 42)),
+                    Child = new TextBlock
+                    {
+                        Text = GetAttachmentBadge(attachment),
+                        Foreground = new SolidColorBrush(Color.FromRgb(230, 230, 230)),
+                        FontSize = 10,
+                        FontWeight = FontWeights.Bold,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center
+                    }
+                };
+            }
+            Grid.SetColumn(preview, 0);
+            grid.Children.Add(preview);
+
+            var info = new StackPanel { Margin = new Thickness(9, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center };
+            info.Children.Add(new TextBlock
+            {
+                Text = attachment.FileName,
+                Foreground = new SolidColorBrush(Color.FromRgb(238, 238, 238)),
+                FontSize = 12,
+                FontWeight = FontWeights.SemiBold,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                MaxWidth = 125
+            });
+            info.Children.Add(new TextBlock
+            {
+                Text = string.IsNullOrEmpty(attachment.Error) ? FormatFileSize(attachment.SizeBytes) : attachment.Error,
+                Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 150)),
+                FontSize = 10,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                MaxWidth = 125
+            });
+            Grid.SetColumn(info, 1);
+            grid.Children.Add(info);
+
+            if (removable)
+            {
+                var remove = new Button
+                {
+                    Content = "×",
+                    Foreground = new SolidColorBrush(Color.FromRgb(190, 190, 190)),
+                    Background = Brushes.Transparent,
+                    BorderThickness = new Thickness(0),
+                    Cursor = Cursors.Hand,
+                    FontSize = 14,
+                    Width = 22,
+                    Height = 22,
+                    VerticalAlignment = VerticalAlignment.Top
+                };
+                remove.Click += (s, e) => {
+                    _pendingAttachments.Remove(attachment);
+                    RefreshAttachmentPreview();
+                };
+                Grid.SetColumn(remove, 2);
+                grid.Children.Add(remove);
+            }
+
+            border.Child = grid;
+            return border;
+        }
+
+        private static BitmapImage LoadBitmapImage(string path)
+        {
+            var bitmap = new BitmapImage();
+            bitmap.BeginInit();
+            bitmap.CacheOption = BitmapCacheOption.OnLoad;
+            bitmap.UriSource = new Uri(path);
+            bitmap.DecodePixelWidth = 120;
+            bitmap.EndInit();
+            bitmap.Freeze();
+            return bitmap;
+        }
+
+        private static string GetAttachmentBadge(AttachmentItem attachment)
+        {
+            string ext = System.IO.Path.GetExtension(attachment.FileName).TrimStart('.').ToUpperInvariant();
+            if (string.IsNullOrWhiteSpace(ext)) return "FILE";
+            return ext.Length > 4 ? ext.Substring(0, 4) : ext;
+        }
+
+        private static List<object> BuildUserMessageContent(string input, List<AttachmentItem> attachments)
+        {
+            var contentArr = new List<object>();
+            var textBuilder = new StringBuilder();
+            if (!string.IsNullOrWhiteSpace(input)) textBuilder.AppendLine(input);
+
+            foreach (var attachment in attachments.Where(a => a.Kind != AttachmentKind.Image))
+            {
+                textBuilder.AppendLine();
+                textBuilder.AppendLine($"【附件内容：{attachment.FileName}】");
+                textBuilder.AppendLine(attachment.ExtractedText ?? "未提取到文本内容。");
+            }
+
+            string text = textBuilder.ToString().Trim();
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                contentArr.Add(new { type = "text", text = text });
+            }
+
+            foreach (var attachment in attachments.Where(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64)))
+            {
+                contentArr.Add(new
+                {
+                    type = "image_url",
+                    image_url = new { url = $"data:{attachment.MimeType};base64,{attachment.Base64}" }
+                });
+            }
+
+            if (contentArr.Count == 0)
+            {
+                contentArr.Add(new { type = "text", text = input });
+            }
+
+            return contentArr;
+        }
 
         private static List<object> CompressMessages(List<object> fullMessages)
         {
@@ -1401,6 +2063,113 @@ namespace ADDGH
             return compressed;
         }
 
+
+        private static JObject ParseToolArgumentsForExecution(string argsJson, out string cardSummary, out string cardSummaryDetail)
+        {
+            cardSummary = null;
+            cardSummaryDetail = null;
+            JObject o;
+            try {
+                o = string.IsNullOrWhiteSpace(argsJson) ? new JObject() : JObject.Parse(argsJson);
+            } catch {
+                o = new JObject();
+            }
+            JToken st = o["summary"];
+            if (st != null && st.Type != JTokenType.Null) cardSummary = st.ToString().Trim();
+            JToken sd = o["summary_detail"];
+            if (sd != null && sd.Type != JTokenType.Null) cardSummaryDetail = sd.ToString().Trim();
+            o.Remove("summary");
+            o.Remove("summary_detail");
+            return o;
+        }
+
+        /// <summary> 构建工具摘要条（灰色小条），不含插入逻辑。 </summary>
+        private static StackPanel BuildToolOperationCardsPanel(List<(string primary, string secondary)> entries)
+        {
+            if (entries == null || entries.Count == 0) return null;
+            var stack = new StackPanel {
+                Orientation = Orientation.Vertical,
+                Margin = new Thickness(0, 0, 0, 8),
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+
+            foreach (var tup in entries) {
+                string primary = tup.primary ?? "";
+                string secondary = tup.secondary ?? "";
+                if (string.IsNullOrWhiteSpace(primary)) continue;
+
+                var row = new Border {
+                    Background = new SolidColorBrush(Color.FromRgb(22, 22, 22)),
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(48, 48, 48)),
+                    BorderThickness = new Thickness(0.5),
+                    CornerRadius = new CornerRadius(6),
+                    Padding = new Thickness(8, 5, 8, 5),
+                    Margin = new Thickness(0, 0, 0, 4),
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    MinHeight = 22,
+                    ToolTip = string.IsNullOrWhiteSpace(secondary) ? primary : (primary + " · " + secondary)
+                };
+
+                var grid = new Grid { HorizontalAlignment = HorizontalAlignment.Stretch };
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 0 });
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                var primaryTb = new TextBlock {
+                    Text = primary,
+                    Foreground = new SolidColorBrush(Color.FromRgb(148, 148, 148)),
+                    FontSize = 11,
+                    FontWeight = FontWeights.Normal,
+                    TextWrapping = TextWrapping.NoWrap,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    TextAlignment = TextAlignment.Left
+                };
+                Grid.SetColumn(primaryTb, 0);
+
+                var secondaryTb = new TextBlock {
+                    Text = secondary,
+                    Foreground = new SolidColorBrush(Color.FromRgb(105, 105, 105)),
+                    FontSize = 9.5,
+                    FontWeight = FontWeights.Normal,
+                    TextWrapping = TextWrapping.NoWrap,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    MaxWidth = 120,
+                    Margin = new Thickness(10, 0, 0, 0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    TextAlignment = TextAlignment.Right,
+                    Visibility = string.IsNullOrWhiteSpace(secondary) ? Visibility.Collapsed : Visibility.Visible
+                };
+                Grid.SetColumn(secondaryTb, 1);
+
+                grid.Children.Add(primaryTb);
+                grid.Children.Add(secondaryTb);
+                row.Child = grid;
+                stack.Children.Add(row);
+            }
+
+            return stack.Children.Count > 0 ? stack : null;
+        }
+
+        private static void InsertChatElementBeforeThinking(FrameworkElement element)
+        {
+            if (element == null || _chatPanel == null) return;
+            if (_thinkingBubble != null) {
+                _chatPanel.Children.Remove(_thinkingBubble);
+                _chatPanel.Children.Add(element);
+                _chatPanel.Children.Add(_thinkingBubble);
+            } else {
+                _chatPanel.Children.Add(element);
+            }
+            if (_chatScroll != null) _chatScroll.ScrollToEnd();
+        }
+
+        private static void AppendToolOperationCards(List<(string primary, string secondary)> entries)
+        {
+            StackPanel stack = BuildToolOperationCardsPanel(entries);
+            if (stack == null) return;
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => InsertChatElementBeforeThinking(stack)));
+        }
+
         private static async Task<ApiResponse> CallLLMAPI(string apiKey, int depth = 0, System.Threading.CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
@@ -1428,50 +2197,65 @@ namespace ADDGH
                 }));
             }
 
-            string baseUrl = Grasshopper.Instances.Settings.GetValue("AI_API_BaseUrl", "https://api.deepseek.com/chat/completions");
-            string modelName = Grasshopper.Instances.Settings.GetValue("AI_ModelName", "deepseek-reasoner");
-
-            var request = new HttpRequestMessage(HttpMethod.Post, baseUrl);
-            request.Headers.Add("Authorization", $"Bearer {apiKey}");
+            var providerSettings = GetProviderRuntimeSettings();
+            if (string.IsNullOrWhiteSpace(apiKey)) apiKey = providerSettings.ApiKey;
+            providerSettings.ApiKey = apiKey;
+            if (string.IsNullOrWhiteSpace(providerSettings.ApiKey))
+            {
+                return new ApiResponse { Content = $"Error: 请先配置 {providerSettings.Config.DisplayName} 的 API Key。" };
+            }
 
             var messagesToSend = CompressMessages(_messages);
 
-                    var requestBody = new
-                    {
-                    model = modelName,
-                    messages = messagesToSend,
-                    stream = false,
-                    temperature = 0.3,
-                    tools = new object[]
+                    object[] toolDefinitions = new object[]
                     {
                         new {
                             type = "function",
                             function = new {
                                 name = "ensure_gh_canvas",
-                                description = "确保当前存在可用的 Grasshopper 画布。若未检测到可用画布，则新建一个空白 GH 画布并设为当前画布。"
+                                description = "确保当前存在可用的 Grasshopper 画布。若未检测到可用画布，则新建一个空白 GH 画布并设为当前画布。",
+                                parameters = new {
+                                    type = "object",
+                                    properties = new {
+                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
+                                    },
+                                    required = new[] { "summary" }
+                                }
                             }
                         },
                         new {
                             type = "function",
                             function = new {
                                 name = "get_gh_components",
-                                description = "获取当前 Grasshopper 画布的完整 JSON 结构图谱，包含所有电池、ID、坐标、端口详情及精确的连线关系。"
+                                description = "获取当前 Grasshopper 画布的完整 JSON 结构图谱，包含所有电池、ID、坐标、端口详情及精确的连线关系。",
+                                parameters = new {
+                                    type = "object",
+                                    properties = new {
+                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
+                                    },
+                                    required = new[] { "summary" }
+                                }
                             }
                         },
                         new {
                             type = "function",
                             function = new {
                                 name = "add_gh_component",
-                                description = "在画布上创建一个新的 Grasshopper 电池。请务必使用完整 'name'。对于 Slider/Panel，必须提供 'label' 参数进行命名。",
+                                description = "在画布上创建一个新的 Grasshopper 电池。必须提供 name 或 component_guid 之一。默认只用 **name**（与组件库标准名一致即可）。**不要**为普通电池先查 catalog；仅当已确认同名歧义或必须放置脚本/表达式类且 name 无法区分时，再用 search_gh_component_catalog 的 **component_guid**。Slider/Panel 必须提供 label。",
                                 parameters = new {
                                     type = "object",
                                     properties = new {
-                                        name = new { type = "string", description = "电池标准名称" },
+                                        name = new { type = "string", description = "电池标准名称（与 component_guid 二选一）" },
+                                        component_guid = new { type = "string", description = "可选：组件库**类型** GUID（与 name 二选一）。多数情况不必填；同名冲突或脚本电池时再取自 search_gh_component_catalog 的 guid。" },
                                         x = new { type = "number", description = "画布 X 坐标" },
                                         y = new { type = "number", description = "画布 Y 坐标" },
-                                        label = new { type = "string", description = "仅限 Slider/Panel 的显示标签。普通电池严禁使用。" }
+                                        label = new { type = "string", description = "仅限 Slider/Panel 的显示标签。普通电池严禁使用。" },
+                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
                                     },
-                                    required = new[] { "name", "x", "y" }
+                                    required = new[] { "x", "y", "summary" }
                                 }
                             }
                         },
@@ -1486,9 +2270,11 @@ namespace ADDGH
                                         from_id = new { type = "string", description = "源电池的 GUID" },
                                         from_index = new { type = "integer", description = "源电池输出端口索引 (从0开始)" },
                                         to_id = new { type = "string", description = "目标电池的 GUID" },
-                                        to_index = new { type = "integer", description = "目标电池输入端口索引 (从0开始)" }
+                                        to_index = new { type = "integer", description = "目标电池输入端口索引 (从0开始)" },
+                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
                                     },
-                                    required = new[] { "from_id", "from_index", "to_id", "to_index" }
+                                    required = new[] { "from_id", "from_index", "to_id", "to_index", "summary" }
                                 }
                             }
                         },
@@ -1501,9 +2287,11 @@ namespace ADDGH
                                     type = "object",
                                     properties = new {
                                         id = new { type = "string", description = "要删除的电池 GUID" },
-                                        is_sandbox = new { type = "boolean", description = "可选：沙箱模式下不直接删除，而是禁用并放入回收站组" }
+                                        is_sandbox = new { type = "boolean", description = "可选：沙箱模式下不直接删除，而是禁用并放入回收站组" },
+                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
                                     },
-                                    required = new[] { "id" }
+                                    required = new[] { "id", "summary" }
                                 }
                             }
                         },
@@ -1511,17 +2299,19 @@ namespace ADDGH
                             type = "function",
                             function = new {
                                 name = "set_gh_component_value",
-                                description = "修改 Slider 的数值或 Panel 的文本内容。仅限 Slider 和 Panel 使用。对于 Slider，还可以同时设置最小值、最大值和小数精度。",
+                                description = "【勿滥用】用于：① Slider/Panel 的数值或显示文本；② **仅当**用户明确要求或方案必需时，向 Evaluate/Expression/C#/Python/VB 等**脚本或表达式电池实例**写入代码/公式（用 string 属性启发式匹配；失败时错误中会列出可写 string 名）。**不要**对普通运算电池误用写入「代码」；简单改参优先用本接口只改 Slider/Panel 的 value，不要为了脚本能力而选脚本电池。Slider 可同时设置 min/max/decimals。",
                                 parameters = new {
                                     type = "object",
                                     properties = new {
                                         id = new { type = "string", description = "电池 GUID" },
-                                        value = new { type = "string", description = "可选：要设置的值（数字字符串或文本）。对于 Panel 此参数是必需的" },
+                                        value = new { type = "string", description = "脚本/表达式/Panel：要写入的完整文本或代码（多行可用 \\n 转义，视模型能力而定）。Panel 必填；Slider 填数字字符串。" },
                                         min = new { type = "number", description = "可选：Slider 最小值" },
                                         max = new { type = "number", description = "可选：Slider 最大值" },
-                                        decimals = new { type = "integer", description = "可选：Slider 小数位数（0-10）" }
+                                        decimals = new { type = "integer", description = "可选：Slider 小数位数（0-10）" },
+                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
                                     },
-                                    required = new[] { "id" }
+                                    required = new[] { "id", "summary" }
                                 }
                             }
                         },
@@ -1536,9 +2326,11 @@ namespace ADDGH
                                         from_id = new { type = "string", description = "源电池 GUID" },
                                         from_index = new { type = "integer", description = "源电池输出端口索引" },
                                         to_id = new { type = "string", description = "目标电池 GUID" },
-                                        to_index = new { type = "integer", description = "目标电池输入端口索引" }
+                                        to_index = new { type = "integer", description = "目标电池输入端口索引" },
+                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
                                     },
-                                    required = new[] { "from_id", "from_index", "to_id", "to_index" }
+                                    required = new[] { "from_id", "from_index", "to_id", "to_index", "summary" }
                                 }
                             }
                         },
@@ -1546,7 +2338,7 @@ namespace ADDGH
                             type = "function",
                             function = new {
                                 name = "create_component_graph",
-                                description = "【推荐】一次性批量创建多个电池并建立它们之间的连线，适合构建复杂的几何逻辑。示例：{\"components\":[{\"alias_id\":\"pt1\",\"name\":\"Construct Point\",\"x\":0,\"y\":0},{\"alias_id\":\"crv1\",\"name\":\"Circle CNR\",\"x\":200,\"y\":0,\"value\":\"5\"}],\"connections\":[{\"from_alias\":\"pt1\",\"from_index\":0,\"to_alias\":\"crv1\",\"to_index\":0}]}",
+                                description = "【推荐】一次性批量创建多个电池并建立它们之间的连线，适合构建复杂的几何逻辑。每个 component 须提供 alias_id、x、y，以及 **name**（常用）；**不要**默认填 component_guid。仅同名或脚本类 name 无法区分时才用 guid。示例：{\"components\":[{\"alias_id\":\"pt1\",\"name\":\"Construct Point\",\"x\":0,\"y\":0},{\"alias_id\":\"crv1\",\"name\":\"Circle CNR\",\"x\":200,\"y\":0,\"value\":\"5\"}],\"connections\":[{\"from_alias\":\"pt1\",\"from_index\":0,\"to_alias\":\"crv1\",\"to_index\":0}]}",
                                 parameters = new {
                                     type = "object",
                                     properties = new {
@@ -1556,7 +2348,8 @@ namespace ADDGH
                                                 type = "object",
                                                 properties = new {
                                                     alias_id = new { type = "string", description = "临时代号(如 'pt1', 'crv1')，用于连线引用，必须唯一" },
-                                                    name = new { type = "string", description = "电池标准名称" },
+                                                    name = new { type = "string", description = "电池标准名称（与 component_guid 二选一）" },
+                                                    component_guid = new { type = "string", description = "可选：类型 GUID（与 name 二选一）。一般只写 name；同名或脚本电池再填 guid。" },
                                                     label = new { type = "string", description = "仅限 Slider/Panel 的显示标签。普通电池严禁使用。" },
                                                     x = new { type = "number", description = "画布 X 坐标" },
                                                     y = new { type = "number", description = "画布 Y 坐标" },
@@ -1565,7 +2358,7 @@ namespace ADDGH
                                                     max = new { type = "number", description = "可选：如果是 Slider，设置最大值" },
                                                     decimals = new { type = "integer", description = "可选：如果是 Slider，设置小数位数" }
                                                 },
-                                                required = new[] { "alias_id", "name", "x", "y" }
+                                                required = new[] { "alias_id", "x", "y" }
                                             }
                                         },
                                         connections = new {
@@ -1583,9 +2376,11 @@ namespace ADDGH
                                         },
                                         group_name = new { type = "string", description = "可选：提供名称将自动为这些电池打组" },
                                         auto_group = new { type = "boolean", description = "可选：是否自动根据任务成组 (默认 false)" },
-                                        is_sandbox = new { type = "boolean", description = "可选：开启沙箱模式，电池将偏移并在橙色组中生成，不破坏原有逻辑" }
+                                        is_sandbox = new { type = "boolean", description = "可选：开启沙箱模式，电池将偏移并在橙色组中生成，不破坏原有逻辑" },
+                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
                                     },
-                                    required = new[] { "components", "connections" }
+                                    required = new[] { "components", "connections", "summary" }
                                 }
                             }
                         },
@@ -1593,7 +2388,15 @@ namespace ADDGH
                             type = "function",
                             function = new {
                                 name = "check_gh_errors",
-                                description = "检查当前画布是否存在运行时错误或警告。"
+                                description = "检查当前画布是否存在运行时错误或警告。",
+                                parameters = new {
+                                    type = "object",
+                                    properties = new {
+                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
+                                    },
+                                    required = new[] { "summary" }
+                                }
                             }
                         },
                         new {
@@ -1606,9 +2409,11 @@ namespace ADDGH
                                     properties = new {
                                         id = new { type = "string", description = "电池 GUID" },
                                         preview = new { type = "boolean", description = "是否显示预览 (true为显示, false为隐藏)" },
-                                        enabled = new { type = "boolean", description = "是否启用电池 (true为启用, false为禁用)" }
+                                        enabled = new { type = "boolean", description = "是否启用电池 (true为启用, false为禁用)" },
+                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
                                     },
-                                    required = new[] { "id" }
+                                    required = new[] { "id", "summary" }
                                 }
                             }
                         },
@@ -1622,9 +2427,11 @@ namespace ADDGH
                                     properties = new {
                                         id = new { type = "string", description = "电池 GUID" },
                                         is_input = new { type = "boolean", description = "true 为输入端口，false 为输出端口" },
-                                        action = new { type = "string", description = "'add' 或 'remove'" }
+                                        action = new { type = "string", description = "'add' 或 'remove'" },
+                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
                                     },
-                                    required = new[] { "id", "is_input", "action" }
+                                    required = new[] { "id", "is_input", "action", "summary" }
                                 }
                             }
                         },
@@ -1639,9 +2446,11 @@ namespace ADDGH
                                         action = new { type = "string", description = "'create', 'ungroup', 'add_to_group', 'remove_from_group'" },
                                         ids = new { type = "array", items = new { type = "string" }, description = "涉及的电池 GUID 列表，create/add_to_group/remove_from_group 时需要" },
                                         group_id = new { type = "string", description = "操作已有组时的组 GUID，ungroup/add_to_group/remove_from_group 时需要" },
-                                        name = new { type = "string", description = "创建组时的显示名称，create 时需要" }
+                                        name = new { type = "string", description = "创建组时的显示名称，create 时需要" },
+                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
                                     },
-                                    required = new[] { "action" }
+                                    required = new[] { "action", "summary" }
                                 }
                             }
                         },
@@ -1656,9 +2465,11 @@ namespace ADDGH
                                         id = new { type = "string", description = "电池 GUID" },
                                         is_input = new { type = "boolean", description = "true为输入端口，false为输出端口" },
                                         index = new { type = "integer", description = "端口索引 (从0开始)" },
-                                        operation = new { type = "string", description = "操作类型: 'Flatten', 'Graft', 'Simplify', 'Reverse', 'None'" }
+                                        operation = new { type = "string", description = "操作类型: 'Flatten', 'Graft', 'Simplify', 'Reverse', 'None'" },
+                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
                                     },
-                                    required = new[] { "id", "is_input", "index", "operation" }
+                                    required = new[] { "id", "is_input", "index", "operation", "summary" }
                                 }
                             }
                         },
@@ -1666,13 +2477,33 @@ namespace ADDGH
                             type = "function",
                             function = new {
                                 name = "search_component_library",
-                                description = "根据关键词在 Grasshopper 电池库中搜索可用插件和电池名称。",
+                                description = "根据关键词在 Grasshopper 电池库中搜索可用插件和电池名称（简短文本列表，最多约 15 条）。**日常找电池名首选**；不要用 search_gh_component_catalog 代替本接口做常规检索。",
                                 parameters = new {
                                     type = "object",
                                     properties = new {
-                                        keyword = new { type = "string", description = "搜索关键词" }
+                                        keyword = new { type = "string", description = "搜索关键词" },
+                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
                                     },
-                                    required = new[] { "keyword" }
+                                    required = new[] { "keyword", "summary" }
+                                }
+                            }
+                        },
+                        new {
+                            type = "function",
+                            function = new {
+                                name = "search_gh_component_catalog",
+                                description = "【非必要勿调用】仅在：① 要放置/核对**脚本或表达式类**电池类型；② 已确认 **add_gh_component 因同名失败** 必须用 guid 时。日常找电池名请优先 **search_component_library**（更轻）。返回 JSON（含 guid）；**不要**把本接口当作每次建模的前置步骤。",
+                                parameters = new {
+                                    type = "object",
+                                    properties = new {
+                                        query = new { type = "string", description = "匹配 name、nickname、category 或 subcategory 的关键词；脚本场景才用 Evaluate、C# 等，日常用 Point、Curve 等标准名即可" },
+                                        max_results = new { type = "integer", description = "最大条数，默认 30，上限 200" },
+                                        category_contains = new { type = "string", description = "可选：仅保留 category 或 subcategory 含此子串的项（如 Script）" },
+                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
+                                    },
+                                    required = new[] { "query", "summary" }
                                 }
                             }
                         },
@@ -1687,9 +2518,11 @@ namespace ADDGH
                                         file_name = new { type = "string", description = "保存的文件名（英文，以 .md 结尾，如 'connect_points.md'）" },
                                         name = new { type = "string", description = "技能名称（如 '连点成线'）" },
                                         description = new { type = "string", description = "简短的技能描述" },
-                                        content = new { type = "string", description = "技能的详细内容，包括使用的电池、连线逻辑、注意事项等（Markdown 格式）" }
+                                        content = new { type = "string", description = "技能的详细内容，包括使用的电池、连线逻辑、注意事项等（Markdown 格式）" },
+                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
                                     },
-                                    required = new[] { "file_name", "name", "description", "content" }
+                                    required = new[] { "file_name", "name", "description", "content", "summary" }
                                 }
                             }
                         },
@@ -1701,9 +2534,11 @@ namespace ADDGH
                                 parameters = new {
                                     type = "object",
                                     properties = new {
-                                        file_name = new { type = "string", description = "要读取的 skill 文件名，如 'general_modeling.md' 或 'workflow_optimization.md'" }
+                                        file_name = new { type = "string", description = "要读取的 skill 文件名，如 'general_modeling.md' 或 'workflow_optimization.md'" },
+                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
                                     },
-                                    required = new[] { "file_name" }
+                                    required = new[] { "file_name", "summary" }
                                 }
                             }
                         },
@@ -1711,52 +2546,42 @@ namespace ADDGH
                             type = "function",
                             function = new {
                                 name = "read_reference_json",
-                                description = "读取 reference 目录中的参考画布 JSON。通常先读取 reference_index.md，根据描述选定 file_name 后再调用本工具。",
+                                description = "读取 reference 目录中的参考画布 JSON。应在建模/连线逻辑已规划清楚之后再调用；可先 read_skill_file 读取 reference_index.md 选定 file_name。不要在尚未形成方案时抢先读参考。",
                                 parameters = new {
                                     type = "object",
                                     properties = new {
-                                        file_name = new { type = "string", description = "reference 目录下的 JSON 文件名，如 'ref_20260503123000.json'" }
+                                        file_name = new { type = "string", description = "reference 目录下的 JSON 文件名，如 'ref_20260503123000.json'" },
+                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
                                     },
-                                    required = new[] { "file_name" }
+                                    required = new[] { "file_name", "summary" }
                                 }
                             }
                         },
-                        new {
-                            type = "function",
-                            function = new {
-                                name = "show_reference_options",
-                                description = "显示五个画布描述选项供用户选择，用于创建参考。",
-                                parameters = new {
-                                    type = "object",
-                                    properties = new {
-                                        options = new {
-                                            type = "array",
-                                            items = new { type = "string" },
-                                            description = "5个简短的画布描述"
-                                        }
-                                    },
-                                    required = new[] { "options" }
-                                }
-                            }
-                        },
+                        ShowReferenceOptionsTool.GetApiToolDefinition(),
                         new {
                             type = "function",
                             function = new {
                                 name = "apply_gh_sandbox",
-                                description = "将沙箱模式中的修改应用到主画布。这会删除回收站中的电池，并将沙箱组中的电池移回原位并解除沙箱组。"
+                                description = "将沙箱模式中的修改应用到主画布。这会删除回收站中的电池，并将沙箱组中的电池移回原位并解除沙箱组。",
+                                parameters = new {
+                                    type = "object",
+                                    properties = new {
+                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
+                                    },
+                                    required = new[] { "summary" }
+                                }
                             }
                         }
-                    }
-                };
+                    };
 
-                string jsonContent = JsonConvert.SerializeObject(requestBody);
-                var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
-                request.Content = content;
+                JObject requestBody = BuildChatRequestBody(providerSettings, messagesToSend, toolDefinitions);
 
                 ShowThinkingAnimation("载入中...");
                 DateTime startTime = DateTime.Now;
                 
-                var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+                var response = await SendProviderRequestAsync(providerSettings, requestBody, ct);
                 
                 ShowThinkingAnimation("思考中...");
 
@@ -1821,6 +2646,7 @@ namespace ADDGH
                 if (fullToolCalls.Count > 0)
                 {
                     ShowThinkingAnimation("工作中...");
+                    var operationCards = new List<(string primary, string secondary)>();
 
                     foreach (var toolCall in fullToolCalls)
                     {
@@ -1829,87 +2655,134 @@ namespace ADDGH
                         string argsJson = toolCall["function"]?["arguments"]?.ToString();
                         string callId = toolCall["id"]?.ToString();
 
+                        JObject argsObj = ParseToolArgumentsForExecution(argsJson, out string cardSum, out string cardDet);
+                        if (!string.IsNullOrWhiteSpace(cardSum))
+                            operationCards.Add((cardSum, string.IsNullOrWhiteSpace(cardDet) ? "" : cardDet));
+
                         string toolResult = "";
                         try
                         {
-                            var args = JsonConvert.DeserializeObject<Dictionary<string, object>>(argsJson);
                             if (funcName == "ensure_gh_canvas") toolResult = ExecuteEnsureGhCanvas();
                             else if (funcName == "get_gh_components") toolResult = ExecuteGetGhComponents();
-                            else if (funcName == "add_gh_component") { 
-                                string label = args.ContainsKey("label") ? args["label"].ToString() : null;
-                                toolResult = ExecuteAddGhComponent(args["name"].ToString(), (float)Convert.ToDouble(args["x"]), (float)Convert.ToDouble(args["y"]), label); 
-                                addComp++; 
+                            else if (funcName == "add_gh_component") {
+                                string label = argsObj["label"]?.ToString();
+                                string name = argsObj["name"]?.ToString();
+                                string cguid = argsObj["component_guid"]?.ToString();
+                                if (string.IsNullOrWhiteSpace(name) && string.IsNullOrWhiteSpace(cguid))
+                                    toolResult = "Error: 必须提供 name 或 component_guid。";
+                                else {
+                                    float x = argsObj["x"]?.ToObject<float>() ?? 0f;
+                                    float y = argsObj["y"]?.ToObject<float>() ?? 0f;
+                                    toolResult = ExecuteAddGhComponent(name ?? "", x, y, label, cguid);
+                                    if (!toolResult.StartsWith("Error:")) addComp++;
+                                }
                             }
-                            else if (funcName == "connect_gh_components") { toolResult = ExecuteConnectGhComponents(args["from_id"].ToString(), Convert.ToInt32(args["from_index"]), args["to_id"].ToString(), Convert.ToInt32(args["to_index"])); addConn++; }
-                            else if (funcName == "remove_gh_component") { 
-                                bool isSandbox = args.ContainsKey("is_sandbox") && Convert.ToBoolean(args["is_sandbox"]);
-                                toolResult = ExecuteRemoveGhComponent(args["id"].ToString(), isSandbox); 
-                                delComp++; 
+                            else if (funcName == "connect_gh_components") {
+                                toolResult = ExecuteConnectGhComponents(
+                                    argsObj["from_id"]?.ToString(),
+                                    argsObj["from_index"]?.ToObject<int>() ?? 0,
+                                    argsObj["to_id"]?.ToString(),
+                                    argsObj["to_index"]?.ToObject<int>() ?? 0);
+                                addConn++;
+                            }
+                            else if (funcName == "remove_gh_component") {
+                                bool isSandbox = argsObj["is_sandbox"]?.ToObject<bool>() ?? false;
+                                toolResult = ExecuteRemoveGhComponent(argsObj["id"]?.ToString(), isSandbox);
+                                delComp++;
                             }
                             else if (funcName == "set_gh_component_value") {
-                                string val = args.ContainsKey("value") ? args["value"].ToString() : null;
-                                double? min = args.ContainsKey("min") ? (double?)Convert.ToDouble(args["min"]) : null;
-                                double? max = args.ContainsKey("max") ? (double?)Convert.ToDouble(args["max"]) : null;
-                                int? decimals = args.ContainsKey("decimals") ? (int?)Convert.ToInt32(args["decimals"]) : null;
-                                toolResult = ExecuteSetGhComponentValue(args["id"].ToString(), val, min, max, decimals);
+                                string val = argsObj["value"]?.ToString();
+                                double? min = argsObj["min"] == null || argsObj["min"].Type == JTokenType.Null ? (double?)null : argsObj["min"].ToObject<double>();
+                                double? max = argsObj["max"] == null || argsObj["max"].Type == JTokenType.Null ? (double?)null : argsObj["max"].ToObject<double>();
+                                int? decimals = argsObj["decimals"] == null || argsObj["decimals"].Type == JTokenType.Null ? (int?)null : argsObj["decimals"].ToObject<int>();
+                                toolResult = ExecuteSetGhComponentValue(argsObj["id"]?.ToString(), val, min, max, decimals);
                             }
-                            else if (funcName == "remove_gh_connection") { toolResult = ExecuteRemoveGhConnection(args["from_id"].ToString(), Convert.ToInt32(args["from_index"]), args["to_id"].ToString(), Convert.ToInt32(args["to_index"])); delConn++; }
-                            else if (funcName == "create_component_graph") { 
-                                bool autoG = args.ContainsKey("auto_group") && Convert.ToBoolean(args["auto_group"]);
-                                bool isSandbox = args.ContainsKey("is_sandbox") && Convert.ToBoolean(args["is_sandbox"]);
-                                string gName = args.ContainsKey("group_name") ? args["group_name"].ToString() : (autoG ? "AI Generated" : (isSandbox ? "🧪 SANDBOX" : null));
-                                toolResult = ExecuteCreateComponentGraph(args["components"] as JArray, args["connections"] as JArray, gName, isSandbox); 
-                                if (args["components"] is JArray comps) addComp += comps.Count;
-                                if (args["connections"] is JArray conns) addConn += conns.Count;
+                            else if (funcName == "remove_gh_connection") {
+                                toolResult = ExecuteRemoveGhConnection(
+                                    argsObj["from_id"]?.ToString(),
+                                    argsObj["from_index"]?.ToObject<int>() ?? 0,
+                                    argsObj["to_id"]?.ToString(),
+                                    argsObj["to_index"]?.ToObject<int>() ?? 0);
+                                delConn++;
+                            }
+                            else if (funcName == "create_component_graph") {
+                                bool autoG = argsObj["auto_group"]?.ToObject<bool>() ?? false;
+                                bool isSandbox = argsObj["is_sandbox"]?.ToObject<bool>() ?? false;
+                                string gName = argsObj["group_name"]?.ToString();
+                                if (string.IsNullOrEmpty(gName))
+                                    gName = autoG ? "AI Generated" : (isSandbox ? "🧪 SANDBOX" : null);
+                                toolResult = ExecuteCreateComponentGraph(
+                                    argsObj["components"] as JArray,
+                                    argsObj["connections"] as JArray,
+                                    gName,
+                                    isSandbox);
+                                if (argsObj["components"] is JArray comps) addComp += comps.Count;
+                                if (argsObj["connections"] is JArray conns) addConn += conns.Count;
                             }
                             else if (funcName == "check_gh_errors") toolResult = ExecuteCheckGhErrors();
-                            else if (funcName == "search_component_library") toolResult = ExecuteSearchComponentLibrary(args["keyword"].ToString());
+                            else if (funcName == "search_component_library")
+                                toolResult = ExecuteSearchComponentLibrary(argsObj["keyword"]?.ToString());
+                            else if (funcName == "search_gh_component_catalog") {
+                                int maxR = argsObj["max_results"]?.ToObject<int?>() ?? 30;
+                                string catc = argsObj["category_contains"]?.ToString();
+                                toolResult = ExecuteSearchGhComponentCatalog(argsObj["query"]?.ToString(), maxR, catc);
+                            }
                             else if (funcName == "set_gh_component_status") {
-                                bool? preview = args.ContainsKey("preview") ? (bool?)args["preview"] : null;
-                                bool? enabled = args.ContainsKey("enabled") ? (bool?)args["enabled"] : null;
-                                toolResult = ExecuteSetGhComponentStatus(args["id"].ToString(), preview, enabled);
+                                bool? preview = argsObj["preview"] == null || argsObj["preview"].Type == JTokenType.Null
+                                    ? (bool?)null : argsObj["preview"].ToObject<bool>();
+                                bool? enabled = argsObj["enabled"] == null || argsObj["enabled"].Type == JTokenType.Null
+                                    ? (bool?)null : argsObj["enabled"].ToObject<bool>();
+                                toolResult = ExecuteSetGhComponentStatus(argsObj["id"]?.ToString(), preview, enabled);
                             }
                             else if (funcName == "modify_gh_component_ports") {
-                                toolResult = ExecuteModifyGhComponentPorts(args["id"].ToString(), (bool)args["is_input"], args["action"].ToString());
+                                toolResult = ExecuteModifyGhComponentPorts(
+                                    argsObj["id"]?.ToString(),
+                                    argsObj["is_input"]?.ToObject<bool>() ?? false,
+                                    argsObj["action"]?.ToString());
                             }
                             else if (funcName == "modify_gh_port_data") {
-                                toolResult = ExecuteModifyGhPortData(args["id"].ToString(), Convert.ToBoolean(args["is_input"]), Convert.ToInt32(args["index"]), args["operation"].ToString());
+                                toolResult = ExecuteModifyGhPortData(
+                                    argsObj["id"]?.ToString(),
+                                    argsObj["is_input"]?.ToObject<bool>() ?? false,
+                                    argsObj["index"]?.ToObject<int>() ?? 0,
+                                    argsObj["operation"]?.ToString());
                             }
                             else if (funcName == "manage_gh_groups") {
-                                string gId = args.ContainsKey("group_id") ? args["group_id"].ToString() : null;
-                                string gName = args.ContainsKey("name") ? args["name"].ToString() : null;
-                                JArray idsArray = args.ContainsKey("ids") ? args["ids"] as JArray : null;
+                                string gId = argsObj["group_id"]?.ToString();
+                                string gName = argsObj["name"]?.ToString();
+                                JArray idsArray = argsObj["ids"] as JArray;
                                 List<string> idsList = idsArray?.Select(v => v.ToString()).ToList();
-                                toolResult = ExecuteManageGhGroups(args["action"].ToString(), idsList, gId, gName);
+                                toolResult = ExecuteManageGhGroups(argsObj["action"]?.ToString(), idsList, gId, gName);
                             }
-                            else if (funcName == "read_skill_file") {
-                                toolResult = ExecuteReadSkillFile(args["file_name"].ToString());
-                            }
-                            else if (funcName == "read_reference_json") {
-                                toolResult = ExecuteReadReferenceJson(args["file_name"].ToString());
-                            }
+                            else if (funcName == "read_skill_file")
+                                toolResult = ExecuteReadSkillFile(argsObj["file_name"]?.ToString());
+                            else if (funcName == "read_reference_json")
+                                toolResult = ExecuteReadReferenceJson(argsObj["file_name"]?.ToString());
                             else if (funcName == "create_gh_skill") {
-                                toolResult = ExecuteCreateGhSkill(args["file_name"].ToString(), args["name"].ToString(), args["description"].ToString(), args["content"].ToString());
+                                toolResult = ExecuteCreateGhSkill(
+                                    argsObj["file_name"]?.ToString(),
+                                    argsObj["name"]?.ToString(),
+                                    argsObj["description"]?.ToString(),
+                                    argsObj["content"]?.ToString());
                             }
-                            else if (funcName == "show_reference_options") {
-                                var options = args["options"] as Newtonsoft.Json.Linq.JArray;
-                                System.Collections.Generic.List<string> optList = new System.Collections.Generic.List<string>();
-                                if (options != null) {
-                                    foreach(var opt in options) optList.Add(opt.ToString());
+                            else if (funcName == ShowReferenceOptionsTool.FunctionName) {
+                                var (refToolMsg, refEndRound) = ShowReferenceOptionsTool.Run(argsObj, argsJson, operationCards);
+                                toolResult = refToolMsg;
+                                if (refEndRound)
+                                {
+                                    _messages.Add(new { role = "tool", tool_call_id = callId, name = funcName, content = toolResult });
+                                    return new ApiResponse { Content = fullContent, Reasoning = fullReasoning };
                                 }
-                                AppendReferenceOptionsBubble(optList);
-                                toolResult = "已向用户展示参考选项卡片，等待用户选择。";
-                                _messages.Add(new { role = "tool", tool_call_id = callId, name = funcName, content = toolResult });
-                                return new ApiResponse { Content = fullContent, Reasoning = fullReasoning };
                             }
-                            else if (funcName == "apply_gh_sandbox") {
-                                toolResult = ExecuteApplyGhSandbox();
-                            }
+                            else if (funcName == "apply_gh_sandbox") toolResult = ExecuteApplyGhSandbox();
                         }
                         catch (Exception ex) { toolResult = "Error: " + ex.Message; }
 
                         _messages.Add(new { role = "tool", tool_call_id = callId, name = funcName, content = toolResult });
                     }
+
+                    if (operationCards.Count > 0)
+                        AppendToolOperationCards(operationCards);
 
                     if (addComp > 0 || delComp > 0 || addConn > 0 || delConn > 0) {
                         AppendColoredStatsMessage(addComp, delComp, addConn, delConn);
@@ -2284,7 +3157,7 @@ namespace ADDGH
 
         private static void UpdateCodeView()
         {
-            if (!_isCodeVisible || _txtCodeView == null) return;
+            if (!_isCodeVisible || _richCodeView == null) return;
 
             if (!_isJsonMode)
             {
@@ -2293,9 +3166,9 @@ namespace ADDGH
                     try {
                         // 尝试在 UI 上进行格式化展示，即使 AI 接收的是压缩版
                         var obj = JsonConvert.DeserializeObject(raw);
-                        _txtCodeView.Text = JsonConvert.SerializeObject(obj, Formatting.Indented);
+                        SetRichCodeViewContent(_richCodeView, JsonConvert.SerializeObject(obj, Formatting.Indented));
                     } catch {
-                        _txtCodeView.Text = raw;
+                        SetRichCodeViewContent(_richCodeView, raw);
                     }
                 }));
                 return;
@@ -2305,7 +3178,7 @@ namespace ADDGH
             {
                 var doc = Grasshopper.Instances.ActiveCanvas?.Document;
                 if (doc == null) {
-                    _txtCodeView.Text = "// 没有激活的画布";
+                    SetRichCodeViewContent(_richCodeView, "// 没有激活的画布", asPlainComment: true);
                     return;
                 }
 
@@ -2365,11 +3238,25 @@ namespace ADDGH
                 }
                 graph["components"] = components;
 
-                _txtCodeView.Text = graph.ToString(Formatting.Indented);
+                SetRichCodeViewContent(_richCodeView, graph.ToString(Formatting.Indented));
             }));
         }
 
-        private static string ExecuteAddGhComponent(string name, float x, float y, string label = null)
+        /// <summary>
+        /// 优先按名称从组件库创建实例；若提供合法 component_guid 则按类型 GUID 创建（用于同名或脚本类）。
+        /// </summary>
+        private static Grasshopper.Kernel.IGH_DocumentObject InstantiateDocumentObjectFromLibrary(string name, string componentGuid)
+        {
+            if (!string.IsNullOrWhiteSpace(componentGuid) && Guid.TryParse(componentGuid.Trim(), out Guid cid)) {
+                var emitted = Grasshopper.Instances.ComponentServer.EmitObject(cid) as Grasshopper.Kernel.IGH_DocumentObject;
+                if (emitted != null) return emitted;
+            }
+            if (string.IsNullOrWhiteSpace(name)) return null;
+            var proxy = FindComponentProxy(name);
+            return proxy?.CreateInstance() as Grasshopper.Kernel.IGH_DocumentObject;
+        }
+
+        private static string ExecuteAddGhComponent(string name, float x, float y, string label = null, string componentGuid = null)
         {
             string result = "";
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
@@ -2377,19 +3264,24 @@ namespace ADDGH
                 var doc = Grasshopper.Instances.ActiveCanvas?.Document;
                 if (doc == null) { result = "Error: 没有打开的画布。"; return; }
 
-                var proxy = FindComponentProxy(name);
+                var obj = InstantiateDocumentObjectFromLibrary(name, componentGuid);
 
-                if (proxy == null) { result = "Error: 找不到电池 '" + name + "'。"; return; }
+                if (obj == null) {
+                    result = !string.IsNullOrWhiteSpace(componentGuid)
+                        ? "Error: component_guid 无效或未加载对应的电池类型。"
+                        : "Error: 找不到电池 '" + name + "'。";
+                    return;
+                }
 
-                var obj = proxy.CreateInstance() as Grasshopper.Kernel.IGH_DocumentObject;
                 obj.CreateAttributes();
                 obj.Attributes.Pivot = new System.Drawing.PointF(x, y);
                 if (!string.IsNullOrEmpty(label)) obj.NickName = label;
                 obj.Attributes.ExpireLayout();
-                
-                                        doc.AddObject(obj, false);
+
+                doc.AddObject(obj, false);
                 doc.NewSolution(false);
-                result = "已添加 " + name + " (ID: " + obj.InstanceGuid + ")。";
+                string displayName = !string.IsNullOrWhiteSpace(name) ? name : (obj.Name ?? "组件");
+                result = "已添加 " + displayName + " (ID: " + obj.InstanceGuid + ")。";
                 _canvasChanged = true;
             }));
             return result;
@@ -2519,6 +3411,103 @@ namespace ADDGH
             return result;
         }
 
+        /// <summary> 脚本/表达式类电池：按 string 属性名启发式写入；含 internal setter 的属性通过 GetSetMethod(true) 写入。 </summary>
+        private static bool TrySetGrasshopperScriptOrFormula(Grasshopper.Kernel.IGH_DocumentObject obj, string text, out string detail)
+        {
+            detail = null;
+            if (obj == null || text == null) return false;
+
+            bool IsExcludedMetaProperty(string pn)
+            {
+                if (string.IsNullOrEmpty(pn)) return true;
+                foreach (var ex in new[] {
+                    "NickName", "Category", "SubCategory", "Description", "Keywords", "InstanceDescription",
+                    "Path", "FileName", "Url", "Message", "ToolTip", "IconDisplayName", "LanguageName"
+                })
+                    if (pn.Equals(ex, StringComparison.OrdinalIgnoreCase)) return true;
+                return false;
+            }
+
+            bool LooksLikeScriptContentProperty(string pn)
+            {
+                if (IsExcludedMetaProperty(pn)) return false;
+                foreach (var part in new[] {
+                    "Code", "Script", "Formula", "Expression", "Source", "Snippet", "Program", "Definition",
+                    "Logic", "Statement", "Body", "Python", "CSharp", "Csharp", "VB", "IronPython", "Compile",
+                    "ScriptSource", "Editor", "UserCode", "RawCode", "TextBody", "Document"
+                })
+                    if (pn.IndexOf(part, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                return false;
+            }
+
+            int PropertyPreference(string pn)
+            {
+                if (string.Equals(pn, "Code", StringComparison.OrdinalIgnoreCase)) return 500;
+                if (string.Equals(pn, "Script", StringComparison.OrdinalIgnoreCase)) return 490;
+                if (pn.IndexOf("Formula", StringComparison.OrdinalIgnoreCase) >= 0) return 480;
+                if (pn.IndexOf("Expression", StringComparison.OrdinalIgnoreCase) >= 0) return 470;
+                if (pn.IndexOf("ScriptSource", StringComparison.OrdinalIgnoreCase) >= 0) return 460;
+                if (pn.IndexOf("Editor", StringComparison.OrdinalIgnoreCase) >= 0) return 450;
+                if (pn.IndexOf("Python", StringComparison.OrdinalIgnoreCase) >= 0) return 440;
+                if (pn.IndexOf("CSharp", StringComparison.OrdinalIgnoreCase) >= 0 || pn.IndexOf("Csharp", StringComparison.OrdinalIgnoreCase) >= 0) return 430;
+                if (pn.IndexOf("VB", StringComparison.OrdinalIgnoreCase) >= 0) return 420;
+                if (pn.IndexOf("Source", StringComparison.OrdinalIgnoreCase) >= 0) return 400;
+                if (pn.IndexOf("Content", StringComparison.OrdinalIgnoreCase) >= 0) return 350;
+                if (pn.IndexOf("Body", StringComparison.OrdinalIgnoreCase) >= 0) return 340;
+                return 100;
+            }
+
+            var candidates = new List<System.Reflection.PropertyInfo>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (Type t = obj.GetType(); t != null && t != typeof(object); t = t.BaseType)
+            {
+                foreach (var prop in t.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    if (prop.PropertyType != typeof(string)) continue;
+                    if (!seen.Add(prop.Name)) continue;
+                    if (prop.GetIndexParameters().Length != 0) continue;
+                    var setter = prop.GetSetMethod(true);
+                    if (setter == null) continue;
+                    if (!LooksLikeScriptContentProperty(prop.Name)) continue;
+                    candidates.Add(prop);
+                }
+            }
+
+            foreach (var prop in candidates.OrderByDescending(p => PropertyPreference(p.Name)).ThenBy(p => p.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    prop.GetSetMethod(true).Invoke(obj, new object[] { text });
+                    detail = prop.Name;
+                    return true;
+                }
+                catch { /* 尝试下一候选 */ }
+            }
+            return false;
+        }
+
+        /// <summary> 用于错误提示：列出实例上带 setter 的 string 属性名。 </summary>
+        private static string DescribeWritableStringProperties(Grasshopper.Kernel.IGH_DocumentObject obj, int maxNames = 16)
+        {
+            if (obj == null) return "";
+            var names = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (Type t = obj.GetType(); t != null && t != typeof(object); t = t.BaseType)
+            {
+                foreach (var prop in t.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    if (prop.PropertyType != typeof(string)) continue;
+                    if (prop.GetIndexParameters().Length != 0) continue;
+                    if (prop.GetSetMethod(true) == null) continue;
+                    if (!seen.Add(prop.Name)) continue;
+                    names.Add(prop.Name);
+                    if (names.Count >= maxNames) break;
+                }
+                if (names.Count >= maxNames) break;
+            }
+            return names.Count == 0 ? "" : " 可写 string 属性：" + string.Join(", ", names);
+        }
+
         private static string ExecuteSetGhComponentValue(string id, string value, double? min, double? max, int? decimals)
         {
             string result = "";
@@ -2569,7 +3558,19 @@ namespace ADDGH
                     doc.NewSolution(false);
                     result = "Panel 设置成功。";
                     _canvasChanged = true;
-                } else result = "Error: 不是 Slider 或 Panel。";
+                } else if (value == null) {
+                    result = "Error: 修改脚本/表达式电池必须在 value 中提供完整代码或公式文本。";
+                } else if (TrySetGrasshopperScriptOrFormula(obj, value, out string propName)) {
+                    obj.ExpireSolution(true);
+                    doc.NewSolution(false);
+                    result = "已写入脚本/表达式内容（" + propName + "）。";
+                    _canvasChanged = true;
+                } else {
+                    string hint = DescribeWritableStringProperties(obj);
+                    result = "Error: 未能自动写入代码/公式（未找到合适的 string 属性或写入被拒绝）。"
+                        + hint
+                        + " 若属性名不在启发式内，可反馈电池类型以便扩展。";
+                }
                 result += GetCanvasErrors(doc);
             }));
             return result;
@@ -2721,6 +3722,7 @@ namespace ADDGH
                 if (components != null) {
                     foreach (var c in components) {
                         string name = c["name"]?.ToString();
+                        string cguid = c["component_guid"]?.ToString();
                         string label = c["label"]?.ToString();
                         float x = (c["x"]?.ToObject<float>() ?? 0) + offsetX;
                         float y = c["y"]?.ToObject<float>() ?? 0;
@@ -2730,10 +3732,12 @@ namespace ADDGH
                         int? decimals = c["decimals"]?.ToObject<int>();
                         string alias = c["alias_id"]?.ToString();
 
-                        var proxy = FindComponentProxy(name);
+                        if (string.IsNullOrWhiteSpace(name) && string.IsNullOrWhiteSpace(cguid))
+                            continue;
 
-                        if (proxy != null) {
-                            var obj = proxy.CreateInstance() as Grasshopper.Kernel.IGH_DocumentObject;
+                        var obj = InstantiateDocumentObjectFromLibrary(name ?? "", cguid);
+
+                        if (obj != null) {
                             obj.CreateAttributes();
                             obj.Attributes.Pivot = new System.Drawing.PointF(x, y);
                             if (!string.IsNullOrEmpty(label)) obj.NickName = label;
@@ -2743,11 +3747,14 @@ namespace ADDGH
                                 if (min.HasValue) s.Slider.Minimum = (decimal)min.Value;
                                 if (max.HasValue) s.Slider.Maximum = (decimal)max.Value;
                                 if (decimals.HasValue) s.Slider.DecimalPlaces = Math.Max(0, Math.Min(10, decimals.Value));
-                                if (!string.IsNullOrEmpty(val) && decimal.TryParse(val, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out decimal d)) 
+                                if (!string.IsNullOrEmpty(val) && decimal.TryParse(val, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out decimal d))
                                     s.Slider.Value = d;
                             }
                             else if (obj is Grasshopper.Kernel.Special.GH_Panel p && !string.IsNullOrEmpty(val)) {
                                 p.UserText = val;
+                            }
+                            else if (!string.IsNullOrEmpty(val) && TrySetGrasshopperScriptOrFormula(obj, val, out _)) {
+                                obj.ExpireSolution(true);
                             }
 
                             if (!string.IsNullOrEmpty(alias)) createdObjs[alias] = obj;
@@ -2924,6 +3931,61 @@ namespace ADDGH
             return result;
         }
 
+        private static string ExecuteSearchGhComponentCatalog(string query, int maxResults, string categoryContains = null)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                if (string.IsNullOrWhiteSpace(query)) {
+                    result = "Error: query 不能为空。";
+                    return;
+                }
+                if (maxResults <= 0) maxResults = 30;
+                if (maxResults > 200) maxResults = 200;
+
+                string q = query.Trim();
+                string catFilter = categoryContains?.Trim();
+                var matches = new JArray();
+
+                foreach (var p in Grasshopper.Instances.ComponentServer.ObjectProxies) {
+                    if (p.Obsolete) continue;
+                    string name = p.Desc?.Name ?? "";
+                    string nick = p.Desc?.NickName ?? "";
+                    string cat = p.Desc?.Category ?? "";
+                    string sub = p.Desc?.SubCategory ?? "";
+
+                    if (!string.IsNullOrEmpty(catFilter)) {
+                        bool inCat = (cat.IndexOf(catFilter, StringComparison.OrdinalIgnoreCase) >= 0)
+                            || (sub.IndexOf(catFilter, StringComparison.OrdinalIgnoreCase) >= 0);
+                        if (!inCat) continue;
+                    }
+
+                    bool hit = name.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0
+                        || nick.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0
+                        || cat.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0
+                        || sub.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0;
+
+                    if (!hit) continue;
+
+                    matches.Add(new JObject {
+                        ["name"] = name,
+                        ["nickname"] = nick,
+                        ["guid"] = p.Guid.ToString(),
+                        ["category"] = cat,
+                        ["subcategory"] = sub
+                    });
+
+                    if (matches.Count >= maxResults) break;
+                }
+
+                var wrap = new JObject {
+                    ["count"] = matches.Count,
+                    ["items"] = matches
+                };
+                result = wrap.ToString(Formatting.None);
+            }));
+            return result;
+        }
+
         private static string GetCanvasErrors(Grasshopper.Kernel.GH_Document doc)
         {
             List<string> errs = new List<string>();
@@ -3081,6 +4143,50 @@ namespace ADDGH
             }));
         }
 
+        private static void AppendUserMessageWithAttachments(string text, List<AttachmentItem> attachments)
+        {
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                var container = new StackPanel { Margin = new Thickness(0, 0, 0, 20), HorizontalAlignment = HorizontalAlignment.Right };
+
+                container.Children.Add(new TextBlock
+                {
+                    Text = "YOU",
+                    Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 150)),
+                    FontSize = 11,
+                    FontWeight = FontWeights.Bold,
+                    Margin = new Thickness(0, 0, 0, 6),
+                    HorizontalAlignment = HorizontalAlignment.Right
+                });
+
+                var bubbleContent = new StackPanel { HorizontalAlignment = HorizontalAlignment.Right };
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    var bubble = new Border { Padding = new Thickness(0, 5, 0, 10), MaxWidth = 380 };
+                    bubble.Child = BuildMarkdownPanel(text);
+                    bubbleContent.Children.Add(bubble);
+                }
+
+                var cards = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right, MaxWidth = 380 };
+                foreach (var attachment in attachments)
+                {
+                    cards.Children.Add(CreateAttachmentCard(attachment, false));
+                }
+                bubbleContent.Children.Add(cards);
+                container.Children.Add(bubbleContent);
+
+                if (_thinkingBubble != null) {
+                    _chatPanel.Children.Remove(_thinkingBubble);
+                    _chatPanel.Children.Add(container);
+                    _chatPanel.Children.Add(_thinkingBubble);
+                } else {
+                    _chatPanel.Children.Add(container);
+                }
+
+                container.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromSeconds(0.3)));
+                _chatScroll.ScrollToEnd();
+            }));
+        }
+
         private static void AppendCollapsibleBubble(string text, string title, string icon)
         {
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
@@ -3175,6 +4281,120 @@ namespace ADDGH
             }
         }
 
+        private static bool IsMarkdownHorizontalRule(string trimmed)
+        {
+            if (trimmed.Length < 3) return false;
+            char c = trimmed[0];
+            if (c != '-' && c != '*' && c != '_') return false;
+            for (int k = 0; k < trimmed.Length; k++)
+                if (trimmed[k] != c) return false;
+            return true;
+        }
+
+        private static string[] SplitMarkdownTableRow(string line)
+        {
+            string t = line.Trim();
+            if (!t.Contains("|")) return null;
+            string inner = t;
+            if (inner.StartsWith("|")) inner = inner.Substring(1);
+            if (inner.EndsWith("|")) inner = inner.Substring(0, inner.Length - 1);
+            string[] parts = inner.Split('|');
+            if (parts.Length < 2) return null;
+            return parts.Select(p => p.Trim()).ToArray();
+        }
+
+        private static bool IsMarkdownTableSeparatorRow(string[] cells)
+        {
+            if (cells == null || cells.Length == 0) return false;
+            foreach (string cell in cells) {
+                string s = cell.Replace(" ", "");
+                if (!Regex.IsMatch(s, @"^:?-{3,}:?$")) return false;
+            }
+            return true;
+        }
+
+        private static void AppendMarkdownTableGrid(StackPanel panel, List<string[]> rows)
+        {
+            int cols = rows.Max(r => r.Length);
+            for (int r = 0; r < rows.Count; r++)
+                while (rows[r].Length < cols) {
+                    var list = rows[r].ToList();
+                    list.Add("");
+                    rows[r] = list.ToArray();
+                }
+
+            var grid = new Grid {
+                Margin = new Thickness(0, 6, 0, 10),
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            for (int c = 0; c < cols; c++)
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            for (int r = 0; r < rows.Count; r++)
+                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            var borderBrush = new SolidColorBrush(Color.FromRgb(60, 60, 60));
+            var headerBg = new SolidColorBrush(Color.FromRgb(40, 40, 40));
+
+            for (int r = 0; r < rows.Count; r++) {
+                for (int c = 0; c < cols; c++) {
+                    string cellText = rows[r][c];
+                    var tb = new TextBlock {
+                        TextWrapping = TextWrapping.Wrap,
+                        FontSize = 14,
+                        LineHeight = 22,
+                        Foreground = new SolidColorBrush(Color.FromRgb(235, 235, 235)),
+                        FontWeight = r == 0 ? FontWeights.SemiBold : FontWeights.Normal
+                    };
+                    ParseMarkdown(tb, cellText);
+                    var bd = new Border {
+                        BorderBrush = borderBrush,
+                        BorderThickness = new Thickness(1),
+                        Padding = new Thickness(8, 6, 8, 6),
+                        Background = r == 0 ? headerBg : Brushes.Transparent
+                    };
+                    bd.Child = tb;
+                    Grid.SetRow(bd, r);
+                    Grid.SetColumn(bd, c);
+                    grid.Children.Add(bd);
+                }
+            }
+
+            panel.Children.Add(grid);
+        }
+
+        private static bool TryConsumeMarkdownTable(string[] lines, ref int i, StackPanel panel)
+        {
+            int start = i;
+            if (start >= lines.Length) return false;
+            string firstTrim = lines[start].Trim();
+            if (string.IsNullOrEmpty(firstTrim) || firstTrim.StartsWith("```") || !firstTrim.Contains("|")) return false;
+
+            var rows = new List<string[]>();
+            int j = start;
+            while (j < lines.Length) {
+                string raw = lines[j];
+                string t = raw.Trim();
+                if (string.IsNullOrWhiteSpace(t)) break;
+                if (t.StartsWith("```")) break;
+                if (!t.Contains("|")) break;
+                string[] cells = SplitMarkdownTableRow(lines[j]);
+                if (cells == null || cells.Length < 2) break;
+                rows.Add(cells);
+                j++;
+            }
+
+            if (rows.Count < 2 || !IsMarkdownTableSeparatorRow(rows[1])) return false;
+
+            var bodyRows = new List<string[]>();
+            bodyRows.Add(rows[0]);
+            for (int k = 2; k < rows.Count; k++)
+                bodyRows.Add(rows[k]);
+
+            AppendMarkdownTableGrid(panel, bodyRows);
+            i = j - 1;
+            return true;
+        }
+
         private static StackPanel BuildMarkdownPanel(string text)
         {
             var panel = new StackPanel { Orientation = Orientation.Vertical };
@@ -3228,8 +4448,8 @@ namespace ADDGH
                 });
             };
 
-            foreach (string rawLine in lines) {
-                string line = rawLine;
+            for (int lineIndex = 0; lineIndex < lines.Length; lineIndex++) {
+                string line = lines[lineIndex];
                 if (line.TrimStart().StartsWith("```")) {
                     if (!inCode) {
                         inCode = true;
@@ -3256,6 +4476,21 @@ namespace ADDGH
                 };
 
                 string trimmed = line.Trim();
+                if (IsMarkdownHorizontalRule(trimmed)) {
+                    panel.Children.Add(new Border {
+                        Height = 1,
+                        Background = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
+                        Margin = new Thickness(0, 10, 0, 10)
+                    });
+                    continue;
+                }
+
+                int idxForTable = lineIndex;
+                if (TryConsumeMarkdownTable(lines, ref idxForTable, panel)) {
+                    lineIndex = idxForTable;
+                    continue;
+                }
+
                 if (string.IsNullOrWhiteSpace(trimmed)) {
                     panel.Children.Add(new Border { Height = 6, Opacity = 0 });
                     continue;
@@ -3308,117 +4543,6 @@ namespace ADDGH
             return panel;
         }
 
-        private static void AppendReferenceOptionsBubble(System.Collections.Generic.List<string> options)
-        {
-            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
-                var container = new StackPanel { Margin = new Thickness(0, 0, 0, 20), HorizontalAlignment = HorizontalAlignment.Left };
-                
-                var header = new TextBlock { 
-                    Text = "选择参考描述", 
-                    Foreground = new SolidColorBrush(Color.FromRgb(170, 170, 170)),
-                    FontSize = 11,
-                    FontWeight = FontWeights.SemiBold,
-                    Margin = new Thickness(2, 0, 0, 8)
-                };
-                container.Children.Add(header);
-
-                var optionsPanel = new StackPanel { Orientation = Orientation.Vertical };
-                
-                foreach (var opt in options) {
-                    var btn = new Button {
-                        Content = opt,
-                        Background = Brushes.Transparent,
-                        Foreground = new SolidColorBrush(Color.FromRgb(235, 235, 235)),
-                        BorderThickness = new Thickness(1),
-                        BorderBrush = new SolidColorBrush(Color.FromRgb(54, 54, 54)),
-                        Padding = new Thickness(12, 10, 12, 10),
-                        Margin = new Thickness(0, 0, 0, 7),
-                        Cursor = Cursors.Hand,
-                        HorizontalContentAlignment = HorizontalAlignment.Left,
-                        FontSize = 13
-                    };
-                    btn.Template = (ControlTemplate)System.Windows.Markup.XamlReader.Parse(@"
-                        <ControlTemplate TargetType=""Button"" xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation"">
-                            <Border x:Name=""Bd"" Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""9"">
-                                <ContentPresenter HorizontalAlignment=""{TemplateBinding HorizontalContentAlignment}"" VerticalAlignment=""Center"" Margin=""{TemplateBinding Padding}""/>
-                            </Border>
-                            <ControlTemplate.Triggers>
-                                <Trigger Property=""IsMouseOver"" Value=""True"">
-                                    <Setter TargetName=""Bd"" Property=""Background"" Value=""#242424""/>
-                                    <Setter TargetName=""Bd"" Property=""BorderBrush"" Value=""#666666""/>
-                                </Trigger>
-                            </ControlTemplate.Triggers>
-                        </ControlTemplate>");
-                    btn.Click += (s, e) => {
-                        SaveReference(opt);
-                        AppendBubble($"已选择: {opt}", true);
-                        container.IsEnabled = false;
-                    };
-                    optionsPanel.Children.Add(btn);
-                }
-
-                var customPanel = new Grid { Margin = new Thickness(0, 6, 0, 0) };
-                customPanel.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                customPanel.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                
-                var txtCustom = new TextBox {
-                    Background = new SolidColorBrush(Color.FromRgb(22, 22, 22)),
-                    Foreground = new SolidColorBrush(Color.FromRgb(235, 235, 235)),
-                    BorderThickness = new Thickness(1),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(54, 54, 54)),
-                    Padding = new Thickness(10, 8, 10, 8),
-                    VerticalContentAlignment = VerticalAlignment.Center,
-                    CaretBrush = Brushes.White
-                };
-                Grid.SetColumn(txtCustom, 0);
-                customPanel.Children.Add(txtCustom);
-
-                var btnCustom = new Button {
-                    Content = "确定",
-                    Background = new SolidColorBrush(Color.FromRgb(230, 230, 230)),
-                    Foreground = Brushes.Black,
-                    BorderThickness = new Thickness(0),
-                    Padding = new Thickness(16, 0, 16, 0),
-                    Margin = new Thickness(5, 0, 0, 0),
-                    Cursor = Cursors.Hand,
-                    FontWeight = FontWeights.SemiBold
-                };
-                Grid.SetColumn(btnCustom, 1);
-                btnCustom.Click += (s, e) => {
-                    string customText = txtCustom.Text.Trim();
-                    if (!string.IsNullOrEmpty(customText)) {
-                        SaveReference(customText);
-                        AppendBubble($"已选择: {customText}", true);
-                        container.IsEnabled = false;
-                    }
-                };
-                customPanel.Children.Add(btnCustom);
-                
-                optionsPanel.Children.Add(customPanel);
-
-                var bubble = new Border {
-                    Background = new SolidColorBrush(Color.FromRgb(18, 18, 18)),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(42, 42, 42)),
-                    BorderThickness = new Thickness(1),
-                    CornerRadius = new CornerRadius(12),
-                    Padding = new Thickness(14),
-                    MaxWidth = 380,
-                    Child = optionsPanel
-                };
-                
-                container.Children.Add(bubble);
-
-                if (_thinkingBubble != null) {
-                    _chatPanel.Children.Remove(_thinkingBubble);
-                    _chatPanel.Children.Add(container);
-                    _chatPanel.Children.Add(_thinkingBubble);
-                } else {
-                    _chatPanel.Children.Add(container);
-                }
-                _chatScroll.ScrollToEnd();
-            }));
-        }
-
         private static void SaveReference(string description)
         {
             string canvasJson = "";
@@ -3428,12 +4552,16 @@ namespace ADDGH
 
             System.Threading.Tasks.Task.Run(() => {
                 try {
-                    if (string.IsNullOrEmpty(canvasJson)) {
-                        AppendSystemMessage("保存参考失败: 无法获取画布内容", true);
+                    if (string.IsNullOrWhiteSpace(canvasJson) || canvasJson.StartsWith("Error:", StringComparison.OrdinalIgnoreCase)) {
+                        AppendSystemMessage(
+                            "保存参考失败: 无法读取有效画布 JSON（无文档、画布为空或返回错误）。请打开 Grasshopper 文档并确认有电池后再试。\n" +
+                            (string.IsNullOrWhiteSpace(canvasJson) ? "" : canvasJson),
+                            true);
                         return;
                     }
-                    
+
                     string refPath = GetReferenceDirectory();
+                    string indexPath = GetReferenceIndexPath();
                     if (!System.IO.Directory.Exists(refPath)) System.IO.Directory.CreateDirectory(refPath);
                     string timestamp = DateTime.Now.ToString("yyyyMMddHHmmss");
                     string fileName = "ref_" + timestamp + ".json";
@@ -3441,25 +4569,67 @@ namespace ADDGH
                     System.IO.File.WriteAllText(filePath, canvasJson, System.Text.Encoding.UTF8);
 
                     string result = UpdateReferenceIndexSkill(description, fileName);
-                    
-                    AppendSystemMessage($"参考已保存：{fileName}\n{result}");
+
+                    AppendSystemMessage($"参考已保存：{fileName}\n{result}\nJSON：{filePath}\n索引：{indexPath}");
                 } catch (Exception ex) {
                     AppendSystemMessage($"保存参考失败: {ex.Message}", true);
                 }
             });
         }
 
+        /// <summary> 仓库根（含 skills/、reference/）。插件在 Rhino 中加载时 BaseDirectory 常在 bin 下，需向上查找；也可设环境变量 ADDGH_PROJECT_ROOT。 </summary>
         private static string GetProjectRootDirectory()
         {
-            string dir = AppDomain.CurrentDomain.BaseDirectory;
-            for (int i = 0; i < 8 && !string.IsNullOrEmpty(dir); i++)
+            string env = Environment.GetEnvironmentVariable("ADDGH_PROJECT_ROOT");
+            if (!string.IsNullOrWhiteSpace(env))
             {
-                if (System.IO.File.Exists(System.IO.Path.Combine(dir, "ADDGH.csproj")))
-                {
-                    return System.IO.Directory.GetParent(dir)?.FullName ?? dir;
-                }
-                dir = System.IO.Directory.GetParent(dir)?.FullName;
+                string full = System.IO.Path.GetFullPath(env.Trim());
+                if (System.IO.Directory.Exists(full)) return full;
             }
+
+            bool HasRepoSkills(string d) =>
+                !string.IsNullOrEmpty(d)
+                && System.IO.Directory.Exists(System.IO.Path.Combine(d, "skills"))
+                && System.IO.File.Exists(System.IO.Path.Combine(d, "skills", "reference_index.md"));
+
+            bool HasAddGhSubfolder(string d) =>
+                !string.IsNullOrEmpty(d)
+                && System.IO.File.Exists(System.IO.Path.Combine(d, "ADDGH", "ADDGH.csproj"));
+
+            bool HasAddGhProject(string d) =>
+                !string.IsNullOrEmpty(d)
+                && System.IO.File.Exists(System.IO.Path.Combine(d, "ADDGH.csproj"));
+
+            string TryWalk(string start, int maxSteps)
+            {
+                string dir = start;
+                for (int i = 0; i < maxSteps && !string.IsNullOrEmpty(dir); i++)
+                {
+                    if (HasAddGhSubfolder(dir)) return dir;
+                    if (HasRepoSkills(dir)) return dir;
+                    if (HasAddGhProject(dir))
+                        return System.IO.Directory.GetParent(dir)?.FullName ?? dir;
+                    dir = System.IO.Directory.GetParent(dir)?.FullName;
+                }
+                return null;
+            }
+
+            string found = TryWalk(AppDomain.CurrentDomain.BaseDirectory, 22);
+            if (!string.IsNullOrEmpty(found)) return found;
+
+            found = TryWalk(Environment.CurrentDirectory, 18);
+            if (!string.IsNullOrEmpty(found)) return found;
+
+            try
+            {
+                string asm = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                if (!string.IsNullOrEmpty(asm))
+                {
+                    found = TryWalk(System.IO.Path.GetDirectoryName(asm), 22);
+                    if (!string.IsNullOrEmpty(found)) return found;
+                }
+            }
+            catch { }
 
             return Environment.CurrentDirectory;
         }
@@ -3485,13 +4655,13 @@ namespace ADDGH
         {
             return "---\n" +
                 "name: reference-index\n" +
-                "description: 在处理建模、修改画布、生成 GH 逻辑或判断可复用方案时应主动检查；若条目描述与当前任务相关，调用 read_reference_json 读取对应 JSON。\n" +
+                "description: 在完成初步 GH 建模逻辑规划之后查阅；仅当条目与已定方案相关时，再调用 read_reference_json 读取 JSON 对照实现。\n" +
                 "---\n\n" +
                 "# Reference Index\n\n" +
                 "使用流程：\n" +
-                "1. 在开始建模、修改画布或设计 GH 逻辑前，主动浏览下面的参考条目。\n" +
-                "2. 如果某个描述与当前任务相关，调用 `read_reference_json`，传入对应 `file_name`。\n" +
-                "3. 读取 JSON 后，基于其中的电池、连线和建模逻辑复用或改造方案。\n\n" +
+                "1. 先规划：用简短步骤说明本任务的 GH 逻辑（数据流、关键电池、是否需非破坏性实验方案等）。\n" +
+                "2. 再浏览：查阅下列参考条目，看是否与**已定方案**高度相关。\n" +
+                "3. 后读取：若相关，调用 `read_reference_json` 并传入对应 `file_name`，用 JSON 对齐细节、补充或改造实现。\n\n" +
                 "## References\n";
         }
 
@@ -3569,22 +4739,30 @@ namespace ADDGH
             EnsureReferenceIndexSkill();
             string indexPath = GetReferenceIndexPath();
             string safeFileName = System.IO.Path.GetFileName(jsonFileName ?? "");
+            if (string.IsNullOrWhiteSpace(safeFileName))
+                return "Error: 参考文件名为空，未写入索引。";
 
             string content = System.IO.File.Exists(indexPath)
                 ? System.IO.File.ReadAllText(indexPath, Encoding.UTF8)
                 : GetReferenceIndexTemplate();
 
-            if (!content.Contains($"reference/{safeFileName}"))
+            if (content.IndexOf("reference/" + safeFileName, StringComparison.OrdinalIgnoreCase) >= 0
+                || content.IndexOf("file_name=\"" + safeFileName + "\"", StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                if (!content.Contains("## References")) content = GetReferenceIndexTemplate() + content;
-                if (!content.EndsWith("\n")) content += "\n";
-                content += FormatReferenceEntry(description, safeFileName);
-                System.IO.File.WriteAllText(indexPath, content, Encoding.UTF8);
+                Rhino.RhinoApp.InvokeOnUiThread((Action)(() => { UpdateSkillLibraryUI(); }));
+                return "索引中已包含该文件，未重复追加。";
             }
 
-            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
-                UpdateSkillLibraryUI();
-            }));
+            if (content.IndexOf("## References", StringComparison.Ordinal) < 0)
+            {
+                if (!content.EndsWith("\n")) content += "\n";
+                content += "\n## References\n";
+            }
+            if (!content.EndsWith("\n")) content += "\n";
+            content += FormatReferenceEntry(description, safeFileName);
+            System.IO.File.WriteAllText(indexPath, content, Encoding.UTF8);
+
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => { UpdateSkillLibraryUI(); }));
 
             return "已更新统一参考索引 skills/reference_index.md。";
         }
@@ -3773,7 +4951,7 @@ namespace ADDGH
             useButton.Click += (s, e) => {
                 if (_txtInput != null)
                 {
-                    _txtInput.Text = $"请参考 reference_index.md 中的 {entry.FileName}，读取对应参考 JSON 后复用建模逻辑。";
+                    _txtInput.Text = $"请先说明本任务的 GH 建模规划（步骤与关键电池）。方案确定后查阅 skills/reference_index.md；若与条目「{entry.FileName}」相关，再调用 read_reference_json 读取该 JSON 并对照实现。";
                     _txtInput.Focus();
                 }
                 _referenceLibraryWindow?.Close();
@@ -3861,12 +5039,12 @@ namespace ADDGH
             _messages.Add(new { role = "user", content = actualPrompt });
             AppendBubble(displayText, true);
 
-            _currentBase64Image = null;
-            _txtImageAttached.Visibility = Visibility.Collapsed;
-            _btnClearImage.Visibility = Visibility.Collapsed;
+            _pendingAttachments.Clear();
+            RefreshAttachmentPreview();
+            if (_btnClearImage != null) _btnClearImage.Visibility = Visibility.Collapsed;
 
             _cts = new System.Threading.CancellationTokenSource();
-            string apiKey = Grasshopper.Instances.Settings.GetValue("AI_API_Key", "");
+            string apiKey = GetProviderRuntimeSettings().ApiKey;
 
             try {
                 ShowThinkingAnimation();
@@ -3882,7 +5060,7 @@ namespace ADDGH
             }
         }
 
-private static void AppendColoredStatsMessage(int addComp, int delComp, int addConn, int delConn)
+        private static void AppendColoredStatsMessage(int addComp, int delComp, int addConn, int delConn)
         {
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
                 var card = new Border {

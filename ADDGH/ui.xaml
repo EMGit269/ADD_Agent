@@ -128,9 +128,9 @@
                                 </StackPanel>
                             </Grid>
                         </Border>
-                        <TextBox Grid.Row="1" x:Name="TxtCodeView" Background="Transparent" Foreground="#888" BorderThickness="0" 
-                                 FontSize="12" FontFamily="Consolas, Monaco, 'Courier New'" Padding="20,0,20,20" 
-                                 IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"/>
+                        <RichTextBox Grid.Row="1" x:Name="RichCodeView" Background="Transparent" Foreground="#B8B8B8" BorderThickness="0"
+                                 FontSize="12" FontFamily="Consolas, Monaco, Courier New" IsReadOnly="True" IsDocumentEnabled="True"
+                                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" CaretBrush="#888"/>
                     </Grid>
                 </Border>
 
