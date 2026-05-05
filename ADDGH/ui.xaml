@@ -303,7 +303,7 @@
                     <TextBlock Text="配置 API" Foreground="White" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,15"/>
                     
                     <TextBlock Text="提供商 (Provider)" Foreground="#A0A0A0" FontSize="12" Margin="0,0,0,5"/>
-                    <ComboBox x:Name="ComboProvider" Height="32" Margin="0,0,0,10" Background="#2A2A2A" Foreground="Black">
+                    <ComboBox x:Name="ComboProvider" Height="32" Margin="0,0,0,10" Background="#2A2A2A" Foreground="#EDEDED">
                         <ComboBoxItem Content="DeepSeek"/>
                         <ComboBoxItem Content="Qwen (通义千问)"/>
                         <ComboBoxItem Content="Seed (商汤)"/>

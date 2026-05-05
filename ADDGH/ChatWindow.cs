@@ -62,18 +62,28 @@ namespace ADDGH
         private static TextBlock _txtWarning;
         private static Button _btnCloseWarning;
 
-        private const string SYSTEM_PROMPT = @"你是 GH 参数化专家。请遵循专业表达与风险管控规范：
-1. 严禁技术术语：禁止说'沙箱'、'is_sandbox'、'工具'等。称实验区为'非破坏性实验方案'或'逻辑草案'。
-2. 风险等级判定（决定是否开启 is_sandbox）：
+        private const string SYSTEM_PROMPT = @"你是 GH 参数化专家。
+
+【建模逻辑】
+1. 先对齐用户需求与约束，再落到具体步骤：数据流、关键电池、风险点；再动手改画布。
+2. 风险等级（决定是否开启 is_sandbox，对用户说明时用下文用语，勿直说参数名）：
    - 🔴 高风险（必开）：删除 8 个以上电池、重构主干逻辑、连接可能引发长时间计算的组件（如复杂网格/物理模拟）。
    - 🟡 中风险（自主判定）：添加 5-8 个电池的功能分支、修改密集型交叉连线、替换现有逻辑块。
    - 🟢 低风险（直接操作）：修改 Slider/Panel 数值、添加单个辅助电池、电池对齐或整理分组。
-3. 命名规范：数值条 (Number Slider) 必须设 label。普通电池严禁改 label。
-4. 最终总结请使用结构化 Markdown：短标题、列表、重点加粗；涉及代码、JSON、表达式或关键参数时使用 ``` 代码块，不要把大段技术内容挤在普通段落中。
-5. 参考画布（reference）使用顺序：先根据用户需求完成建模思路与 GH 逻辑规划（步骤、数据流、关键电池与风险点），再查阅 skills/reference_index.md；仅当某条条目与**已确定的方案**明显相关时，才调用 read_reference_json 读取对应 JSON，用于对照细节、补充实现或局部复用，勿用「先读参考再空想」代替前期规划。
-6. 每次调用任意 function 工具时，必须在参数中填写 **summary**（一句中文说明本次在做什么，勿写工具函数名或 API）；需要时可填 **summary_detail**（卡片右侧次要短语，如「批量连线」「检索库」）。**例外**：`show_reference_options` 仅需 `options`（5 个字符串的数组），可不填 summary。
-7. **脚本与目录类能力（克制）**：仅当任务**明确需要**在画布上新增或修改「脚本/表达式类电池」的代码与公式，或 **add 已失败且确认** 存在同名类型必须用 `component_guid` 区分时，才使用 `search_gh_component_catalog`、以及向脚本类实例写入代码/公式的 `set_gh_component_value`。**简单几何、常规连线、改 Slider/Panel、用标准电池名即可完成的建模**：只用 `get_gh_components`、`search_component_library`、`add_gh_component` / `connect_gh_components` / `create_component_graph` 等即可；**不要**把搜 C#/Script/Python、查 JSON 目录当作习惯步骤，也不要为「保险」而先 catalog 再放置普通电池。
-优先批量处理，直接行动。";
+3. 命名：Number Slider 必须设 label；普通电池严禁改 label。
+4. 最终回复用结构化 Markdown（短标题、列表、重点加粗）；代码/JSON/表达式/关键参数放在 ``` 代码块中，勿把大段技术内容堆在普通段落里。
+5. 参考画布（reference）：先完成建模思路与 GH 逻辑规划，再查阅 skills/reference_index.md；仅当条目与**已确定方案**明显相关时才调用 read_reference_json 读 JSON 做对照或局部复用，勿「先读参考再空想」。
+
+【工具调用效率】
+1. 需要当前拓扑、连线或实例 id 时再 get_gh_components，避免无目的重复拉全图。
+2. 新增一整块逻辑时，**优先**用 create_component_graph **一次**提交 components 与 connections，把该块内的放置与连线同时做完；尽量少用多轮「少量 add_gh_component ↔ 少量 connect_gh_components」交替，除非必须等上一轮返回的 id/端口才能定案。
+3. 单独 add_gh_component 仅限少数必要情形（如占位定位、必须先看清画布再决定下一步）；能并入同一张局部图时仍应合并为一次 create_component_graph。
+4. **脚本与目录（克制）**：仅当任务明确要新增/改脚本或表达式类电池的代码或公式，或 add 已失败且确认需 component_guid 区分同名类型时，才用 search_gh_component_catalog、set_gh_component_value。简单几何、常规连线、改 Slider/Panel、标准电池名能完成的：**不要**为保险先搜 C#/Script/Python 目录，也不要先 catalog 再摆普通电池；用 get_gh_components、search_component_library、create_component_graph（优先）或必要的 add_gh_component / connect_gh_components 即可。
+5. 每次调用 function 须在参数中填 **summary**（一句中文说明本次在做什么，勿写函数名或 API）；可选 **summary_detail**（卡片右侧短语）。**例外**：show_reference_options 仅需 options（5 个字符串数组），可不填 summary。
+6. 优先批量、直接行动。
+
+【对用户表达】
+严禁对用户说「沙箱」「is_sandbox」「工具」等；实验区改称「非破坏性实验方案」或「逻辑草案」。";
 
         private static List<object> _messages = new List<object>();
         private static string _cachedCanvasState = null;  // 画布状态缓存
@@ -305,7 +315,7 @@ namespace ADDGH
                                     <ControlTemplate TargetType=""ToggleButton"">
                                         <Border Background=""#2A2A2A"" BorderBrush=""#3A3A3A"" BorderThickness=""1"" CornerRadius=""8"">
                                             <Grid>
-                                                <ContentPresenter Margin=""10,0,30,0"" VerticalAlignment=""Center"" HorizontalAlignment=""Left"" Content=""{Binding Path=SelectionBoxItem, RelativeSource={RelativeSource AncestorType=ComboBox}}""/>
+                                                <TextBlock Margin=""10,0,30,0"" VerticalAlignment=""Center"" HorizontalAlignment=""Left"" Foreground=""#EDEDED"" TextTrimming=""CharacterEllipsis"" Text=""{Binding Path=SelectedItem.Content, RelativeSource={RelativeSource AncestorType=ComboBox}}""/>
                                                 <TextBlock Text=""▼"" Foreground=""#888"" FontSize=""9"" HorizontalAlignment=""Right"" VerticalAlignment=""Center"" Margin=""0,0,10,0""/>
                                             </Grid>
                                         </Border>
@@ -332,7 +342,7 @@ namespace ADDGH
                 <Setter.Value>
                     <ControlTemplate TargetType=""ComboBoxItem"">
                         <Border x:Name=""Bd"" Background=""{TemplateBinding Background}"" CornerRadius=""6"" Padding=""{TemplateBinding Padding}"">
-                            <ContentPresenter/>
+                            <ContentPresenter TextElement.Foreground=""{TemplateBinding Foreground}""/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property=""IsHighlighted"" Value=""True"">
@@ -1462,6 +1472,27 @@ namespace ADDGH
                 },
                 new ModelProviderConfig
                 {
+                    ProviderId = "gemini-flash",
+                    DisplayName = "Gemini 3 Flash",
+                    DefaultBaseUrl = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                    DefaultModel = "gemini-3-flash-preview"
+                },
+                new ModelProviderConfig
+                {
+                    ProviderId = "gemini-pro",
+                    DisplayName = "Gemini 3.1 Pro",
+                    DefaultBaseUrl = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                    DefaultModel = "gemini-3.1-pro-preview"
+                },
+                new ModelProviderConfig
+                {
+                    ProviderId = "openai",
+                    DisplayName = "OpenAI / GPT 5.5",
+                    DefaultBaseUrl = "https://api.openai.com/v1/chat/completions",
+                    DefaultModel = "gpt-5.5-medium"
+                },
+                new ModelProviderConfig
+                {
                     ProviderId = "custom",
                     DisplayName = "Custom",
                     DefaultBaseUrl = "https://api.deepseek.com/chat/completions",
@@ -2243,7 +2274,7 @@ namespace ADDGH
                             type = "function",
                             function = new {
                                 name = "add_gh_component",
-                                description = "在画布上创建一个新的 Grasshopper 电池。必须提供 name 或 component_guid 之一。默认只用 **name**（与组件库标准名一致即可）。**不要**为普通电池先查 catalog；仅当已确认同名歧义或必须放置脚本/表达式类且 name 无法区分时，再用 search_gh_component_catalog 的 **component_guid**。Slider/Panel 必须提供 label。",
+                                description = "在画布上创建**单个** Grasshopper 电池。适合只落一颗、占位/定位，或必须先看清画布反馈再决定下一步；**多颗电池且要带连线请优先用 create_component_graph 一次完成**。必须提供 name 或 component_guid 之一。默认只用 **name**。**不要**为普通电池先查 catalog；仅当已确认同名歧义或必须放置脚本/表达式类且 name 无法区分时，再用 search_gh_component_catalog 的 **component_guid**。Slider/Panel 必须提供 label。",
                                 parameters = new {
                                     type = "object",
                                     properties = new {
@@ -2263,7 +2294,7 @@ namespace ADDGH
                             type = "function",
                             function = new {
                                 name = "connect_gh_components",
-                                description = "在两个电池的端口之间建立连接。",
+                                description = "在两个**已有**电池的端口之间建立一条连接；常用于补连、改线或接入已有实例 id。若在同一次任务里**新建多颗电池及它们之间的多条连线**，优先在同一次 create_component_graph 的 connections 里完成，避免多轮少量 add 再少量 connect。",
                                 parameters = new {
                                     type = "object",
                                     properties = new {
@@ -2338,7 +2369,7 @@ namespace ADDGH
                             type = "function",
                             function = new {
                                 name = "create_component_graph",
-                                description = "【推荐】一次性批量创建多个电池并建立它们之间的连线，适合构建复杂的几何逻辑。每个 component 须提供 alias_id、x、y，以及 **name**（常用）；**不要**默认填 component_guid。仅同名或脚本类 name 无法区分时才用 guid。示例：{\"components\":[{\"alias_id\":\"pt1\",\"name\":\"Construct Point\",\"x\":0,\"y\":0},{\"alias_id\":\"crv1\",\"name\":\"Circle CNR\",\"x\":200,\"y\":0,\"value\":\"5\"}],\"connections\":[{\"from_alias\":\"pt1\",\"from_index\":0,\"to_alias\":\"crv1\",\"to_index\":0}]}",
+                                description = "【推荐】**新建一整块逻辑时优先**：一次性提交多个电池与它们之间的连线，优于多轮「少量 add_gh_component ↔ 少量 connect_gh_components」。适合构建复杂或局部的几何逻辑。每个 component 须提供 alias_id、x、y，以及 **name**（常用）；**不要**默认填 component_guid。仅同名或脚本类 name 无法区分时才用 guid。示例：{\"components\":[{\"alias_id\":\"pt1\",\"name\":\"Construct Point\",\"x\":0,\"y\":0},{\"alias_id\":\"crv1\",\"name\":\"Circle CNR\",\"x\":200,\"y\":0,\"value\":\"5\"}],\"connections\":[{\"from_alias\":\"pt1\",\"from_index\":0,\"to_alias\":\"crv1\",\"to_index\":0}]}",
                                 parameters = new {
                                     type = "object",
                                     properties = new {
