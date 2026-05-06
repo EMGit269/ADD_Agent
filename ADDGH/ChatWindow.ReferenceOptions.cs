@@ -51,7 +51,7 @@ namespace ADDGH
             {
                 if (!IsCanvasSuitableForReferenceSnapshot(out string why))
                 {
-                    AppendSystemMessage(why, true);
+                    AppendQuietDiagnosticCard("创建参考", why);
                     return false;
                 }
                 return true;
@@ -112,7 +112,7 @@ namespace ADDGH
             {
                 if (!IsCanvasSuitableForReferenceSnapshot(out string canvasWhy))
                 {
-                    AppendSystemMessage(canvasWhy, true);
+                    AppendQuietDiagnosticCard("创建参考", canvasWhy);
                     return ("Error: 当前不满足创建参考条件：" + canvasWhy, false);
                 }
 
@@ -127,10 +127,10 @@ namespace ADDGH
                     InsertChatElementBeforeThinking(BuildPickerShell(labels))));
 
                 string hint = argsJson != null && argsJson.Length > 240 ? argsJson.Substring(0, 240) + "…" : (argsJson ?? "");
-                AppendSystemMessage(
-                    "未能展示选项：options 须为长度 5 的非空字符串数组。已回传错误供模型重试。\n" +
-                    (string.IsNullOrEmpty(hint) ? "" : "参数片段：\n" + hint),
-                    true);
+                string detail = "未能展示选项：options 须为长度 5 的非空字符串数组。已回传错误供模型重试。";
+                if (!string.IsNullOrEmpty(hint))
+                    detail += "\n参数片段：\n" + hint;
+                AppendQuietDiagnosticCard("创建参考", detail);
 
                 return (ToolResultMissingOptions, false);
             }
@@ -178,7 +178,10 @@ namespace ADDGH
                                 list.Add(x.ToString());
                             return list;
                         }
-                        catch { /* fall through */ }
+                        catch (Exception ex)
+                        {
+                            AddGhLog.Debug("ParseOptionsToken JArray.Parse fallback: " + ex.Message);
+                        }
                     }
                     if (!string.IsNullOrEmpty(s) && (s.Contains("\n") || s.Contains("\r")))
                     {

@@ -16,6 +16,7 @@ namespace ADDGH
         private static readonly SolidColorBrush JsonBrushString = FreezeBrush(206, 145, 120);
         private static readonly SolidColorBrush JsonBrushNumber = FreezeBrush(181, 206, 168);
         private static readonly SolidColorBrush JsonBrushKeyword = FreezeBrush(86, 156, 214);
+        private static readonly SolidColorBrush JsonBrushLineNum = FreezeBrush(90, 90, 90);
         private static readonly SolidColorBrush PlainCommentBrush = FreezeBrush(106, 153, 85);
 
         private static SolidColorBrush FreezeBrush(byte r, byte g, byte b)
@@ -23,6 +24,18 @@ namespace ADDGH
             var br = new SolidColorBrush(Color.FromRgb(r, g, b));
             if (br.CanFreeze) br.Freeze();
             return br;
+        }
+
+        private static int ComputeLineNumberGutterWidth(int lineCount)
+        {
+            lineCount = Math.Max(1, lineCount);
+            return Math.Max(2, (int)Math.Floor(Math.Log10(lineCount)) + 1);
+        }
+
+        private static void AppendJsonLineNumberPrefix(InlineCollection inlines, int lineNumber1Based, int gutterChars)
+        {
+            string s = lineNumber1Based.ToString().PadLeft(gutterChars);
+            inlines.Add(new Run(s + "  ") { Foreground = JsonBrushLineNum });
         }
 
         /// <param name="asPlainComment">整段按注释色显示（如空画布提示）。</param>
@@ -63,15 +76,16 @@ namespace ADDGH
             if (rtb?.Document == null) return;
             double w = rtb.ViewportWidth;
             if (w <= 0) w = rtb.ActualWidth;
-            if (w > 32)
-                rtb.Document.PageWidth = w - 4;
+            if (w <= 32) return;
+
+            double hPad = rtb.Padding.Left + rtb.Padding.Right + 24;
+            rtb.Document.PageWidth = Math.Max(48, w - hPad);
         }
 
         private static FlowDocument CreateCodeFlowDocument()
         {
-            return new FlowDocument
-            {
-                PagePadding = new Thickness(16, 14, 20, 20),
+            return new FlowDocument {
+                PagePadding = new Thickness(12, 12, 20, 16),
                 Background = Brushes.Transparent,
                 FontFamily = new FontFamily("Consolas, Courier New"),
                 FontSize = 12,
@@ -82,8 +96,21 @@ namespace ADDGH
         private static FlowDocument BuildCommentOnlyDocument(string text)
         {
             var doc = CreateCodeFlowDocument();
+            string useText = text ?? "";
+            string[] lines = useText.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None);
+            if (lines.Length == 0)
+                lines = new[] { "" };
+
             var p = new Paragraph { Margin = new Thickness(0) };
-            p.Inlines.Add(new Run(text) { Foreground = PlainCommentBrush });
+            int gw = ComputeLineNumberGutterWidth(lines.Length);
+            for (int li = 0; li < lines.Length; li++)
+            {
+                AppendJsonLineNumberPrefix(p.Inlines, li + 1, gw);
+                p.Inlines.Add(new Run(lines[li]) { Foreground = PlainCommentBrush });
+                if (li < lines.Length - 1)
+                    p.Inlines.Add(new Run(Environment.NewLine) { Foreground = PlainCommentBrush });
+            }
+
             doc.Blocks.Add(p);
             return doc;
         }
@@ -92,7 +119,26 @@ namespace ADDGH
         {
             var doc = CreateCodeFlowDocument();
             var p = new Paragraph { Margin = new Thickness(0) };
-            AppendJsonColoredInlines(p.Inlines, text);
+
+            if (string.IsNullOrEmpty(text))
+            {
+                AppendJsonLineNumberPrefix(p.Inlines, 1, ComputeLineNumberGutterWidth(1));
+                p.Inlines.Add(new Run("") { Foreground = JsonBrushDefault });
+                doc.Blocks.Add(p);
+                return doc;
+            }
+
+            string[] lines = text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+            int gw = ComputeLineNumberGutterWidth(lines.Length);
+
+            for (int li = 0; li < lines.Length; li++)
+            {
+                AppendJsonLineNumberPrefix(p.Inlines, li + 1, gw);
+                AppendJsonColoredInlines(p.Inlines, lines[li]);
+                if (li < lines.Length - 1)
+                    p.Inlines.Add(new Run(Environment.NewLine) { Foreground = JsonBrushDefault });
+            }
+
             doc.Blocks.Add(p);
             return doc;
         }
@@ -102,22 +148,31 @@ namespace ADDGH
             var doc = CreateCodeFlowDocument();
             var p = new Paragraph { Margin = new Thickness(0) };
             p.Foreground = JsonBrushDefault;
+
             if (string.IsNullOrEmpty(text))
             {
-                p.Inlines.Add(new Run(""));
+                AppendJsonLineNumberPrefix(p.Inlines, 1, ComputeLineNumberGutterWidth(1));
+                p.Inlines.Add(new Run("") { Foreground = JsonBrushDefault });
                 doc.Blocks.Add(p);
                 return doc;
             }
 
             var lines = text.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None);
+            int gw = ComputeLineNumberGutterWidth(lines.Length);
+
             for (int li = 0; li < lines.Length; li++)
             {
                 string line = lines[li];
                 string trimmed = line.TrimStart();
                 bool isComment = trimmed.StartsWith("//", StringComparison.Ordinal);
-                var run = new Run(line + (li < lines.Length - 1 ? Environment.NewLine : ""));
-                if (isComment) run.Foreground = PlainCommentBrush;
+
+                AppendJsonLineNumberPrefix(p.Inlines, li + 1, gw);
+
+                var run = new Run(line);
+                run.Foreground = isComment ? PlainCommentBrush : JsonBrushDefault;
                 p.Inlines.Add(run);
+                if (li < lines.Length - 1)
+                    p.Inlines.Add(new Run(Environment.NewLine) { Foreground = JsonBrushDefault });
             }
 
             doc.Blocks.Add(p);
