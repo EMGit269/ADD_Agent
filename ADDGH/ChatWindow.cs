@@ -13,6 +13,7 @@ using System.Net.Http;
 using System.IO;
 using System.IO.Compression;
 using System.Windows.Media.Imaging;
+using System.Windows.Documents;
 using WpfPath = System.Windows.Shapes.Path;
 using System.Xml.Linq;
 using System.Text.RegularExpressions;
@@ -1614,7 +1615,8 @@ namespace ADDGH
                 AppendSystemMessage("已停止生成。");
             } catch (Exception ex) {
                 AddGhLog.Error("CallLLMAPI failed", ex);
-                AppendQuietDiagnosticCard("对话请求", "出现异常：" + ex.Message);
+                AppendQuietDiagnosticCard("对话请求",
+                    BuildProviderDiagnostic(GetProviderRuntimeSettings(), "出现异常：" + ex.GetType().Name, ex.Message));
             } finally {
                 HideThinkingAnimation();
                 _isGenerating = false;
@@ -1665,6 +1667,12 @@ namespace ADDGH
             public string ApiKey { get; set; }
             public string BaseUrl { get; set; }
             public string ModelName { get; set; }
+        }
+
+        private class EndpointCandidate
+        {
+            public string Url { get; set; }
+            public bool IsFallback { get; set; }
         }
 
         private static List<ModelProviderConfig> GetProviderConfigs()
@@ -1924,6 +1932,32 @@ namespace ADDGH
             request.Headers.Add("Authorization", $"Bearer {providerSettings.ApiKey}");
             request.Content = new StringContent(JsonConvert.SerializeObject(requestBody), Encoding.UTF8, "application/json");
             return await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        }
+
+        private static string BuildProviderDiagnostic(ProviderRuntimeSettings providerSettings, string headline, string detail = null)
+        {
+            var sb = new StringBuilder();
+            if (!string.IsNullOrWhiteSpace(headline)) sb.AppendLine(headline.Trim());
+
+            sb.AppendLine("Provider: " + (providerSettings?.Config?.DisplayName ?? "(unknown)"));
+            sb.AppendLine("Model: " + (providerSettings?.ModelName ?? "(empty)"));
+            sb.AppendLine("Base URL: " + (providerSettings?.BaseUrl ?? "(empty)"));
+
+            if (!string.IsNullOrWhiteSpace(detail))
+            {
+                sb.AppendLine();
+                sb.AppendLine(ClampDiagDetail(detail, 900));
+            }
+
+            return sb.ToString().Trim();
+        }
+
+        private static ApiResponse ReturnProviderError(ProviderRuntimeSettings providerSettings, string category, string headline, string detail = null)
+        {
+            string diag = BuildProviderDiagnostic(providerSettings, headline, detail);
+            AddGhLog.Warn(category + ": " + diag.Replace("\r", " ").Replace("\n", " | "));
+            AppendQuietDiagnosticCard(category, diag);
+            return new ApiResponse { Content = "Error: " + diag };
         }
 
         private static void TxtInput_OnPasting(object sender, DataObjectPastingEventArgs e)
@@ -2497,6 +2531,7 @@ namespace ADDGH
             const int MAX_DEPTH = 50;
             if (depth >= MAX_DEPTH) 
             {
+                AppendQuietDiagnosticCard("对话请求", "已达对话轮数安全上限（50 轮）。如需继续，请点击“继续”。");
                 return new ApiResponse { 
                     Content = "已达对话轮数安全上限 (50轮)。如需继续，请点击‘继续’。" 
                 };
@@ -2523,7 +2558,8 @@ namespace ADDGH
             providerSettings.ApiKey = apiKey;
             if (string.IsNullOrWhiteSpace(providerSettings.ApiKey))
             {
-                return new ApiResponse { Content = $"Error: 请先配置 {providerSettings.Config.DisplayName} 的 API Key。" };
+                return ReturnProviderError(providerSettings, "LLM 配置错误",
+                    $"请先配置 {providerSettings.Config.DisplayName} 的 API Key。");
             }
 
             ApplyMechanicalContextCompressionIfNeeded();
@@ -2939,14 +2975,30 @@ namespace ADDGH
                 ShowThinkingAnimation("载入中...");
                 DateTime startTime = DateTime.Now;
                 
-                var response = await SendProviderRequestAsync(providerSettings, requestBody, ct);
+                HttpResponseMessage response;
+                try
+                {
+                    response = await SendProviderRequestAsync(providerSettings, requestBody, ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    return ReturnProviderError(providerSettings, "LLM 连接错误",
+                        "请求未能发送到模型服务：" + ex.GetType().Name,
+                        ex.Message);
+                }
                 
                 ShowThinkingAnimation("思考中...");
 
                 if (!response.IsSuccessStatusCode)
                 {
                     string err = await response.Content.ReadAsStringAsync();
-                    return new ApiResponse { Content = "Error: " + response.StatusCode + "\n" + err };
+                    return ReturnProviderError(providerSettings, "LLM 连接错误",
+                        "模型服务返回 HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase,
+                        err);
                 }
 
                 // 使用流读取以支持即时取消
@@ -2965,13 +3017,33 @@ namespace ADDGH
                 }
                 double durationSeconds = (DateTime.Now - startTime).TotalSeconds;
 
-                var json = JObject.Parse(responseJson);
+                JObject json;
+                try
+                {
+                    json = JObject.Parse(responseJson);
+                }
+                catch (Exception ex)
+                {
+                    return ReturnProviderError(providerSettings, "LLM 响应错误",
+                        "模型服务返回的内容不是有效 JSON：" + ex.Message,
+                        responseJson);
+                }
                 var messageNode = json["choices"]?[0]?["message"];
-                if (messageNode == null) return new ApiResponse { Content = "Error: Invalid API response." };
+                if (messageNode == null)
+                    return ReturnProviderError(providerSettings, "LLM 响应错误",
+                        "模型服务返回的 JSON 不符合 OpenAI Chat Completions 结构：缺少 choices[0].message。",
+                        responseJson);
 
                 string fullContent = messageNode["content"]?.ToString() ?? "";
                 string fullReasoning = messageNode["reasoning_content"]?.ToString() ?? "";
                 var fullToolCalls = messageNode["tool_calls"] as JArray ?? new JArray();
+
+                if (string.IsNullOrWhiteSpace(fullContent) && string.IsNullOrWhiteSpace(fullReasoning) && fullToolCalls.Count == 0)
+                {
+                    return ReturnProviderError(providerSettings, "LLM 响应错误",
+                        "模型服务返回成功，但消息内容、思考内容和工具调用都为空。",
+                        responseJson);
+                }
 
                 bool isSandboxOperation = false;
                 foreach (var tc in fullToolCalls) {
@@ -5283,21 +5355,11 @@ namespace ADDGH
                     Padding = new Thickness(10)
                 };
 
-                var scroll = new ScrollViewer {
-                    MaxHeight = 150,
-                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                    Margin = new Thickness(0, 0, 0, 8),
-                    Content = bubble
-                };
-                var tb = new TextBlock { 
-                    Foreground = new SolidColorBrush(Color.FromRgb(200, 200, 200)), 
-                    TextWrapping = TextWrapping.Wrap, 
-                    FontSize = 12,
-                    LineHeight = 18
-                };
-                ParseMarkdown(tb, text);
-                bubble.Child = tb;
-                container.Children.Add(scroll);
+                var content = BuildMarkdownPanel(text);
+                content.MaxHeight = 150;
+                content.Margin = new Thickness(0, 0, 0, 8);
+                bubble.Child = content;
+                container.Children.Add(bubble);
 
                 var btnApply = new Button {
                     Content = "确认应用修改",
@@ -5451,22 +5513,9 @@ namespace ADDGH
                     Padding = new Thickness(12)
                 };
 
-                var tb = new TextBlock { 
-                    Foreground = new SolidColorBrush(Color.FromRgb(220, 220, 220)), 
-                    TextWrapping = TextWrapping.Wrap, 
-                    FontSize = 13, 
-                    LineHeight = 20
-                };
-                ParseMarkdown(tb, text);
-
-                var scroll = new ScrollViewer { 
-                    MaxHeight = 300, 
-                    Content = tb, 
-                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                    PanningMode = PanningMode.VerticalOnly
-                };
-                
-                contentBorder.Child = scroll;
+                var content = BuildMarkdownPanel(text);
+                content.MaxHeight = 300;
+                contentBorder.Child = content;
                 logPanel.Children.Add(contentBorder);
 
                 headerGrid.MouseLeftButtonDown += (s, e) => {
@@ -5490,26 +5539,24 @@ namespace ADDGH
             }));
         }
 
-        private static void ParseMarkdown(TextBlock tb, string text)
+        private static void AppendMarkdownInlines(InlineCollection inlines, string text)
         {
-            tb.Inlines.Clear();
-            string[] parts = System.Text.RegularExpressions.Regex.Split(text, @"(\*\*.*?\*\*|`.*?`|\*.*?\*)");
+            string[] parts = Regex.Split(text ?? "", @"(\*\*.*?\*\*|`.*?`|\*.*?\*)");
             foreach (var part in parts) {
                 if (string.IsNullOrEmpty(part)) continue;
-                if (part.StartsWith("**") && part.EndsWith("**")) {
-                    tb.Inlines.Add(new System.Windows.Documents.Run(part.Substring(2, part.Length - 4)) { FontWeight = FontWeights.Bold });
-                } else if (part.StartsWith("*") && part.EndsWith("*")) {
-                    tb.Inlines.Add(new System.Windows.Documents.Run(part.Substring(1, part.Length - 2)) { FontStyle = FontStyles.Italic });
-                } else if (part.StartsWith("`") && part.EndsWith("`")) {
-                    var border = new Border { 
-                        Background = new SolidColorBrush(Color.FromRgb(60, 60, 60)),
-                        CornerRadius = new CornerRadius(3),
-                        Padding = new Thickness(3, 0, 3, 0),
-                        Child = new TextBlock { Text = part.Substring(1, part.Length - 2), Foreground = new SolidColorBrush(Color.FromRgb(255, 200, 100)), FontSize = 12 }
-                    };
-                    tb.Inlines.Add(new System.Windows.Documents.InlineUIContainer(border));
+                if (part.StartsWith("**") && part.EndsWith("**") && part.Length >= 4) {
+                    inlines.Add(new Bold(new Run(part.Substring(2, part.Length - 4))));
+                } else if (part.StartsWith("*") && part.EndsWith("*") && part.Length >= 2) {
+                    inlines.Add(new Italic(new Run(part.Substring(1, part.Length - 2))));
+                } else if (part.StartsWith("`") && part.EndsWith("`") && part.Length >= 2) {
+                    inlines.Add(new Run(part.Substring(1, part.Length - 2)) {
+                        FontFamily = new FontFamily("Consolas, Courier New"),
+                        FontSize = 12,
+                        Foreground = new SolidColorBrush(Color.FromRgb(255, 200, 100)),
+                        Background = new SolidColorBrush(Color.FromRgb(60, 60, 60))
+                    });
                 } else {
-                    tb.Inlines.Add(new System.Windows.Documents.Run(part));
+                    inlines.Add(new Run(part));
                 }
             }
         }
@@ -5546,7 +5593,7 @@ namespace ADDGH
             return true;
         }
 
-        private static void AppendMarkdownTableGrid(StackPanel panel, List<string[]> rows)
+        private static void AppendMarkdownTable(FlowDocument doc, List<string[]> rows)
         {
             int cols = rows.Max(r => r.Length);
             for (int r = 0; r < rows.Count; r++)
@@ -5556,46 +5603,44 @@ namespace ADDGH
                     rows[r] = list.ToArray();
                 }
 
-            var grid = new Grid {
-                Margin = new Thickness(0, 6, 0, 10),
-                HorizontalAlignment = HorizontalAlignment.Stretch
+            var table = new Table {
+                CellSpacing = 0,
+                Margin = new Thickness(0, 6, 0, 10)
             };
             for (int c = 0; c < cols; c++)
-                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            for (int r = 0; r < rows.Count; r++)
-                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                table.Columns.Add(new TableColumn { Width = new GridLength(1, GridUnitType.Star) });
 
             var borderBrush = new SolidColorBrush(Color.FromRgb(60, 60, 60));
             var headerBg = new SolidColorBrush(Color.FromRgb(40, 40, 40));
 
+            var rowGroup = new TableRowGroup();
             for (int r = 0; r < rows.Count; r++) {
+                var tableRow = new TableRow();
                 for (int c = 0; c < cols; c++) {
-                    string cellText = rows[r][c];
-                    var tb = new TextBlock {
-                        TextWrapping = TextWrapping.Wrap,
+                    var paragraph = new Paragraph {
+                        Margin = new Thickness(0),
                         FontSize = 14,
                         LineHeight = 22,
                         Foreground = new SolidColorBrush(Color.FromRgb(235, 235, 235)),
                         FontWeight = r == 0 ? FontWeights.SemiBold : FontWeights.Normal
                     };
-                    ParseMarkdown(tb, cellText);
-                    var bd = new Border {
+                    AppendMarkdownInlines(paragraph.Inlines, rows[r][c]);
+                    var cell = new TableCell(paragraph) {
                         BorderBrush = borderBrush,
                         BorderThickness = new Thickness(1),
                         Padding = new Thickness(8, 6, 8, 6),
                         Background = r == 0 ? headerBg : Brushes.Transparent
                     };
-                    bd.Child = tb;
-                    Grid.SetRow(bd, r);
-                    Grid.SetColumn(bd, c);
-                    grid.Children.Add(bd);
+                    tableRow.Cells.Add(cell);
                 }
+                rowGroup.Rows.Add(tableRow);
             }
 
-            panel.Children.Add(grid);
+            table.RowGroups.Add(rowGroup);
+            doc.Blocks.Add(table);
         }
 
-        private static bool TryConsumeMarkdownTable(string[] lines, ref int i, StackPanel panel)
+        private static bool TryConsumeMarkdownTable(string[] lines, ref int i, FlowDocument doc)
         {
             int start = i;
             if (start >= lines.Length) return false;
@@ -5623,15 +5668,33 @@ namespace ADDGH
             for (int k = 2; k < rows.Count; k++)
                 bodyRows.Add(rows[k]);
 
-            AppendMarkdownTableGrid(panel, bodyRows);
+            AppendMarkdownTable(doc, bodyRows);
             i = j - 1;
             return true;
         }
 
-        private static StackPanel BuildMarkdownPanel(string text)
+        private static RichTextBox BuildMarkdownPanel(string text)
         {
-            var panel = new StackPanel { Orientation = Orientation.Vertical };
-            if (string.IsNullOrEmpty(text)) return panel;
+            var doc = new FlowDocument {
+                PagePadding = new Thickness(0),
+                Background = Brushes.Transparent,
+                FontFamily = new FontFamily("Segoe UI, Microsoft YaHei UI"),
+                FontSize = 14,
+                TextAlignment = TextAlignment.Left
+            };
+
+            var viewer = new RichTextBox {
+                Document = doc,
+                IsReadOnly = true,
+                BorderThickness = new Thickness(0),
+                Background = Brushes.Transparent,
+                Foreground = new SolidColorBrush(Color.FromRgb(235, 235, 235)),
+                Padding = new Thickness(0),
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                IsDocumentEnabled = true
+            };
+            if (string.IsNullOrEmpty(text)) return viewer;
 
             var lines = text.Replace("\r\n", "\n").Split('\n');
             bool inCode = false;
@@ -5697,7 +5760,7 @@ namespace ADDGH
                 inner.Children.Add(header);
                 inner.Children.Add(codeRow);
 
-                panel.Children.Add(new Border {
+                doc.Blocks.Add(new BlockUIContainer(new Border {
                     Background = new SolidColorBrush(Color.FromRgb(30, 30, 30)),
                     BorderBrush = new SolidColorBrush(Color.FromRgb(42, 42, 42)),
                     BorderThickness = new Thickness(1),
@@ -5705,7 +5768,7 @@ namespace ADDGH
                     Padding = new Thickness(18, 16, 20, 18),
                     Margin = new Thickness(0, 8, 0, 10),
                     Child = inner
-                });
+                }));
             };
 
             for (int lineIndex = 0; lineIndex < lines.Length; lineIndex++) {
@@ -5727,80 +5790,68 @@ namespace ADDGH
                     continue;
                 }
 
-                var tb = new TextBlock {
-                    Foreground = new SolidColorBrush(Color.FromRgb(235, 235, 235)),
-                    TextWrapping = TextWrapping.Wrap,
-                    FontSize = 14,
-                    LineHeight = 22,
-                    Margin = new Thickness(0, 2, 0, 2)
-                };
-
                 string trimmed = line.Trim();
                 if (IsMarkdownHorizontalRule(trimmed)) {
-                    panel.Children.Add(new Border {
+                    doc.Blocks.Add(new BlockUIContainer(new Border {
                         Height = 1,
                         Background = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
                         Margin = new Thickness(0, 10, 0, 10)
-                    });
+                    }));
                     continue;
                 }
 
                 int idxForTable = lineIndex;
-                if (TryConsumeMarkdownTable(lines, ref idxForTable, panel)) {
+                if (TryConsumeMarkdownTable(lines, ref idxForTable, doc)) {
                     lineIndex = idxForTable;
                     continue;
                 }
 
                 if (string.IsNullOrWhiteSpace(trimmed)) {
-                    panel.Children.Add(new Border { Height = 6, Opacity = 0 });
+                    doc.Blocks.Add(new Paragraph { Margin = new Thickness(0, 0, 0, 6), LineHeight = 6 });
                     continue;
                 }
+
+                var paragraph = new Paragraph {
+                    Foreground = new SolidColorBrush(Color.FromRgb(235, 235, 235)),
+                    FontSize = 14,
+                    LineHeight = 22,
+                    Margin = new Thickness(0, 2, 0, 2)
+                };
 
                 if (trimmed.StartsWith("### ")) {
-                    tb.FontSize = 15;
-                    tb.FontWeight = FontWeights.SemiBold;
-                    tb.Foreground = new SolidColorBrush(Color.FromRgb(255, 220, 150));
-                    ParseMarkdown(tb, trimmed.Substring(4));
+                    paragraph.FontSize = 15;
+                    paragraph.FontWeight = FontWeights.SemiBold;
+                    paragraph.Foreground = new SolidColorBrush(Color.FromRgb(255, 220, 150));
+                    AppendMarkdownInlines(paragraph.Inlines, trimmed.Substring(4));
                 } else if (trimmed.StartsWith("## ")) {
-                    tb.FontSize = 16;
-                    tb.FontWeight = FontWeights.SemiBold;
-                    tb.Foreground = new SolidColorBrush(Color.FromRgb(255, 220, 150));
-                    tb.Margin = new Thickness(0, 8, 0, 4);
-                    ParseMarkdown(tb, trimmed.Substring(3));
+                    paragraph.FontSize = 16;
+                    paragraph.FontWeight = FontWeights.SemiBold;
+                    paragraph.Foreground = new SolidColorBrush(Color.FromRgb(255, 220, 150));
+                    paragraph.Margin = new Thickness(0, 8, 0, 4);
+                    AppendMarkdownInlines(paragraph.Inlines, trimmed.Substring(3));
                 } else if (trimmed.StartsWith("# ")) {
-                    tb.FontSize = 17;
-                    tb.FontWeight = FontWeights.Bold;
-                    tb.Foreground = new SolidColorBrush(Color.FromRgb(255, 220, 150));
-                    tb.Margin = new Thickness(0, 8, 0, 4);
-                    ParseMarkdown(tb, trimmed.Substring(2));
+                    paragraph.FontSize = 17;
+                    paragraph.FontWeight = FontWeights.Bold;
+                    paragraph.Foreground = new SolidColorBrush(Color.FromRgb(255, 220, 150));
+                    paragraph.Margin = new Thickness(0, 8, 0, 4);
+                    AppendMarkdownInlines(paragraph.Inlines, trimmed.Substring(2));
                 } else if (trimmed.StartsWith("- ") || trimmed.StartsWith("* ")) {
-                    tb.Inlines.Add(new System.Windows.Documents.Run("• ") { Foreground = new SolidColorBrush(Color.FromRgb(255, 200, 100)) });
-                    var inline = new TextBlock();
-                    ParseMarkdown(inline, trimmed.Substring(2));
-                    foreach (var item in inline.Inlines.ToList()) {
-                        inline.Inlines.Remove(item);
-                        tb.Inlines.Add(item);
-                    }
+                    paragraph.Inlines.Add(new Run("• ") { Foreground = new SolidColorBrush(Color.FromRgb(255, 200, 100)) });
+                    AppendMarkdownInlines(paragraph.Inlines, trimmed.Substring(2));
                 } else if (trimmed.StartsWith("> ")) {
-                    tb.Foreground = new SolidColorBrush(Color.FromRgb(190, 190, 190));
-                    ParseMarkdown(tb, trimmed.Substring(2));
-                    panel.Children.Add(new Border {
-                        BorderBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
-                        BorderThickness = new Thickness(2, 0, 0, 0),
-                        Padding = new Thickness(10, 2, 0, 2),
-                        Margin = new Thickness(0, 4, 0, 4),
-                        Child = tb
-                    });
-                    continue;
+                    paragraph.Foreground = new SolidColorBrush(Color.FromRgb(190, 190, 190));
+                    paragraph.Margin = new Thickness(10, 4, 0, 4);
+                    paragraph.Inlines.Add(new Run("│ ") { Foreground = new SolidColorBrush(Color.FromRgb(70, 70, 70)) });
+                    AppendMarkdownInlines(paragraph.Inlines, trimmed.Substring(2));
                 } else {
-                    ParseMarkdown(tb, line);
+                    AppendMarkdownInlines(paragraph.Inlines, line);
                 }
 
-                panel.Children.Add(tb);
+                doc.Blocks.Add(paragraph);
             }
 
             if (inCode) flushCode();
-            return panel;
+            return viewer;
         }
 
         private static void SaveReference(string description)
@@ -6315,7 +6366,8 @@ namespace ADDGH
                 AppendSystemMessage("已停止生成。");
             } catch (Exception ex) {
                 AddGhLog.Error("SendHiddenPrompt CallLLMAPI failed", ex);
-                AppendQuietDiagnosticCard("后台任务", "出现异常：" + ex.Message);
+                AppendQuietDiagnosticCard("后台任务",
+                    BuildProviderDiagnostic(GetProviderRuntimeSettings(), "出现异常：" + ex.GetType().Name, ex.Message));
             } finally {
                 HideThinkingAnimation();
                 _isGenerating = false;
@@ -6397,11 +6449,30 @@ namespace ADDGH
             return text.Substring(0, maxChars) + "…";
         }
 
+        private static TextBox CreateSelectableTextBox(string text, Brush foreground, double fontSize, Thickness margin, TextAlignment alignment = TextAlignment.Left)
+        {
+            return new TextBox
+            {
+                Text = text ?? "",
+                IsReadOnly = true,
+                IsReadOnlyCaretVisible = false,
+                BorderThickness = new Thickness(0),
+                Background = Brushes.Transparent,
+                Foreground = foreground,
+                FontSize = fontSize,
+                TextWrapping = TextWrapping.Wrap,
+                Padding = new Thickness(0),
+                Margin = margin,
+                TextAlignment = alignment,
+                Cursor = Cursors.IBeam
+            };
+        }
+
         /// <summary> 对话区低调诊断卡片（灰阶小字，左侧对齐）；完整栈仍写入 AddGhLog。 </summary>
         private static void AppendQuietDiagnosticCard(string categoryLabel, string detail)
         {
             string cat = string.IsNullOrWhiteSpace(categoryLabel) ? "诊断" : categoryLabel.Trim();
-            string body = ClampDiagDetail(detail ?? "", 480);
+            string body = ClampDiagDetail(detail ?? "", 1400);
 
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
             {
@@ -6432,14 +6503,11 @@ namespace ADDGH
                     Padding = new Thickness(10, 8, 10, 8)
                 };
 
-                card.Child = new TextBlock
-                {
-                    Text = string.IsNullOrEmpty(body) ? "（无详情）" : body,
-                    Foreground = new SolidColorBrush(Color.FromRgb(130, 130, 130)),
-                    FontSize = 11,
-                    TextWrapping = TextWrapping.Wrap,
-                    LineHeight = 16
-                };
+                card.Child = CreateSelectableTextBox(
+                    string.IsNullOrEmpty(body) ? "（无详情）" : body,
+                    new SolidColorBrush(Color.FromRgb(130, 130, 130)),
+                    11,
+                    new Thickness(0));
 
                 stack.Children.Add(card);
 
@@ -6462,14 +6530,14 @@ namespace ADDGH
         private static void AppendSystemMessage(string text, bool isError = false)
         {
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
-                var tb = new TextBlock { 
-                    Text = text, 
-                    Foreground = isError ? Brushes.Tomato : Brushes.Gray, 
-                    FontSize = 12, 
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    TextWrapping = TextWrapping.Wrap,
-                    Margin = new Thickness(0, 0, 0, 15)
-                };
+                var tb = CreateSelectableTextBox(
+                    text,
+                    isError ? Brushes.Tomato : Brushes.Gray,
+                    12,
+                    new Thickness(0, 0, 0, 15),
+                    TextAlignment.Center);
+                tb.HorizontalAlignment = HorizontalAlignment.Center;
+                tb.MaxWidth = 380;
                 if (_thinkingBubble != null) {
                     _chatPanel.Children.Remove(_thinkingBubble);
                     _chatPanel.Children.Add(tb);
