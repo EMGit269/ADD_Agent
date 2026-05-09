@@ -9,6 +9,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Input;
+using System.Net;
 using System.Net.Http;
 using System.IO;
 using System.IO.Compression;
@@ -69,6 +70,15 @@ namespace ADDGH
         private static TextBlock _txtSkillCount;
         private static bool _isSkillVisible = false;
         private static Window _referenceLibraryWindow;
+
+        private static List<ChatHistoryConversation> _chatHistory = new List<ChatHistoryConversation>();
+        private static string _activeHistoryId;
+        private static bool _isHistorySidebarVisible = false;
+        private static bool _isHistoryRestoring = false;
+        private static Border _historySidebar;
+        private static StackPanel _historyListPanel;
+        private static TextBlock _historyCountText;
+        private static Button _btnToggleHistory;
         
         private static Border _warningBar;
         private static TextBlock _txtWarning;
@@ -163,10 +173,11 @@ namespace ADDGH
                 
                 var text = new TextBlock {
                     Text = status,
-                    Foreground = Brushes.Gray,
-                    FontSize = 13,
-                    Margin = new Thickness(5, 0, 0, 24),
-                    VerticalAlignment = VerticalAlignment.Center
+                    Foreground = new SolidColorBrush(Color.FromRgb(125, 125, 125)),
+                    FontSize = 12,
+                    Margin = new Thickness(5, 0, 0, 18),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    FontWeight = FontWeights.Normal
                 };
                 
                 var breathingAnim = new DoubleAnimation {
@@ -177,7 +188,7 @@ namespace ADDGH
                 };
                 text.BeginAnimation(UIElement.OpacityProperty, breathingAnim);
 
-                _thinkingBubble = new Border { Child = text };
+                _thinkingBubble = new Border { Child = text, Opacity = 0.8, Margin = new Thickness(0, 2, 0, 2) };
                 _chatPanel.Children.Add(_thinkingBubble);
                 _chatScroll.ScrollToEnd();
             }));
@@ -518,7 +529,7 @@ namespace ADDGH
                 </Border>
 
                 <!-- Chat Area (Left) -->
-                <Grid Grid.Column=""0"">
+                <Grid Grid.Column=""0"" x:Name=""ChatAreaGrid"">
                     <Grid.RowDefinitions>
                         <RowDefinition Height=""60""/>
                         <RowDefinition Height=""*"" />
@@ -554,6 +565,16 @@ namespace ADDGH
                                 </Button.Template>
                             <TextBlock Text=""+"" Foreground=""White"" FontWeight=""Bold""/>
                             </Button>
+                            <Button x:Name=""BtnToggleHistory"" Foreground=""#FFFFFF"" Background=""Transparent"" BorderThickness=""0"" FontSize=""13"" Cursor=""Hand"" ToolTip=""对话历史"">
+                                <Button.Template>
+                                    <ControlTemplate TargetType=""Button"">
+                                        <Border Background=""{TemplateBinding Background}"" CornerRadius=""6"" Padding=""10,5"">
+                                        <ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/>
+                                        </Border>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            <TextBlock Text=""历史"" Foreground=""White"" FontSize=""12"" FontWeight=""SemiBold""/>
+                            </Button>
                             <Button x:Name=""BtnSettings"" Foreground=""#FFFFFF"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""配置"">
                                 <Button.Template>
                                     <ControlTemplate TargetType=""Button"">
@@ -584,6 +605,28 @@ namespace ADDGH
                 <ScrollViewer Grid.Row=""1"" x:Name=""ChatScroll"" Margin=""5,10,5,0"" VerticalScrollBarVisibility=""Auto"" PanningMode=""VerticalOnly"">
                     <StackPanel x:Name=""ChatPanel"" Margin=""10""/>
                 </ScrollViewer>
+
+                <Border x:Name=""HistorySidebar"" Grid.Row=""1"" Panel.ZIndex=""9"" HorizontalAlignment=""Left"" VerticalAlignment=""Stretch"" Width=""0"" Visibility=""Collapsed"" Margin=""0,10,0,10"" Background=""#171717"" BorderBrush=""#2A2A2A"" BorderThickness=""0,1,1,1"" CornerRadius=""0,16,16,0"" ClipToBounds=""True"">
+                    <Border.Effect>
+                        <DropShadowEffect BlurRadius=""24"" ShadowDepth=""4"" Opacity=""0.35"" Color=""Black""/>
+                    </Border.Effect>
+                    <Grid Margin=""16,14,14,14"">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height=""Auto""/>
+                            <RowDefinition Height=""Auto""/>
+                            <RowDefinition Height=""*""/>
+                        </Grid.RowDefinitions>
+                        <Grid>
+                            <TextBlock Text=""对话历史"" Foreground=""#EAEAEA"" FontSize=""15"" FontWeight=""SemiBold"" VerticalAlignment=""Center""/>
+                            <TextBlock x:Name=""TxtHistoryCount"" Foreground=""#7C7C7C"" FontSize=""11"" Margin=""82,1,0,0"" VerticalAlignment=""Center""/>
+                            <Button x:Name=""BtnCloseHistory"" Content=""✕"" HorizontalAlignment=""Right"" Background=""Transparent"" BorderThickness=""0"" Foreground=""#8E8E8E"" Cursor=""Hand"" FontSize=""11"" Width=""24"" Height=""24""/>
+                        </Grid>
+                        <TextBlock Grid.Row=""1"" Text=""本地保存，点击可恢复会话。"" Foreground=""#707070"" FontSize=""11"" Margin=""0,8,0,12""/>
+                        <ScrollViewer Grid.Row=""2"" VerticalScrollBarVisibility=""Auto"" HorizontalScrollBarVisibility=""Disabled"">
+                            <StackPanel x:Name=""HistoryListPanel""/>
+                        </ScrollViewer>
+                    </Grid>
+                </Border>
 
                 <!-- Input Area -->
                 <Border Grid.Row=""2"" Background=""#1E1E1E"" CornerRadius=""0,0,16,16"" Padding=""15"" x:Name=""InputAreaBorder"">
@@ -819,8 +862,39 @@ namespace ADDGH
             _chatScroll = (ScrollViewer)_window.FindName("ChatScroll");
             _txtInput = (TextBox)_window.FindName("TxtInput");
             _btnSend = (Button)_window.FindName("BtnSend");
+            _historySidebar = (Border)_window.FindName("HistorySidebar");
+            _historyListPanel = (StackPanel)_window.FindName("HistoryListPanel");
+            _historyCountText = (TextBlock)_window.FindName("TxtHistoryCount");
+            _btnToggleHistory = (Button)_window.FindName("BtnToggleHistory");
+            if (_btnToggleHistory != null)
+            {
+                _btnToggleHistory.Width = 34;
+                _btnToggleHistory.Height = 30;
+                _btnToggleHistory.Padding = new Thickness(0);
+                _btnToggleHistory.Template = (ControlTemplate)System.Windows.Markup.XamlReader.Parse(@"
+                    <ControlTemplate TargetType=""Button"" xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation"">
+                        <Border Background=""{TemplateBinding Background}"" CornerRadius=""6"" Padding=""4,3"">
+                            <ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/>
+                        </Border>
+                    </ControlTemplate>");
+                _btnToggleHistory.Content = new TextBlock
+                {
+                    Text = "↻",
+                    Foreground = Brushes.White,
+                    FontSize = 16,
+                    FontFamily = new FontFamily("Segoe UI Symbol"),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+            }
             _contextMeterHost = (Grid)_window.FindName("ContextMeterHost");
             _contextRingProgress = (WpfPath)_window.FindName("ContextRingProgress");
+
+            var btnCloseHistory = (Button)_window.FindName("BtnCloseHistory");
+            if (_btnToggleHistory != null) _btnToggleHistory.Click += (s, e) => ToggleHistorySidebar();
+            if (btnCloseHistory != null) btnCloseHistory.Click += (s, e) => SetHistorySidebarVisible(false);
+            LoadChatHistoryStore();
+            RefreshHistorySidebar();
             
             var btnContinue = (Button)_window.FindName("BtnContinue");
             if (btnContinue != null) {
@@ -983,13 +1057,15 @@ namespace ADDGH
             var btnNewChat = (Button)_window.FindName("BtnNewChat");
             if (btnNewChat != null) {
             btnNewChat.Click += (s, e) => {
+                _activeHistoryId = null;
                 _messages.Clear();
                 _messages.Add(new { role = "system", content = SYSTEM_PROMPT });
                     if (_chatPanel != null) _chatPanel.Children.Clear();
                     _cachedCanvasState = null;
                     _canvasChanged = true;
-                AppendSystemMessage("新对话已开启，历史已清空。");
+                AppendSystemMessage("新对话已开启，当前会话已清空。");
                 RefreshContextMeter();
+                if (_isHistorySidebarVisible) RefreshHistorySidebar();
             };
             }
 
@@ -1598,6 +1674,10 @@ namespace ADDGH
                 AppendBubble(input, true);
             }
 
+            SyncActiveHistoryConversation(string.IsNullOrWhiteSpace(input)
+                ? (attachmentsToSend.FirstOrDefault()?.FileName ?? "附件对话")
+                : input);
+
             EnforceChatHistoryLimit();
 
             _pendingAttachments.Clear();
@@ -1646,6 +1726,15 @@ namespace ADDGH
             public string ExtractedText { get; set; }
             public long SizeBytes { get; set; }
             public string Error { get; set; }
+        }
+
+        private class ChatHistoryConversation
+        {
+            public string Id { get; set; }
+            public string Title { get; set; }
+            public DateTime CreatedAtUtc { get; set; }
+            public DateTime UpdatedAtUtc { get; set; }
+            public JArray Messages { get; set; }
         }
 
         private class ModelProviderConfig
@@ -1891,20 +1980,396 @@ namespace ADDGH
             if (_settingsOverlay != null) _settingsOverlay.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
 
             // Keep the header available for dragging, but block actions that would mutate chat state.
-            string[] headerActionNames = { "BtnNewChat", "BtnToggleCode", "BtnSettings" };
+            string[] headerActionNames = { "BtnNewChat", "BtnToggleCode", "BtnToggleHistory", "BtnSettings" };
             foreach (string name in headerActionNames)
             {
                 if (_window?.FindName(name) is Button button) button.IsEnabled = !visible;
             }
         }
 
+        private static string GetChatHistoryDirectory()
+        {
+            string root = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string dir = System.IO.Path.Combine(root, "ADDGH", "history");
+            try { System.IO.Directory.CreateDirectory(dir); } catch { }
+            return dir;
+        }
+
+        private static string GetChatHistoryFilePath()
+        {
+            return System.IO.Path.Combine(GetChatHistoryDirectory(), "conversations.json");
+        }
+
+        private static string NormalizeConversationTitle(string text)
+        {
+            string s = (text ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
+            if (string.IsNullOrWhiteSpace(s)) return "新对话";
+            if (s.Length > 28) s = s.Substring(0, 28) + "…";
+            return s;
+        }
+
+        private static string GetConversationPreview(ChatHistoryConversation conv)
+        {
+            if (conv?.Messages == null || conv.Messages.Count == 0) return "空白对话";
+            for (int i = conv.Messages.Count - 1; i >= 0; i--)
+            {
+                var msg = conv.Messages[i];
+                string role = ChatMessageHelpers.TryGetRole(msg);
+                if (!string.Equals(role, "user", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(role, "assistant", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                string content = ChatMessageHelpers.TryGetPlainTextContent(msg);
+                if (string.IsNullOrWhiteSpace(content)) continue;
+                content = content.Replace("\r", " ").Replace("\n", " ").Trim();
+                return content.Length > 64 ? content.Substring(0, 64) + "…" : content;
+            }
+            return "空白对话";
+        }
+
+        private static string FormatConversationTime(DateTime utcTime)
+        {
+            try
+            {
+                return utcTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+            }
+            catch
+            {
+                return utcTime.ToString("yyyy-MM-dd HH:mm");
+            }
+        }
+
+        private static ChatHistoryConversation FindHistoryConversation(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return null;
+            return _chatHistory.FirstOrDefault(c => string.Equals(c?.Id, id, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static ChatHistoryConversation GetOrCreateActiveHistoryConversation(string titleSeed = null)
+        {
+            var existing = FindHistoryConversation(_activeHistoryId);
+            if (existing != null) return existing;
+
+            var conv = new ChatHistoryConversation
+            {
+                Id = Guid.NewGuid().ToString("n"),
+                Title = NormalizeConversationTitle(titleSeed),
+                CreatedAtUtc = DateTime.UtcNow,
+                UpdatedAtUtc = DateTime.UtcNow,
+                Messages = new JArray()
+            };
+            _chatHistory.Insert(0, conv);
+            _activeHistoryId = conv.Id;
+            return conv;
+        }
+
+        private static void LoadChatHistoryStore()
+        {
+            _chatHistory = new List<ChatHistoryConversation>();
+            try
+            {
+                string path = GetChatHistoryFilePath();
+                if (!System.IO.File.Exists(path)) return;
+
+                string json = System.IO.File.ReadAllText(path, Encoding.UTF8);
+                JObject root = JObject.Parse(string.IsNullOrWhiteSpace(json) ? "{}" : json);
+                JArray items = root["conversations"] as JArray ?? new JArray();
+                foreach (var token in items)
+                {
+                    var conv = token.ToObject<ChatHistoryConversation>();
+                    if (conv == null) continue;
+                    conv.Id = string.IsNullOrWhiteSpace(conv.Id) ? Guid.NewGuid().ToString("n") : conv.Id;
+                    conv.Title = NormalizeConversationTitle(conv.Title);
+                    conv.Messages = conv.Messages ?? new JArray();
+                    _chatHistory.Add(conv);
+                }
+
+                _chatHistory = _chatHistory
+                    .OrderByDescending(c => c.UpdatedAtUtc)
+                    .ThenByDescending(c => c.CreatedAtUtc)
+                    .ToList();
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("LoadChatHistoryStore failed: " + ex.Message);
+            }
+        }
+
+        private static void SaveChatHistoryStore()
+        {
+            try
+            {
+                string path = GetChatHistoryFilePath();
+                var root = new JObject
+                {
+                    ["conversations"] = JArray.FromObject(_chatHistory)
+                };
+                System.IO.File.WriteAllText(path, root.ToString(Formatting.Indented), Encoding.UTF8);
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("SaveChatHistoryStore failed: " + ex.Message);
+            }
+        }
+
+        private static void SyncActiveHistoryConversation(string titleSeed = null)
+        {
+            if (_isHistoryRestoring) return;
+            if (_messages == null || _messages.Count == 0) return;
+
+            var conv = GetOrCreateActiveHistoryConversation(titleSeed);
+            if (conv == null) return;
+
+            var payload = new JArray();
+            foreach (var msg in _messages)
+            {
+                string role = ChatMessageHelpers.TryGetRole(msg);
+                if (string.Equals(role, "system", StringComparison.OrdinalIgnoreCase)) continue;
+                payload.Add(JToken.FromObject(msg));
+            }
+
+            conv.Messages = payload;
+            if (string.IsNullOrWhiteSpace(conv.Title))
+                conv.Title = NormalizeConversationTitle(titleSeed);
+            if (string.Equals(conv.Title, "新对话", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(titleSeed))
+                conv.Title = NormalizeConversationTitle(titleSeed);
+            conv.UpdatedAtUtc = DateTime.UtcNow;
+
+            _chatHistory = _chatHistory
+                .OrderByDescending(c => c.UpdatedAtUtc)
+                .ThenByDescending(c => c.CreatedAtUtc)
+                .ToList();
+
+            SaveChatHistoryStore();
+            if (_isHistorySidebarVisible) RefreshHistorySidebar();
+        }
+
+        private static void OpenHistoryConversation(string conversationId)
+        {
+            var conv = FindHistoryConversation(conversationId);
+            if (conv == null) return;
+
+            _isHistoryRestoring = true;
+            try
+            {
+                _activeHistoryId = conv.Id;
+                _messages = new List<object> { new { role = "system", content = SYSTEM_PROMPT + GetSkillsSummary() } };
+                foreach (var token in conv.Messages ?? new JArray())
+                {
+                    if (token is JObject jo) _messages.Add(jo.DeepClone());
+                    else _messages.Add(token);
+                }
+
+                if (_chatPanel != null) _chatPanel.Children.Clear();
+                RefreshUI();
+                if (_txtInput != null) _txtInput.Text = "";
+                RefreshContextMeter();
+                UpdateHistorySidebarSelection();
+            }
+            finally
+            {
+                _isHistoryRestoring = false;
+            }
+        }
+
+        private static void DeleteHistoryConversation(string conversationId)
+        {
+            if (string.IsNullOrWhiteSpace(conversationId)) return;
+            var removed = _chatHistory.FirstOrDefault(c => string.Equals(c.Id, conversationId, StringComparison.OrdinalIgnoreCase));
+            if (removed == null) return;
+
+            _chatHistory.Remove(removed);
+            if (string.Equals(_activeHistoryId, conversationId, StringComparison.OrdinalIgnoreCase))
+            {
+                _activeHistoryId = null;
+                if (_messages != null)
+                {
+                    _messages.Clear();
+                    _messages.Add(new { role = "system", content = SYSTEM_PROMPT + GetSkillsSummary() });
+                    if (_chatPanel != null) _chatPanel.Children.Clear();
+                    AppendSystemMessage("当前对话已删除，已切换到新会话。");
+                    RefreshContextMeter();
+                }
+            }
+
+            SaveChatHistoryStore();
+            RefreshHistorySidebar();
+        }
+
+        private static void UpdateHistorySidebarSelection()
+        {
+            if (_historyListPanel == null) return;
+            foreach (var child in _historyListPanel.Children.OfType<Border>())
+            {
+                string id = child.Tag as string;
+                bool active = !string.IsNullOrWhiteSpace(id)
+                    && string.Equals(id, _activeHistoryId, StringComparison.OrdinalIgnoreCase);
+                child.BorderBrush = new SolidColorBrush(active ? Color.FromRgb(58, 58, 58) : Color.FromRgb(40, 40, 40));
+                child.Background = new SolidColorBrush(active ? Color.FromRgb(26, 26, 26) : Color.FromRgb(23, 23, 23));
+            }
+        }
+
+        private static Button CreateHistoryActionButton(string text, bool danger = false)
+        {
+            var button = new Button
+            {
+                Content = text,
+                Foreground = new SolidColorBrush(danger ? Color.FromRgb(190, 190, 190) : Color.FromRgb(208, 208, 208)),
+                Background = new SolidColorBrush(Color.FromRgb(28, 28, 28)),
+                BorderBrush = new SolidColorBrush(danger ? Color.FromRgb(52, 52, 52) : Color.FromRgb(44, 44, 44)),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 0, 0, 0),
+                Cursor = Cursors.Hand,
+                FontSize = 10.5
+            };
+            button.Template = (ControlTemplate)System.Windows.Markup.XamlReader.Parse(@"
+                <ControlTemplate TargetType=""Button"" xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation"">
+                    <Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""10"">
+                        <ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center"" Margin=""{TemplateBinding Padding}""/>
+                    </Border>
+                </ControlTemplate>");
+            return button;
+        }
+
+        private static void RefreshHistorySidebar()
+        {
+            if (_historySidebar == null || _historyListPanel == null) return;
+
+            _historyListPanel.Children.Clear();
+            if (_historyCountText != null)
+                _historyCountText.Text = _chatHistory.Count.ToString() + " 条";
+
+            if (_chatHistory.Count == 0)
+            {
+                _historyListPanel.Children.Add(new TextBlock
+                {
+                    Text = "暂无本地对话",
+                    Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)),
+                    FontSize = 12,
+                    Margin = new Thickness(2, 10, 2, 0)
+                });
+                UpdateHistorySidebarSelection();
+                return;
+            }
+
+            foreach (var conv in _chatHistory.OrderByDescending(c => c.UpdatedAtUtc).ThenByDescending(c => c.CreatedAtUtc))
+            {
+                var card = new Border
+                {
+                    Tag = conv.Id,
+                    Background = new SolidColorBrush(Color.FromRgb(23, 23, 23)),
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(40, 40, 40)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(12),
+                    Padding = new Thickness(11),
+                    Margin = new Thickness(0, 0, 0, 10),
+                    Cursor = Cursors.Hand,
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    MaxWidth = 292
+                };
+
+                var cardGrid = new Grid { HorizontalAlignment = HorizontalAlignment.Stretch };
+                cardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 0 });
+                cardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                var info = new StackPanel { Orientation = Orientation.Vertical };
+                info.Children.Add(new TextBlock
+                {
+                    Text = string.IsNullOrWhiteSpace(conv.Title) ? "新对话" : conv.Title,
+                    Foreground = new SolidColorBrush(Color.FromRgb(224, 224, 224)),
+                    FontSize = 13,
+                    FontWeight = FontWeights.Medium,
+                    TextWrapping = TextWrapping.Wrap
+                });
+                info.Children.Add(new TextBlock
+                {
+                    Text = GetConversationPreview(conv),
+                    Foreground = new SolidColorBrush(Color.FromRgb(128, 128, 128)),
+                    FontSize = 11,
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 5, 0, 0)
+                });
+                info.Children.Add(new TextBlock
+                {
+                    Text = FormatConversationTime(conv.UpdatedAtUtc),
+                    Foreground = new SolidColorBrush(Color.FromRgb(98, 98, 98)),
+                    FontSize = 10,
+                    Margin = new Thickness(0, 8, 0, 0)
+                });
+
+                Grid.SetColumn(info, 0);
+                cardGrid.Children.Add(info);
+
+                var actions = new StackPanel
+                {
+                    Orientation = Orientation.Vertical,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(8, 0, 0, 0)
+                };
+
+                var openBtn = CreateHistoryActionButton("打开");
+                openBtn.Margin = new Thickness(0, 0, 0, 6);
+                openBtn.Click += (s, e) => OpenHistoryConversation(conv.Id);
+
+                var deleteBtn = CreateHistoryActionButton("删除", true);
+                deleteBtn.Click += (s, e) => DeleteHistoryConversation(conv.Id);
+
+                actions.Children.Add(openBtn);
+                actions.Children.Add(deleteBtn);
+
+                Grid.SetColumn(actions, 1);
+                cardGrid.Children.Add(actions);
+
+                card.Child = cardGrid;
+                card.MouseLeftButtonUp += (s, e) =>
+                {
+                    if (e.Handled) return;
+                    OpenHistoryConversation(conv.Id);
+                };
+                _historyListPanel.Children.Add(card);
+            }
+
+            UpdateHistorySidebarSelection();
+        }
+
+        private static void SetHistorySidebarVisible(bool visible)
+        {
+            if (_historySidebar == null) return;
+            _isHistorySidebarVisible = visible;
+
+            if (visible)
+            {
+                _historySidebar.Visibility = Visibility.Visible;
+                _historySidebar.BeginAnimation(FrameworkElement.WidthProperty, null);
+                _historySidebar.Width = 320;
+                _historySidebar.Height = double.NaN;
+                _historySidebar.VerticalAlignment = VerticalAlignment.Stretch;
+                RefreshHistorySidebar();
+            }
+            else
+            {
+                _historySidebar.BeginAnimation(FrameworkElement.WidthProperty, null);
+                _historySidebar.Width = 0;
+                _historySidebar.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        private static void ToggleHistorySidebar()
+        {
+            SetHistorySidebarVisible(!_isHistorySidebarVisible);
+        }
+
         private static JObject BuildChatRequestBody(ProviderRuntimeSettings providerSettings, List<object> messagesToSend, object[] toolDefinitions)
         {
+            bool useStream = providerSettings?.Config?.ProviderId != null
+                && providerSettings.Config.ProviderId.Equals("custom", StringComparison.OrdinalIgnoreCase);
+
             var body = JObject.FromObject(new
             {
                 model = providerSettings.ModelName,
                 messages = messagesToSend,
-                stream = false,
+                stream = useStream,
                 temperature = 0.3
             });
 
@@ -1926,15 +2391,69 @@ namespace ADDGH
             return body;
         }
 
-        private static async Task<HttpResponseMessage> SendProviderRequestAsync(ProviderRuntimeSettings providerSettings, JObject requestBody, System.Threading.CancellationToken ct)
+        private static List<EndpointCandidate> BuildEndpointCandidates(string baseUrl)
         {
-            var request = new HttpRequestMessage(HttpMethod.Post, providerSettings.BaseUrl);
+            string raw = (baseUrl ?? "").Trim().TrimEnd('/');
+            if (string.IsNullOrWhiteSpace(raw))
+                raw = "https://api.openai.com/v1";
+
+            var candidates = new List<EndpointCandidate>();
+            Action<string, bool> add = (url, isFallback) =>
+            {
+                if (string.IsNullOrWhiteSpace(url)) return;
+                if (candidates.Any(c => string.Equals(c.Url, url, StringComparison.OrdinalIgnoreCase))) return;
+                candidates.Add(new EndpointCandidate { Url = url, IsFallback = isFallback });
+            };
+
+            if (raw.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
+            {
+                add(raw, false);
+                return candidates;
+            }
+
+            if (raw.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+            {
+                add(raw + "/chat/completions", false);
+                return candidates;
+            }
+
+            add(raw + "/v1/chat/completions", false);
+            add(raw + "/chat/completions", true);
+            return candidates;
+        }
+
+        private static bool ShouldTryNextEndpoint(HttpStatusCode statusCode)
+        {
+            int code = (int)statusCode;
+            return code == 404 || code == 405 || code == 415 || code == 422;
+        }
+
+        private static void ApplyBrowserLikeHeaders(HttpRequestMessage request, string url)
+        {
+            if (request == null || string.IsNullOrWhiteSpace(url)) return;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out Uri uri)) return;
+
+            request.Headers.TryAddWithoutValidation("Accept", "application/json");
+            request.Headers.TryAddWithoutValidation("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
+            request.Headers.TryAddWithoutValidation("Cache-Control", "no-cache");
+            request.Headers.TryAddWithoutValidation("Pragma", "no-cache");
+            request.Headers.TryAddWithoutValidation("DNT", "1");
+            request.Headers.TryAddWithoutValidation("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36");
+            request.Headers.TryAddWithoutValidation("Origin", uri.GetLeftPart(UriPartial.Authority));
+            request.Headers.TryAddWithoutValidation("Referer", uri.GetLeftPart(UriPartial.Authority) + "/");
+        }
+
+        private static async Task<HttpResponseMessage> SendProviderRequestAsync(ProviderRuntimeSettings providerSettings, JObject requestBody, string url, System.Threading.CancellationToken ct)
+        {
+            var request = new HttpRequestMessage(HttpMethod.Post, url);
             request.Headers.Add("Authorization", $"Bearer {providerSettings.ApiKey}");
+            if (providerSettings?.Config?.ProviderId == "custom")
+                ApplyBrowserLikeHeaders(request, url);
             request.Content = new StringContent(JsonConvert.SerializeObject(requestBody), Encoding.UTF8, "application/json");
             return await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         }
 
-        private static string BuildProviderDiagnostic(ProviderRuntimeSettings providerSettings, string headline, string detail = null)
+        private static string BuildProviderDiagnostic(ProviderRuntimeSettings providerSettings, string headline, string detail = null, string usedUrl = null)
         {
             var sb = new StringBuilder();
             if (!string.IsNullOrWhiteSpace(headline)) sb.AppendLine(headline.Trim());
@@ -1942,6 +2461,8 @@ namespace ADDGH
             sb.AppendLine("Provider: " + (providerSettings?.Config?.DisplayName ?? "(unknown)"));
             sb.AppendLine("Model: " + (providerSettings?.ModelName ?? "(empty)"));
             sb.AppendLine("Base URL: " + (providerSettings?.BaseUrl ?? "(empty)"));
+            if (!string.IsNullOrWhiteSpace(usedUrl))
+                sb.AppendLine("Endpoint: " + usedUrl.Trim());
 
             if (!string.IsNullOrWhiteSpace(detail))
             {
@@ -1952,12 +2473,169 @@ namespace ADDGH
             return sb.ToString().Trim();
         }
 
-        private static ApiResponse ReturnProviderError(ProviderRuntimeSettings providerSettings, string category, string headline, string detail = null)
+        private static ApiResponse ReturnProviderError(ProviderRuntimeSettings providerSettings, string category, string headline, string detail = null, string usedUrl = null)
         {
-            string diag = BuildProviderDiagnostic(providerSettings, headline, detail);
+            string diag = BuildProviderDiagnostic(providerSettings, headline, detail, usedUrl);
             AddGhLog.Warn(category + ": " + diag.Replace("\r", " ").Replace("\n", " | "));
             AppendQuietDiagnosticCard(category, diag);
             return new ApiResponse { Content = "Error: " + diag };
+        }
+
+        private static void MergeToolCallDeltas(Dictionary<int, JObject> toolCallsByIndex, JArray deltaToolCalls)
+        {
+            if (toolCallsByIndex == null || deltaToolCalls == null) return;
+
+            foreach (var token in deltaToolCalls)
+            {
+                var delta = token as JObject;
+                if (delta == null) continue;
+
+                int index = delta["index"]?.ToObject<int?>() ?? toolCallsByIndex.Count;
+                if (!toolCallsByIndex.TryGetValue(index, out JObject target))
+                {
+                    target = new JObject();
+                    toolCallsByIndex[index] = target;
+                }
+
+                if (delta["id"] != null) target["id"] = delta["id"];
+                if (delta["type"] != null) target["type"] = delta["type"];
+
+                var deltaFn = delta["function"] as JObject;
+                if (deltaFn == null) continue;
+
+                var fn = target["function"] as JObject;
+                if (fn == null)
+                {
+                    fn = new JObject();
+                    target["function"] = fn;
+                }
+
+                if (deltaFn["name"] != null) fn["name"] = deltaFn["name"];
+                if (deltaFn["arguments"] != null)
+                {
+                    string currentArgs = fn["arguments"]?.ToString() ?? "";
+                    fn["arguments"] = currentArgs + deltaFn["arguments"].ToString();
+                }
+            }
+        }
+
+        private static bool TryParseAssistantMessageFromResponse(string responseText, out JObject messageNode, out string parseError)
+        {
+            messageNode = null;
+            parseError = null;
+
+            if (string.IsNullOrWhiteSpace(responseText))
+            {
+                parseError = "响应内容为空。";
+                return false;
+            }
+
+            string trimmedStart = responseText.TrimStart();
+            if (trimmedStart.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                return TryParseAssistantMessageFromSse(responseText, out messageNode, out parseError);
+
+            try
+            {
+                var json = JObject.Parse(responseText);
+                var msg = json["choices"]?[0]?["message"] as JObject;
+                if (msg == null)
+                {
+                    parseError = "JSON 里缺少 choices[0].message。";
+                    return false;
+                }
+
+                messageNode = msg;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                parseError = ex.Message;
+                return false;
+            }
+        }
+
+        private static bool TryParseAssistantMessageFromSse(string responseText, out JObject messageNode, out string parseError)
+        {
+            messageNode = null;
+            parseError = null;
+
+            var content = new StringBuilder();
+            var reasoning = new StringBuilder();
+            var toolCallsByIndex = new Dictionary<int, JObject>();
+            bool sawAnyData = false;
+            bool sawFinalMessage = false;
+
+            string[] lines = responseText.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+            foreach (string rawLine in lines)
+            {
+                string line = rawLine.Trim();
+                if (string.IsNullOrEmpty(line)) continue;
+                if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) continue;
+
+                string payload = line.Substring(5).TrimStart();
+                if (string.IsNullOrWhiteSpace(payload) || string.Equals(payload, "[DONE]", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                sawAnyData = true;
+
+                JObject chunk;
+                try
+                {
+                    chunk = JObject.Parse(payload);
+                }
+                catch (Exception ex)
+                {
+                    parseError = "SSE chunk 不是有效 JSON：" + ex.Message;
+                    return false;
+                }
+
+                var choices = chunk["choices"] as JArray;
+                if (choices == null || choices.Count == 0) continue;
+
+                var choice0 = choices[0] as JObject;
+                if (choice0 == null) continue;
+
+                var message = choice0["message"] as JObject;
+                if (message != null)
+                {
+                    messageNode = message;
+                    sawFinalMessage = true;
+                    continue;
+                }
+
+                var delta = choice0["delta"] as JObject;
+                if (delta == null) continue;
+
+                string deltaContent = delta["content"]?.ToString();
+                if (!string.IsNullOrEmpty(deltaContent)) content.Append(deltaContent);
+
+                string deltaReasoning = delta["reasoning_content"]?.ToString();
+                if (!string.IsNullOrEmpty(deltaReasoning)) reasoning.Append(deltaReasoning);
+
+                MergeToolCallDeltas(toolCallsByIndex, delta["tool_calls"] as JArray);
+            }
+
+            if (sawFinalMessage)
+                return true;
+
+            if (content.Length > 0 || reasoning.Length > 0 || toolCallsByIndex.Count > 0)
+            {
+                var synthesized = new JObject { ["role"] = "assistant" };
+                if (content.Length > 0) synthesized["content"] = content.ToString();
+                if (reasoning.Length > 0) synthesized["reasoning_content"] = reasoning.ToString();
+                if (toolCallsByIndex.Count > 0)
+                {
+                    var toolCalls = new JArray();
+                    foreach (var kv in toolCallsByIndex.OrderBy(kv => kv.Key))
+                        toolCalls.Add(kv.Value);
+                    synthesized["tool_calls"] = toolCalls;
+                }
+                messageNode = synthesized;
+                return true;
+            }
+
+            parseError = sawAnyData ? "SSE 响应里没有可提取的 assistant 内容。" : "未找到任何 data: 事件。";
+            return false;
         }
 
         private static void TxtInput_OnPasting(object sender, DataObjectPastingEventArgs e)
@@ -2970,15 +3648,41 @@ namespace ADDGH
                         }
                     };
 
-                JObject requestBody = BuildChatRequestBody(providerSettings, messagesToSend, toolDefinitions);
-
                 ShowThinkingAnimation("载入中...");
                 DateTime startTime = DateTime.Now;
                 
                 HttpResponseMessage response;
+                string usedEndpoint = null;
+                string lastEndpointError = null;
                 try
                 {
-                    response = await SendProviderRequestAsync(providerSettings, requestBody, ct);
+                    response = null;
+                    foreach (var endpoint in BuildEndpointCandidates(providerSettings.BaseUrl))
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        usedEndpoint = endpoint.Url;
+                        JObject requestBody = BuildChatRequestBody(providerSettings, messagesToSend, toolDefinitions);
+                        AddGhLog.Info("Trying LLM endpoint: " + endpoint.Url + ", model=" + providerSettings.ModelName);
+
+                        response = await SendProviderRequestAsync(providerSettings, requestBody, endpoint.Url, ct);
+                        if (response.IsSuccessStatusCode)
+                            break;
+
+                        string errPreview = "";
+                        try { errPreview = await response.Content.ReadAsStringAsync(); }
+                        catch (Exception readEx) { errPreview = "无法读取错误响应体：" + readEx.Message; }
+
+                        lastEndpointError = "HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase + "\n" + ClampDiagDetail(errPreview, 900);
+                        AddGhLog.Warn("LLM endpoint failed: " + endpoint.Url + " | " + lastEndpointError.Replace("\r", " ").Replace("\n", " | "));
+
+                        if (!ShouldTryNextEndpoint(response.StatusCode))
+                        {
+                            return ReturnProviderError(providerSettings, "LLM 连接错误",
+                                "模型服务返回 HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase,
+                                errPreview,
+                                endpoint.Url);
+                        }
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -2988,17 +3692,18 @@ namespace ADDGH
                 {
                     return ReturnProviderError(providerSettings, "LLM 连接错误",
                         "请求未能发送到模型服务：" + ex.GetType().Name,
-                        ex.Message);
+                        ex.Message,
+                        usedEndpoint);
                 }
                 
                 ShowThinkingAnimation("思考中...");
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    string err = await response.Content.ReadAsStringAsync();
                     return ReturnProviderError(providerSettings, "LLM 连接错误",
                         "模型服务返回 HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase,
-                        err);
+                        lastEndpointError,
+                        usedEndpoint);
                 }
 
                 // 使用流读取以支持即时取消
@@ -3017,22 +3722,13 @@ namespace ADDGH
                 }
                 double durationSeconds = (DateTime.Now - startTime).TotalSeconds;
 
-                JObject json;
-                try
-                {
-                    json = JObject.Parse(responseJson);
-                }
-                catch (Exception ex)
+                if (!TryParseAssistantMessageFromResponse(responseJson, out JObject messageNode, out string parseError))
                 {
                     return ReturnProviderError(providerSettings, "LLM 响应错误",
-                        "模型服务返回的内容不是有效 JSON：" + ex.Message,
-                        responseJson);
+                        "模型服务返回的内容不是可解析的 OpenAI 聊天响应：" + parseError,
+                        responseJson,
+                        usedEndpoint);
                 }
-                var messageNode = json["choices"]?[0]?["message"];
-                if (messageNode == null)
-                    return ReturnProviderError(providerSettings, "LLM 响应错误",
-                        "模型服务返回的 JSON 不符合 OpenAI Chat Completions 结构：缺少 choices[0].message。",
-                        responseJson);
 
                 string fullContent = messageNode["content"]?.ToString() ?? "";
                 string fullReasoning = messageNode["reasoning_content"]?.ToString() ?? "";
@@ -3042,7 +3738,8 @@ namespace ADDGH
                 {
                     return ReturnProviderError(providerSettings, "LLM 响应错误",
                         "模型服务返回成功，但消息内容、思考内容和工具调用都为空。",
-                        responseJson);
+                        responseJson,
+                        usedEndpoint);
                 }
 
                 bool isSandboxOperation = false;
@@ -3212,6 +3909,7 @@ namespace ADDGH
                                 {
                                     _messages.Add(new { role = "tool", tool_call_id = callId, name = funcName, content = toolResult });
                                     EnforceChatHistoryLimit();
+                                    SyncActiveHistoryConversation();
                                     return new ApiResponse { Content = fullContent, Reasoning = fullReasoning };
                                 }
                             }
@@ -3235,10 +3933,12 @@ namespace ADDGH
                         AppendColoredStatsMessage(addComp, delComp, addConn, delConn);
                     }
 
+                    SyncActiveHistoryConversation();
                     ct.ThrowIfCancellationRequested();
                     return await CallLLMAPI(apiKey, depth + 1, ct);
                 }
 
+                SyncActiveHistoryConversation();
                 return new ApiResponse { 
                     Content = fullContent, 
                     Reasoning = fullReasoning 
@@ -5355,7 +6055,7 @@ namespace ADDGH
                     Padding = new Thickness(10)
                 };
 
-                var content = BuildMarkdownPanel(text);
+                var content = BuildMarkdownPanel(text, false, true);
                 content.MaxHeight = 150;
                 content.Margin = new Thickness(0, 0, 0, 8);
                 bubble.Child = content;
@@ -5402,7 +6102,10 @@ namespace ADDGH
         private static void AppendBubble(string text, bool isUser, bool showHeader = true)
         {
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
-                var container = new StackPanel { Margin = new Thickness(0, 0, 0, 20), HorizontalAlignment = isUser ? HorizontalAlignment.Right : HorizontalAlignment.Left };
+                var container = new StackPanel {
+                    Margin = new Thickness(0, 0, 0, 20),
+                    HorizontalAlignment = isUser ? HorizontalAlignment.Right : HorizontalAlignment.Left
+                };
                 
                 if (showHeader && isUser)
                 {
@@ -5419,10 +6122,11 @@ namespace ADDGH
 
                 var bubble = new Border {
                     Padding = new Thickness(0, 5, 0, 10),
-                    MaxWidth = 380
+                    MaxWidth = 380,
+                    HorizontalAlignment = isUser ? HorizontalAlignment.Right : HorizontalAlignment.Left
                 };
 
-                bubble.Child = BuildMarkdownPanel(text);
+                bubble.Child = BuildMarkdownPanel(text, isUser);
                 container.Children.Add(bubble);
                 if (_thinkingBubble != null) {
                     _chatPanel.Children.Remove(_thinkingBubble);
@@ -5441,7 +6145,10 @@ namespace ADDGH
         private static void AppendUserMessageWithAttachments(string text, List<AttachmentItem> attachments)
         {
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
-                var container = new StackPanel { Margin = new Thickness(0, 0, 0, 20), HorizontalAlignment = HorizontalAlignment.Right };
+                var container = new StackPanel {
+                    Margin = new Thickness(0, 0, 0, 20),
+                    HorizontalAlignment = HorizontalAlignment.Right
+                };
 
                 container.Children.Add(new TextBlock
                 {
@@ -5453,11 +6160,15 @@ namespace ADDGH
                     HorizontalAlignment = HorizontalAlignment.Right
                 });
 
-                var bubbleContent = new StackPanel { HorizontalAlignment = HorizontalAlignment.Right };
+                var bubbleContent = new StackPanel { HorizontalAlignment = HorizontalAlignment.Right, MaxWidth = 380 };
                 if (!string.IsNullOrWhiteSpace(text))
                 {
-                    var bubble = new Border { Padding = new Thickness(0, 5, 0, 10), MaxWidth = 380 };
-                    bubble.Child = BuildMarkdownPanel(text);
+                    var bubble = new Border {
+                        Padding = new Thickness(0, 5, 0, 10),
+                        MaxWidth = 380,
+                        HorizontalAlignment = HorizontalAlignment.Right
+                    };
+                    bubble.Child = BuildMarkdownPanel(text, true);
                     bubbleContent.Children.Add(bubble);
                 }
 
@@ -5503,18 +6214,18 @@ namespace ADDGH
                 headerGrid.Children.Add(headerText);
                 headerGrid.Children.Add(toggleIcon);
 
-                var logPanel = new StackPanel { Margin = new Thickness(24, 4, 0, 0), Visibility = Visibility.Collapsed };
+                var logPanel = new StackPanel { Margin = new Thickness(22, 4, 0, 0), Visibility = Visibility.Collapsed };
                 
                 var contentBorder = new Border {
-                    Background = new SolidColorBrush(Color.FromRgb(25, 25, 25)),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(45, 45, 45)),
+                    Background = new SolidColorBrush(Color.FromRgb(22, 22, 22)),
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(38, 38, 38)),
                     BorderThickness = new Thickness(1),
                     CornerRadius = new CornerRadius(8),
-                    Padding = new Thickness(12)
+                    Padding = new Thickness(10)
                 };
 
-                var content = BuildMarkdownPanel(text);
-                content.MaxHeight = 300;
+                var content = BuildMarkdownPanel(text, false, true);
+                content.MaxHeight = 260;
                 contentBorder.Child = content;
                 logPanel.Children.Add(contentBorder);
 
@@ -5673,14 +6384,21 @@ namespace ADDGH
             return true;
         }
 
-        private static RichTextBox BuildMarkdownPanel(string text)
+        private static RichTextBox BuildMarkdownPanel(string text, bool alignRight = false, bool subdued = false)
         {
+            Color bodyColor = subdued ? Color.FromRgb(205, 205, 205) : Color.FromRgb(235, 235, 235);
+            Color codeBodyColor = subdued ? Color.FromRgb(220, 220, 220) : Color.FromRgb(230, 230, 230);
+            Color codeHeaderColor = subdued ? Color.FromRgb(190, 190, 190) : Color.FromRgb(224, 224, 224);
+            Color codeGutterColor = subdued ? Color.FromRgb(88, 88, 88) : Color.FromRgb(100, 100, 100);
+            double bodyFontSize = subdued ? 12 : 14;
+            double bodyLineHeight = subdued ? 19 : 22;
+
             var doc = new FlowDocument {
                 PagePadding = new Thickness(0),
                 Background = Brushes.Transparent,
                 FontFamily = new FontFamily("Segoe UI, Microsoft YaHei UI"),
-                FontSize = 14,
-                TextAlignment = TextAlignment.Left
+                FontSize = bodyFontSize,
+                TextAlignment = alignRight ? TextAlignment.Right : TextAlignment.Left
             };
 
             var viewer = new RichTextBox {
@@ -5688,7 +6406,7 @@ namespace ADDGH
                 IsReadOnly = true,
                 BorderThickness = new Thickness(0),
                 Background = Brushes.Transparent,
-                Foreground = new SolidColorBrush(Color.FromRgb(235, 235, 235)),
+                Foreground = new SolidColorBrush(bodyColor),
                 Padding = new Thickness(0),
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
@@ -5708,8 +6426,8 @@ namespace ADDGH
                 string langDisplay = string.IsNullOrWhiteSpace(codeLang) ? "CODE" : codeLang.ToUpperInvariant();
                 var header = new TextBlock {
                     Text = langDisplay,
-                    Foreground = new SolidColorBrush(Color.FromRgb(224, 224, 224)),
-                    FontSize = 12,
+                    Foreground = new SolidColorBrush(codeHeaderColor),
+                    FontSize = subdued ? 11 : 12,
                     FontWeight = FontWeights.SemiBold,
                     Margin = new Thickness(0, 0, 0, 8)
                 };
@@ -5725,8 +6443,8 @@ namespace ADDGH
                 var lineNumColumn = new TextBlock {
                     Text = lineNumText,
                     FontFamily = new FontFamily("Consolas, Courier New"),
-                    FontSize = 12,
-                    Foreground = new SolidColorBrush(Color.FromRgb(100, 100, 100)),
+                    FontSize = subdued ? 11 : 12,
+                    Foreground = new SolidColorBrush(codeGutterColor),
                     TextAlignment = TextAlignment.Right,
                     VerticalAlignment = VerticalAlignment.Top,
                     Margin = new Thickness(0, 3, 12, 0)
@@ -5738,8 +6456,8 @@ namespace ADDGH
                     TextWrapping = TextWrapping.NoWrap,
                     AcceptsReturn = true,
                     FontFamily = new FontFamily("Consolas, Courier New"),
-                    FontSize = 12,
-                    Foreground = new SolidColorBrush(Color.FromRgb(230, 230, 230)),
+                    FontSize = subdued ? 11 : 12,
+                    Foreground = new SolidColorBrush(codeBodyColor),
                     Background = Brushes.Transparent,
                     BorderThickness = new Thickness(0),
                     Padding = new Thickness(0, 3, 0, 0),
@@ -5812,36 +6530,40 @@ namespace ADDGH
                 }
 
                 var paragraph = new Paragraph {
-                    Foreground = new SolidColorBrush(Color.FromRgb(235, 235, 235)),
-                    FontSize = 14,
-                    LineHeight = 22,
-                    Margin = new Thickness(0, 2, 0, 2)
+                    Foreground = new SolidColorBrush(bodyColor),
+                    FontSize = bodyFontSize,
+                    LineHeight = bodyLineHeight,
+                    Margin = new Thickness(0, 2, 0, 2),
+                    TextAlignment = alignRight ? TextAlignment.Right : TextAlignment.Left
                 };
 
                 if (trimmed.StartsWith("### ")) {
                     paragraph.FontSize = 15;
                     paragraph.FontWeight = FontWeights.SemiBold;
-                    paragraph.Foreground = new SolidColorBrush(Color.FromRgb(255, 220, 150));
+                    paragraph.Foreground = new SolidColorBrush(subdued ? Color.FromRgb(205, 205, 205) : Color.FromRgb(255, 220, 150));
+                    paragraph.TextAlignment = alignRight ? TextAlignment.Right : TextAlignment.Left;
                     AppendMarkdownInlines(paragraph.Inlines, trimmed.Substring(4));
                 } else if (trimmed.StartsWith("## ")) {
-                    paragraph.FontSize = 16;
+                    paragraph.FontSize = subdued ? 13 : 16;
                     paragraph.FontWeight = FontWeights.SemiBold;
-                    paragraph.Foreground = new SolidColorBrush(Color.FromRgb(255, 220, 150));
+                    paragraph.Foreground = new SolidColorBrush(subdued ? Color.FromRgb(205, 205, 205) : Color.FromRgb(255, 220, 150));
                     paragraph.Margin = new Thickness(0, 8, 0, 4);
+                    paragraph.TextAlignment = alignRight ? TextAlignment.Right : TextAlignment.Left;
                     AppendMarkdownInlines(paragraph.Inlines, trimmed.Substring(3));
                 } else if (trimmed.StartsWith("# ")) {
-                    paragraph.FontSize = 17;
+                    paragraph.FontSize = subdued ? 14 : 17;
                     paragraph.FontWeight = FontWeights.Bold;
-                    paragraph.Foreground = new SolidColorBrush(Color.FromRgb(255, 220, 150));
+                    paragraph.Foreground = new SolidColorBrush(subdued ? Color.FromRgb(205, 205, 205) : Color.FromRgb(255, 220, 150));
                     paragraph.Margin = new Thickness(0, 8, 0, 4);
+                    paragraph.TextAlignment = alignRight ? TextAlignment.Right : TextAlignment.Left;
                     AppendMarkdownInlines(paragraph.Inlines, trimmed.Substring(2));
                 } else if (trimmed.StartsWith("- ") || trimmed.StartsWith("* ")) {
-                    paragraph.Inlines.Add(new Run("• ") { Foreground = new SolidColorBrush(Color.FromRgb(255, 200, 100)) });
+                    paragraph.Inlines.Add(new Run("• ") { Foreground = new SolidColorBrush(subdued ? Color.FromRgb(170, 170, 170) : Color.FromRgb(255, 200, 100)) });
                     AppendMarkdownInlines(paragraph.Inlines, trimmed.Substring(2));
                 } else if (trimmed.StartsWith("> ")) {
-                    paragraph.Foreground = new SolidColorBrush(Color.FromRgb(190, 190, 190));
+                    paragraph.Foreground = new SolidColorBrush(subdued ? Color.FromRgb(175, 175, 175) : Color.FromRgb(190, 190, 190));
                     paragraph.Margin = new Thickness(10, 4, 0, 4);
-                    paragraph.Inlines.Add(new Run("│ ") { Foreground = new SolidColorBrush(Color.FromRgb(70, 70, 70)) });
+                    paragraph.Inlines.Add(new Run("│ ") { Foreground = new SolidColorBrush(subdued ? Color.FromRgb(75, 75, 75) : Color.FromRgb(70, 70, 70)) });
                     AppendMarkdownInlines(paragraph.Inlines, trimmed.Substring(2));
                 } else {
                     AppendMarkdownInlines(paragraph.Inlines, line);
@@ -6348,6 +7070,8 @@ namespace ADDGH
 
             _messages.Add(new { role = "user", content = actualPrompt });
             AppendBubble(displayText, true);
+
+            SyncActiveHistoryConversation(string.IsNullOrWhiteSpace(displayText) ? actualPrompt : displayText);
 
             EnforceChatHistoryLimit();
 
