@@ -3,6 +3,8 @@ name: Grasshopper 脚本类电池
 description: 如何用 ADDGH 工具按名称添加脚本/表达式电池（必要时再用 GUID），并写入代码；以当前 Rhino 中的组件库为准。
 ---
 
+**阶段关系**：是否在方案中使用脚本/公式类电池，应在**阶段二（电池调用思考）**拍板；**阶段三**再放置电池并写入代码（`set_gh_component_value` 等）。无论任务是否复杂，均须遵守下方「非必要不要用」。
+
 ## 何时才需要（非必要不要用）
 
 - **简单任务**（常规几何、连线、Slider/Panel、标准电池能表达的运算）：**不要**调用 `search_gh_component_catalog`，**不要**为「保险」先搜 C#/Script/Python；用 `search_component_library` + `add_gh_component` / `create_component_graph` 等即可。

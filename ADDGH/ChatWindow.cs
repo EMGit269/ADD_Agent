@@ -13,6 +13,7 @@ using System.Net.Http;
 using System.IO;
 using System.IO.Compression;
 using System.Windows.Media.Imaging;
+using WpfPath = System.Windows.Shapes.Path;
 using System.Xml.Linq;
 using System.Text.RegularExpressions;
 using System.Reflection;
@@ -32,6 +33,8 @@ namespace ADDGH
         private static ScrollViewer _chatScroll;
         private static TextBox _txtInput;
         private static Button _btnSend;
+        private static Grid _contextMeterHost;
+        private static WpfPath _contextRingProgress;
         private static System.Windows.Threading.DispatcherTimer _scrollHideTimer;
         
         private static Grid _settingsOverlay;
@@ -119,6 +122,7 @@ namespace ADDGH
         private static void EnforceChatHistoryLimit()
         {
             ChatMessageHelpers.TrimMessageHistory(_messages, DeploymentOptions.MaxPersistedChatMessages);
+            RefreshContextMeter();
         }
 
         /// <summary>Rhino/GH 退出或聊天窗口关闭时取消进行中的请求并释放计时器等资源。</summary>
@@ -607,6 +611,7 @@ namespace ADDGH
                                 <ColumnDefinition Width=""Auto""/>
                                 <ColumnDefinition Width=""*""/>
                                 <ColumnDefinition Width=""Auto""/>
+                                <ColumnDefinition Width=""Auto""/>
                             </Grid.ColumnDefinitions>
                             
                             <Button x:Name=""BtnUploadImage"" Grid.Column=""0"" Style=""{StaticResource IconButtonStyle}"" Content=""+"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""22"" FontWeight=""Medium"" Cursor=""Hand"" ToolTip=""上传图片或文件"" Margin=""0,0,10,0""/>
@@ -650,11 +655,16 @@ namespace ADDGH
                                 </Button.ContextMenu>
                             </Button>
                             
-                            <Button x:Name=""BtnSend"" Grid.Column=""6"" Content=""➤"" Foreground=""Black"" FontSize=""18"" Margin=""0"" Width=""36"" Height=""36"" Cursor=""Hand"" VerticalAlignment=""Center"">
+                            <Grid x:Name=""ContextMeterHost"" Grid.Column=""6"" Width=""17"" Height=""17"" Margin=""0,0,10,0"" VerticalAlignment=""Center"" ToolTip=""上下文使用情况"">
+                                <Ellipse Stroke=""#4A4A4A"" StrokeThickness=""1.3"" Fill=""Transparent""/>
+                                <Path x:Name=""ContextRingProgress"" Stroke=""#D8D8D8"" StrokeThickness=""1.3"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" Fill=""Transparent""/>
+                            </Grid>
+
+                            <Button x:Name=""BtnSend"" Grid.Column=""7"" Content=""➤"" Foreground=""Black"" FontSize=""11"" Margin=""0"" Width=""22"" Height=""22"" Cursor=""Hand"" VerticalAlignment=""Center"">
                                 <Button.Template>
                                     <ControlTemplate TargetType=""Button"">
-                                        <Border x:Name=""bg"" Background=""White"" CornerRadius=""18"">
-                                        <ContentPresenter x:Name=""cp"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"" Margin=""2,0,0,0""/>
+                                        <Border x:Name=""bg"" Background=""White"" CornerRadius=""11"">
+                                        <ContentPresenter x:Name=""cp"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"" Margin=""0""/>
                                         </Border>
                                         
                                     </ControlTemplate>
@@ -808,6 +818,8 @@ namespace ADDGH
             _chatScroll = (ScrollViewer)_window.FindName("ChatScroll");
             _txtInput = (TextBox)_window.FindName("TxtInput");
             _btnSend = (Button)_window.FindName("BtnSend");
+            _contextMeterHost = (Grid)_window.FindName("ContextMeterHost");
+            _contextRingProgress = (WpfPath)_window.FindName("ContextRingProgress");
             
             var btnContinue = (Button)_window.FindName("BtnContinue");
             if (btnContinue != null) {
@@ -976,6 +988,7 @@ namespace ADDGH
                     _cachedCanvasState = null;
                     _canvasChanged = true;
                 AppendSystemMessage("新对话已开启，历史已清空。");
+                RefreshContextMeter();
             };
             }
 
@@ -1072,6 +1085,7 @@ namespace ADDGH
                 var helper = new System.Windows.Interop.WindowInteropHelper(_window);
                 helper.Owner = Rhino.RhinoApp.MainWindowHandle();
             _window.Show();
+            RefreshContextMeter();
             } catch (Exception ex) {
                 System.Windows.Forms.MessageBox.Show("显示窗口时报错: " + ex.ToString());
             }
@@ -1441,8 +1455,8 @@ namespace ADDGH
         private static Border CreateStopSendGlyph()
         {
             var square = new Border {
-                Width = 11,
-                Height = 11,
+                Width = 7,
+                Height = 7,
                 CornerRadius = new CornerRadius(1),
                 Background = Brushes.Black,
                 SnapsToDevicePixels = true,
@@ -1458,7 +1472,7 @@ namespace ADDGH
             if (_btnSend == null) return;
             _btnSend.Content = CreateStopSendGlyph();
             var bg = _btnSend.Template.FindName("bg", _btnSend) as Border;
-            if (bg != null) bg.CornerRadius = new CornerRadius(8);
+            if (bg != null) bg.CornerRadius = new CornerRadius(11);
             var cp = _btnSend.Template.FindName("cp", _btnSend) as ContentPresenter;
             if (cp != null) cp.Margin = new Thickness(0);
         }
@@ -1468,9 +1482,94 @@ namespace ADDGH
             if (_btnSend == null) return;
             _btnSend.Content = "➤";
             var bg = _btnSend.Template.FindName("bg", _btnSend) as Border;
-            if (bg != null) bg.CornerRadius = new CornerRadius(18);
+            if (bg != null) bg.CornerRadius = new CornerRadius(11);
             var cp = _btnSend.Template.FindName("cp", _btnSend) as ContentPresenter;
-            if (cp != null) cp.Margin = new Thickness(2, 0, 0, 0);
+            if (cp != null) cp.Margin = new Thickness(0);
+        }
+
+        private static void ApplyMechanicalContextCompressionIfNeeded()
+        {
+            try
+            {
+                if (_messages == null || _messages.Count == 0) return;
+                int projected = ChatMessageHelpers.EstimateProjectedMessageListTokens(_messages);
+                int trigger = (int)Math.Round(DeploymentOptions.ContextBudgetTokens * DeploymentOptions.ContextCompressTriggerRatio);
+                if (projected < trigger) return;
+                ChatMessageHelpers.ApplyMechanicalContextReductionInPlace(_messages);
+                ChatMessageHelpers.TrimMessageHistory(_messages, DeploymentOptions.MaxPersistedChatMessages);
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("ApplyMechanicalContextCompressionIfNeeded: " + ex.Message);
+            }
+        }
+
+        private static Geometry BuildContextArcGeometry(double ratio, double size, double strokeThickness)
+        {
+            ratio = Math.Max(0, Math.Min(1, ratio));
+            if (ratio <= 0) return Geometry.Empty;
+
+            double radius = Math.Max(0.1, (size - strokeThickness) / 2.0);
+            Point center = new Point(size / 2.0, size / 2.0);
+            Point start = new Point(center.X, center.Y - radius);
+
+            if (ratio >= 0.999)
+            {
+                return new EllipseGeometry(center, radius, radius);
+            }
+
+            double angle = (Math.PI * 2.0 * ratio) - (Math.PI / 2.0);
+            Point end = new Point(
+                center.X + (radius * Math.Cos(angle)),
+                center.Y + (radius * Math.Sin(angle)));
+
+            var figure = new PathFigure { StartPoint = start, IsClosed = false, IsFilled = false };
+            figure.Segments.Add(new ArcSegment
+            {
+                Point = end,
+                Size = new Size(radius, radius),
+                SweepDirection = SweepDirection.Clockwise,
+                IsLargeArc = ratio >= 0.5
+            });
+
+            var geometry = new PathGeometry();
+            geometry.Figures.Add(figure);
+            return geometry;
+        }
+
+        private static void RefreshContextMeter()
+        {
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                if (_contextMeterHost == null || _contextRingProgress == null) return;
+
+                int projected = 0;
+                double ratio = 0;
+                try
+                {
+                    projected = ChatMessageHelpers.EstimateProjectedMessageListTokens(_messages);
+                    ratio = DeploymentOptions.ContextBudgetTokens <= 0
+                        ? 0
+                        : Math.Max(0, Math.Min(1, (double)projected / DeploymentOptions.ContextBudgetTokens));
+                }
+                catch (Exception ex)
+                {
+                    AddGhLog.Debug("RefreshContextMeter estimate: " + ex.Message);
+                }
+
+                double size = _contextMeterHost.Width > 0 ? _contextMeterHost.Width : Math.Max(17, _contextMeterHost.ActualWidth);
+                double stroke = _contextRingProgress.StrokeThickness > 0 ? _contextRingProgress.StrokeThickness : 1.3;
+                _contextRingProgress.Data = BuildContextArcGeometry(ratio, size, stroke);
+
+                Color color = ratio >= 0.9
+                    ? Color.FromRgb(231, 76, 60)
+                    : ratio >= 0.72
+                        ? Color.FromRgb(230, 184, 92)
+                        : Color.FromRgb(216, 216, 216);
+                _contextRingProgress.Stroke = new SolidColorBrush(color);
+                _contextRingProgress.Visibility = ratio <= 0.001 ? Visibility.Collapsed : Visibility.Visible;
+                _contextMeterHost.ToolTip = $"上下文约 {Math.Round(ratio * 100)}% ({projected}/{DeploymentOptions.ContextBudgetTokens})";
+            }));
         }
 
         private static async void BtnSend_Click(object sender, RoutedEventArgs e)
@@ -2427,7 +2526,9 @@ namespace ADDGH
                 return new ApiResponse { Content = $"Error: 请先配置 {providerSettings.Config.DisplayName} 的 API Key。" };
             }
 
-            var messagesToSend = ChatMessageHelpers.CompressMessages(_messages);
+            ApplyMechanicalContextCompressionIfNeeded();
+            RefreshContextMeter();
+            var messagesToSend = ChatMessageHelpers.ProjectMessagesForSend(_messages);
 
                     object[] toolDefinitions = new object[]
                     {
@@ -5156,6 +5257,7 @@ namespace ADDGH
                             AppendBubble(content, false, false); 
                     }
                 }
+                RefreshContextMeter();
             }));
         }
 
@@ -5173,12 +5275,6 @@ namespace ADDGH
                 };
                 container.Children.Add(header);
 
-                var scroll = new ScrollViewer {
-                    MaxHeight = 150,
-                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                    Margin = new Thickness(0, 0, 0, 8)
-                };
-
                 var bubble = new Border {
                     Background = new SolidColorBrush(Color.FromRgb(30, 30, 30)),
                     BorderBrush = new SolidColorBrush(Color.FromRgb(255, 165, 0)),
@@ -5187,6 +5283,12 @@ namespace ADDGH
                     Padding = new Thickness(10)
                 };
 
+                var scroll = new ScrollViewer {
+                    MaxHeight = 150,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    Margin = new Thickness(0, 0, 0, 8),
+                    Content = bubble
+                };
                 var tb = new TextBlock { 
                     Foreground = new SolidColorBrush(Color.FromRgb(200, 200, 200)), 
                     TextWrapping = TextWrapping.Wrap, 
@@ -5195,7 +5297,6 @@ namespace ADDGH
                 };
                 ParseMarkdown(tb, text);
                 bubble.Child = tb;
-                scroll.Content = bubble;
                 container.Children.Add(scroll);
 
                 var btnApply = new Button {

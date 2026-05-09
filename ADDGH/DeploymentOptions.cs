@@ -26,8 +26,44 @@ namespace ADDGH
             string.Equals(Environment.GetEnvironmentVariable("ADDGH_ERROR_POPUP"), "1", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
-        /// 会话内存中保留的最大消息条数（含 system / user / assistant / tool）；超出则从紧邻 system 前缀之后丢弃最早条目。
+        /// 会话内存中保留的最大消息条数（含 system / user / assistant / tool）；超出则从紧邻 system 与滚动摘要之后按「消息组」丢弃最早条目。
         /// </summary>
         public const int MaxPersistedChatMessages = 320;
+
+        /// <summary>Tier1 滚动摘要 assistant 消息内容固定前缀（整段替换）。</summary>
+        public const string RollingSummaryHeader = "【上文摘要（为节省上下文自动生成）】\n";
+
+        /// <summary>用于估算「是否触发压缩」的全局预算（近似 token，启发式）。</summary>
+        public const int ContextBudgetTokens = 128000;
+
+        /// <summary>达到预算的该比例时尝试 LLM 摘要（预留 headroom 给摘要请求与回复）。</summary>
+        public const double ContextCompressTriggerRatio = 0.72;
+
+        /// <summary>摘要后 Tier2 尾部保留的完整消息条数。</summary>
+        public const int ContextVerbatimTailCount = 16;
+
+        /// <summary>喂给摘要模型的拼接文本上限（字符），超出截断。</summary>
+        public const int SummaryRequestMaxChars = 48000;
+
+        /// <summary>软预算：仅用于计量 UI 与日志，硬限制仍以 <see cref="ContextBudgetTokens"/> 为主。</summary>
+        public const int Tier0SoftBudgetTokens = 8000;
+        public const int Tier1SoftBudgetTokens = 6000;
+        public const int Tier2SoftBudgetTokens = 110000;
+
+        /// <summary>超过该字符长度的 tool content 在机械降载时可被折叠（保留每种 tool 名最后一次大体量结果）。</summary>
+        public const int LargeToolFoldMinChars = 10000;
+
+        /// <summary>画布导出 JSON 是否带时间戳；默认关闭以利于云端前缀缓存稳定。环境变量 ADDGH_CANVAS_TIMESTAMP=1 时开启。</summary>
+        public static bool IncludeCanvasExportTimestamp =>
+            string.Equals(Environment.GetEnvironmentVariable("ADDGH_CANVAS_TIMESTAMP"), "1", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>Tier0 首条 system 中「电池全名索引」段落的最大字符数（含小节标题）；超出截断以利于网关与上下文上限。</summary>
+        public const int ComponentLibraryNameIndexMaxChars = 450_000;
+
+        /// <summary>
+        /// 设为 "1" 时仍将技能摘要并入首条 system；默认拆成紧随其后的第二条 system，利于前缀缓存不因技能摘要变动整段失效。
+        /// </summary>
+        public static bool MergeSkillsIntoSameSystemPromptAsLibraryIndex =>
+            string.Equals(Environment.GetEnvironmentVariable("ADDGH_MERGE_TIER0_SYSTEM"), "1", StringComparison.OrdinalIgnoreCase);
     }
 }
