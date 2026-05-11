@@ -88,9 +88,9 @@ namespace ADDGH
 
 【建模逻辑】
 1. 先对齐用户需求与约束，再落到具体步骤：数据流、关键电池、风险点；再动手改画布。
-2. 风险等级（决定是否开启 is_sandbox，对用户说明时用下文用语，勿直说参数名）：
-   - 🔴 高风险（必开）：删除 8 个以上电池、重构主干逻辑、连接可能引发长时间计算的组件（如复杂网格/物理模拟）。
-   - 🟡 中风险（自主判定）：添加 5-8 个电池的功能分支、修改密集型交叉连线、替换现有逻辑块。
+2. 风险等级：高风险操作需先用文字说明影响范围和关键风险；明确用户意图后再执行。
+   - 🔴 高风险：删除 8 个以上电池、重构主干逻辑、连接可能引发长时间计算的组件（如复杂网格/物理模拟）。
+   - 🟡 中风险：添加 5-8 个电池的功能分支、修改密集型交叉连线、替换现有逻辑块。
    - 🟢 低风险（直接操作）：修改 Slider/Panel 数值、添加单个辅助电池、电池对齐或整理分组。
 3. 命名：Number Slider 必须设 label；普通电池严禁改 label。
 4. 最终回复用结构化 Markdown（短标题、列表、重点加粗）；代码/JSON/表达式/关键参数放在 ``` 代码块中，勿把大段技术内容堆在普通段落里。
@@ -105,7 +105,7 @@ namespace ADDGH
 6. 优先批量、直接行动。
 
 【对用户表达】
-严禁对用户说「沙箱」「is_sandbox」「工具」等；实验区改称「非破坏性实验方案」或「逻辑草案」。";
+对用户表达要直接说明改动内容、影响范围和需要确认的风险点，避免暴露内部函数名或 API 名。";
 
         private static List<object> _messages = new List<object>();
         private static string _cachedCanvasState = null;  // 画布状态缓存
@@ -115,6 +115,15 @@ namespace ADDGH
 
         static ChatWindow()
         {
+            try
+            {
+                ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("Enable TLS 1.2 failed: " + ex.Message);
+            }
+
             AppDomain.CurrentDomain.ProcessExit += (_, __) =>
             {
                 try
@@ -2365,13 +2374,13 @@ namespace ADDGH
             bool useStream = providerSettings?.Config?.ProviderId != null
                 && providerSettings.Config.ProviderId.Equals("custom", StringComparison.OrdinalIgnoreCase);
 
-            var body = JObject.FromObject(new
+            var body = new JObject
             {
-                model = providerSettings.ModelName,
-                messages = messagesToSend,
-                stream = useStream,
-                temperature = 0.3
-            });
+                ["model"] = providerSettings.ModelName,
+                ["messages"] = BuildOutboundMessagesForRequest(messagesToSend),
+                ["stream"] = useStream,
+                ["temperature"] = 0.3
+            };
 
             if (providerSettings.Config.SupportsTools)
             {
@@ -2389,6 +2398,38 @@ namespace ADDGH
             }
 
             return body;
+        }
+
+        private static JArray BuildOutboundMessagesForRequest(List<object> messagesToSend)
+        {
+            var result = new JArray();
+            if (messagesToSend == null) return result;
+
+            foreach (var msg in messagesToSend)
+            {
+                JObject jo;
+                if (msg is JObject existing)
+                    jo = (JObject)existing.DeepClone();
+                else if (msg is JToken token && token.Type == JTokenType.Object)
+                    jo = (JObject)token.DeepClone();
+                else
+                    jo = JObject.FromObject(msg);
+
+                string role = jo["role"]?.ToString();
+                if (string.Equals(role, "tool", StringComparison.OrdinalIgnoreCase))
+                {
+                    jo.Remove("name");
+                }
+                else if (string.Equals(role, "assistant", StringComparison.OrdinalIgnoreCase) && jo["tool_calls"] != null)
+                {
+                    if (jo["content"] == null || jo["content"].Type == JTokenType.Null)
+                        jo["content"] = "";
+                }
+
+                result.Add(jo);
+            }
+
+            return result;
         }
 
         private static List<EndpointCandidate> BuildEndpointCandidates(string baseUrl)
@@ -2428,12 +2469,12 @@ namespace ADDGH
             return code == 404 || code == 405 || code == 415 || code == 422;
         }
 
-        private static void ApplyBrowserLikeHeaders(HttpRequestMessage request, string url)
+        private static void ApplyBrowserLikeHeaders(HttpRequestMessage request, string url, bool wantsStream)
         {
             if (request == null || string.IsNullOrWhiteSpace(url)) return;
             if (!Uri.TryCreate(url, UriKind.Absolute, out Uri uri)) return;
 
-            request.Headers.TryAddWithoutValidation("Accept", "application/json");
+            request.Headers.TryAddWithoutValidation("Accept", wantsStream ? "text/event-stream" : "application/json");
             request.Headers.TryAddWithoutValidation("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
             request.Headers.TryAddWithoutValidation("Cache-Control", "no-cache");
             request.Headers.TryAddWithoutValidation("Pragma", "no-cache");
@@ -2448,7 +2489,7 @@ namespace ADDGH
             var request = new HttpRequestMessage(HttpMethod.Post, url);
             request.Headers.Add("Authorization", $"Bearer {providerSettings.ApiKey}");
             if (providerSettings?.Config?.ProviderId == "custom")
-                ApplyBrowserLikeHeaders(request, url);
+                ApplyBrowserLikeHeaders(request, url, requestBody?["stream"]?.ToObject<bool>() ?? false);
             request.Content = new StringContent(JsonConvert.SerializeObject(requestBody), Encoding.UTF8, "application/json");
             return await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         }
@@ -2481,6 +2522,19 @@ namespace ADDGH
             return new ApiResponse { Content = "Error: " + diag };
         }
 
+        private static string FormatExceptionChain(Exception ex)
+        {
+            if (ex == null) return "";
+            var sb = new StringBuilder();
+            int depth = 0;
+            for (Exception cur = ex; cur != null && depth < 6; cur = cur.InnerException, depth++)
+            {
+                if (depth > 0) sb.AppendLine();
+                sb.Append(cur.GetType().Name).Append(": ").Append(cur.Message);
+            }
+            return sb.ToString();
+        }
+
         private static void MergeToolCallDeltas(Dictionary<int, JObject> toolCallsByIndex, JArray deltaToolCalls)
         {
             if (toolCallsByIndex == null || deltaToolCalls == null) return;
@@ -2490,7 +2544,7 @@ namespace ADDGH
                 var delta = token as JObject;
                 if (delta == null) continue;
 
-                int index = delta["index"]?.ToObject<int?>() ?? toolCallsByIndex.Count;
+                int index = ResolveToolCallDeltaIndex(toolCallsByIndex, delta);
                 if (!toolCallsByIndex.TryGetValue(index, out JObject target))
                 {
                     target = new JObject();
@@ -2517,6 +2571,25 @@ namespace ADDGH
                     fn["arguments"] = currentArgs + deltaFn["arguments"].ToString();
                 }
             }
+        }
+
+        private static int ResolveToolCallDeltaIndex(Dictionary<int, JObject> toolCallsByIndex, JObject delta)
+        {
+            int? explicitIndex = delta["index"]?.ToObject<int?>();
+            if (explicitIndex.HasValue) return explicitIndex.Value;
+
+            string id = delta["id"]?.ToString();
+            if (!string.IsNullOrWhiteSpace(id))
+            {
+                foreach (var kv in toolCallsByIndex)
+                    if (string.Equals(kv.Value["id"]?.ToString(), id, StringComparison.Ordinal))
+                        return kv.Key;
+            }
+
+            if (toolCallsByIndex.Count == 1)
+                return toolCallsByIndex.Keys.First();
+
+            return toolCallsByIndex.Count;
         }
 
         private static bool TryParseAssistantMessageFromResponse(string responseText, out JObject messageNode, out string parseError)
@@ -2563,6 +2636,8 @@ namespace ADDGH
             var reasoning = new StringBuilder();
             var toolCallsByIndex = new Dictionary<int, JObject>();
             bool sawAnyData = false;
+            bool sawChoiceChunk = false;
+            bool sawUsageOnlyChunk = false;
             bool sawFinalMessage = false;
 
             string[] lines = responseText.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
@@ -2590,10 +2665,15 @@ namespace ADDGH
                 }
 
                 var choices = chunk["choices"] as JArray;
-                if (choices == null || choices.Count == 0) continue;
+                if (choices == null || choices.Count == 0)
+                {
+                    if (chunk["usage"] != null) sawUsageOnlyChunk = true;
+                    continue;
+                }
 
                 var choice0 = choices[0] as JObject;
                 if (choice0 == null) continue;
+                sawChoiceChunk = true;
 
                 var message = choice0["message"] as JObject;
                 if (message != null)
@@ -2612,6 +2692,9 @@ namespace ADDGH
                 string deltaReasoning = delta["reasoning_content"]?.ToString();
                 if (!string.IsNullOrEmpty(deltaReasoning)) reasoning.Append(deltaReasoning);
 
+                string altDeltaReasoning = delta["reasoning"]?.ToString();
+                if (!string.IsNullOrEmpty(altDeltaReasoning)) reasoning.Append(altDeltaReasoning);
+
                 MergeToolCallDeltas(toolCallsByIndex, delta["tool_calls"] as JArray);
             }
 
@@ -2621,20 +2704,29 @@ namespace ADDGH
             if (content.Length > 0 || reasoning.Length > 0 || toolCallsByIndex.Count > 0)
             {
                 var synthesized = new JObject { ["role"] = "assistant" };
-                if (content.Length > 0) synthesized["content"] = content.ToString();
+                if (content.Length > 0 || toolCallsByIndex.Count > 0) synthesized["content"] = content.ToString();
                 if (reasoning.Length > 0) synthesized["reasoning_content"] = reasoning.ToString();
                 if (toolCallsByIndex.Count > 0)
                 {
                     var toolCalls = new JArray();
                     foreach (var kv in toolCallsByIndex.OrderBy(kv => kv.Key))
+                    {
+                        if (string.IsNullOrWhiteSpace(kv.Value["id"]?.ToString()))
+                            kv.Value["id"] = "call_" + kv.Key.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                        if (string.IsNullOrWhiteSpace(kv.Value["type"]?.ToString()))
+                            kv.Value["type"] = "function";
                         toolCalls.Add(kv.Value);
+                    }
                     synthesized["tool_calls"] = toolCalls;
                 }
                 messageNode = synthesized;
                 return true;
             }
 
-            parseError = sawAnyData ? "SSE 响应里没有可提取的 assistant 内容。" : "未找到任何 data: 事件。";
+            if (sawUsageOnlyChunk && !sawChoiceChunk)
+                parseError = "SSE 只返回了 usage 结束块，没有返回任何 choices/delta 内容。通常表示中转站没有实际输出模型流，或请求体被上游拒绝但被包装成空流。";
+            else
+                parseError = sawAnyData ? "SSE 响应里没有可提取的 assistant 内容。" : "未找到任何 data: 事件。";
             return false;
         }
 
@@ -3324,7 +3416,6 @@ namespace ADDGH
                                     type = "object",
                                     properties = new {
                                         id = new { type = "string", description = "要删除的电池 GUID" },
-                                        is_sandbox = new { type = "boolean", description = "可选：沙箱模式下不直接删除，而是禁用并放入回收站组" },
                                         summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
                                         summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
                                     },
@@ -3414,7 +3505,6 @@ namespace ADDGH
                                         },
                                         group_name = new { type = "string", description = "可选：提供名称将自动为这些电池打组" },
                                         auto_group = new { type = "boolean", description = "可选：是否自动根据任务成组 (默认 false)" },
-                                        is_sandbox = new { type = "boolean", description = "可选：开启沙箱模式，电池将偏移并在橙色组中生成，不破坏原有逻辑" },
                                         summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
                                         summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
                                     },
@@ -3630,22 +3720,7 @@ namespace ADDGH
                                 }
                             }
                         },
-                        ShowReferenceOptionsTool.GetApiToolDefinition(),
-                        new {
-                            type = "function",
-                            function = new {
-                                name = "apply_gh_sandbox",
-                                description = "将沙箱模式中的修改应用到主画布。这会删除回收站中的电池，并将沙箱组中的电池移回原位并解除沙箱组。",
-                                parameters = new {
-                                    type = "object",
-                                    properties = new {
-                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
-                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
-                                    },
-                                    required = new[] { "summary" }
-                                }
-                            }
-                        }
+                        ShowReferenceOptionsTool.GetApiToolDefinition()
                     };
 
                 ShowThinkingAnimation("载入中...");
@@ -3692,7 +3767,7 @@ namespace ADDGH
                 {
                     return ReturnProviderError(providerSettings, "LLM 连接错误",
                         "请求未能发送到模型服务：" + ex.GetType().Name,
-                        ex.Message,
+                        FormatExceptionChain(ex),
                         usedEndpoint);
                 }
                 
@@ -3742,15 +3817,6 @@ namespace ADDGH
                         usedEndpoint);
                 }
 
-                bool isSandboxOperation = false;
-                foreach (var tc in fullToolCalls) {
-                    string argsJson = tc["function"]?["arguments"]?.ToString();
-                    if (!string.IsNullOrEmpty(argsJson) && argsJson.Contains("\"is_sandbox\"") && argsJson.Contains("true")) {
-                        isSandboxOperation = true;
-                        break;
-                    }
-                }
-
                 await _window.Dispatcher.InvokeAsync(() => {
                     if (!string.IsNullOrEmpty(fullReasoning))
                     {
@@ -3758,11 +3824,7 @@ namespace ADDGH
                     }
                     if (!string.IsNullOrEmpty(fullContent))
                     {
-                        if (isSandboxOperation) {
-                            AppendSandboxBubble(fullContent);
-                        } else {
-                            AppendBubble(fullContent, false, depth == 0); 
-                        }
+                        AppendBubble(fullContent, false, depth == 0);
                     }
                 });
 
@@ -3822,8 +3884,7 @@ namespace ADDGH
                                 addConn++;
                             }
                             else if (funcName == "remove_gh_component") {
-                                bool isSandbox = argsObj["is_sandbox"]?.ToObject<bool>() ?? false;
-                                toolResult = ExecuteRemoveGhComponent(argsObj["id"]?.ToString(), isSandbox);
+                                toolResult = ExecuteRemoveGhComponent(argsObj["id"]?.ToString());
                                 delComp++;
                             }
                             else if (funcName == "set_gh_component_value") {
@@ -3844,15 +3905,13 @@ namespace ADDGH
                             }
                             else if (funcName == "create_component_graph") {
                                 bool autoG = argsObj["auto_group"]?.ToObject<bool>() ?? false;
-                                bool isSandbox = argsObj["is_sandbox"]?.ToObject<bool>() ?? false;
                                 string gName = argsObj["group_name"]?.ToString();
                                 if (string.IsNullOrEmpty(gName))
-                                    gName = autoG ? "AI Generated" : (isSandbox ? "🧪 SANDBOX" : null);
+                                    gName = autoG ? "AI Generated" : null;
                                 toolResult = ExecuteCreateComponentGraph(
                                     argsObj["components"] as JArray,
                                     argsObj["connections"] as JArray,
-                                    gName,
-                                    isSandbox);
+                                    gName);
                                 if (argsObj["components"] is JArray comps) addComp += comps.Count;
                                 if (argsObj["connections"] is JArray conns) addConn += conns.Count;
                             }
@@ -3913,7 +3972,6 @@ namespace ADDGH
                                     return new ApiResponse { Content = fullContent, Reasoning = fullReasoning };
                                 }
                             }
-                            else if (funcName == "apply_gh_sandbox") toolResult = ExecuteApplyGhSandbox();
                         }
                         catch (Exception ex)
                         {
@@ -4628,7 +4686,7 @@ namespace ADDGH
             return result;
         }
 
-        private static string ExecuteRemoveGhComponent(string id, bool isSandbox = false)
+        private static string ExecuteRemoveGhComponent(string id)
         {
             string result = "";
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
@@ -4639,90 +4697,11 @@ namespace ADDGH
                 var obj = doc.FindObject(guid, true);
                 if (obj == null) { result = "Error: 找不到电池。"; return; }
 
-                if (isSandbox)
-                {
-                    if (obj is Grasshopper.Kernel.IGH_ActiveObject ao) ao.Locked = true;
-                    if (obj is Grasshopper.Kernel.IGH_PreviewObject po) po.Hidden = true;
-                    var recycleGroup = doc.Objects.OfType<Grasshopper.Kernel.Special.GH_Group>().FirstOrDefault(g => g.NickName == "♻️ RECYCLE");
-                    if (recycleGroup == null) {
-                        recycleGroup = new Grasshopper.Kernel.Special.GH_Group { NickName = "♻️ RECYCLE", Colour = System.Drawing.Color.FromArgb(100, 100, 100, 100) };
-                        doc.AddObject(recycleGroup, false);
-                    }
-                    recycleGroup.AddObject(obj.InstanceGuid);
-                    result = "沙箱模式：已禁用并移至回收站。";
-                }
-                else
-                {
-                    doc.RemoveObject(obj, false);
-                    result = "删除成功。";
-                }
+                doc.RemoveObject(obj, false);
+                result = "删除成功。";
                 _canvasChanged = true;
                 try { doc.ScheduleSolution(150); } 
                 catch (Exception ex) { AddGhLog.Warn("ExecuteRemoveGhComponent Schedule failed: " + ex.Message); }
-            }));
-            return result;
-        }
-
-        private static string ExecuteApplyGhSandbox()
-        {
-            string result = "";
-            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
-            {
-                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
-                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
-
-                int deletedCount = 0;
-                int appliedCount = 0;
-
-                // 1. 处理回收站
-                var recycleGroup = doc.Objects.OfType<Grasshopper.Kernel.Special.GH_Group>().FirstOrDefault(g => g.NickName == "♻️ RECYCLE");
-                if (recycleGroup != null)
-                {
-                    var toDelete = new List<Grasshopper.Kernel.IGH_DocumentObject>();
-                    foreach (var guid in recycleGroup.ObjectIDs)
-                    {
-                        var obj = doc.FindObject(guid, true);
-                        if (obj != null) toDelete.Add(obj);
-                    }
-                    foreach (var obj in toDelete)
-                    {
-                        doc.RemoveObject(obj, false);
-                        deletedCount++;
-                    }
-                    doc.RemoveObject(recycleGroup, false);
-                }
-
-                // 2. 处理沙箱组
-                var sandboxGroups = doc.Objects.OfType<Grasshopper.Kernel.Special.GH_Group>().Where(g => g.NickName == "🧪 SANDBOX").ToList();
-                foreach (var group in sandboxGroups)
-                {
-                    var toMove = new List<Grasshopper.Kernel.IGH_DocumentObject>();
-                    foreach (var guid in group.ObjectIDs)
-                    {
-                        var obj = doc.FindObject(guid, true);
-                        if (obj != null) toMove.Add(obj);
-                    }
-                    foreach (var obj in toMove)
-                    {
-                        obj.Attributes.Pivot = new System.Drawing.PointF(obj.Attributes.Pivot.X - 1500f, obj.Attributes.Pivot.Y);
-                        obj.Attributes.ExpireLayout();
-                        appliedCount++;
-                    }
-                    // 移除沙箱组
-                    doc.RemoveObject(group, false);
-                }
-
-                if (deletedCount == 0 && appliedCount == 0)
-                {
-                    result = "没有找到沙箱修改。";
-                }
-                else
-                {
-                    _canvasChanged = true;
-                    try { doc.ScheduleSolution(150); } 
-                    catch (Exception ex) { AddGhLog.Warn("ExecuteApplyGhSandbox Schedule failed: " + ex.Message); }
-                    result = $"沙箱应用成功！删除了 {deletedCount} 个回收站电池，应用了 {appliedCount} 个新电池。";
-                }
             }));
             return result;
         }
@@ -5407,14 +5386,12 @@ namespace ADDGH
             return proxy;
         }
 
-        private static string ExecuteCreateComponentGraph(JArray components, JArray connections, string groupName = null, bool isSandbox = false)
+        private static string ExecuteCreateComponentGraph(JArray components, JArray connections, string groupName = null)
         {
             string result = "";
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
                 var doc = Grasshopper.Instances.ActiveCanvas?.Document;
                 if (doc == null) { result = "Error: 没有打开的画布。"; return; }
-
-                float offsetX = isSandbox ? 1500f : 0f; // 沙箱模式偏移
 
                 Dictionary<string, Grasshopper.Kernel.IGH_DocumentObject> createdObjs = new Dictionary<string, Grasshopper.Kernel.IGH_DocumentObject>();
 
@@ -5423,7 +5400,7 @@ namespace ADDGH
                         string name = c["name"]?.ToString();
                         string cguid = c["component_guid"]?.ToString();
                         string label = c["label"]?.ToString();
-                        float x = (c["x"]?.ToObject<float>() ?? 0) + offsetX;
+                        float x = c["x"]?.ToObject<float>() ?? 0;
                         float y = c["y"]?.ToObject<float>() ?? 0;
                         string val = c["value"]?.ToString();
                         double? min = c["min"]?.ToObject<double>();
@@ -5477,7 +5454,7 @@ namespace ADDGH
                 {
                     var group = new Grasshopper.Kernel.Special.GH_Group();
                     group.NickName = groupName;
-                    group.Colour = isSandbox ? System.Drawing.Color.FromArgb(120, 255, 165, 0) : System.Drawing.Color.FromArgb(80, 100, 150, 250);
+                    group.Colour = System.Drawing.Color.FromArgb(80, 100, 150, 250);
                     foreach (var obj in createdObjs.Values) group.AddObject(obj.InstanceGuid);
                     doc.AddObject(group, false);
                     group.ExpireSolution(true);
@@ -6030,72 +6007,6 @@ namespace ADDGH
                     }
                 }
                 RefreshContextMeter();
-            }));
-        }
-
-        private static void AppendSandboxBubble(string text)
-        {
-            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
-                var container = new StackPanel { Margin = new Thickness(0, 0, 0, 20), HorizontalAlignment = HorizontalAlignment.Stretch };
-                
-                var header = new TextBlock { 
-                    Text = "🧪 SANDBOX MODE", 
-                    Foreground = new SolidColorBrush(Color.FromRgb(255, 165, 0)),
-                    FontSize = 11, 
-                    FontWeight = FontWeights.Bold,
-                    Margin = new Thickness(0, 0, 0, 6)
-                };
-                container.Children.Add(header);
-
-                var bubble = new Border {
-                    Background = new SolidColorBrush(Color.FromRgb(30, 30, 30)),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(255, 165, 0)),
-                    BorderThickness = new Thickness(1),
-                    CornerRadius = new CornerRadius(6),
-                    Padding = new Thickness(10)
-                };
-
-                var content = BuildMarkdownPanel(text, false, true);
-                content.MaxHeight = 150;
-                content.Margin = new Thickness(0, 0, 0, 8);
-                bubble.Child = content;
-                container.Children.Add(bubble);
-
-                var btnApply = new Button {
-                    Content = "确认应用修改",
-                    Background = new SolidColorBrush(Color.FromRgb(46, 204, 113)),
-                    Foreground = Brushes.White,
-                    Padding = new Thickness(10, 5, 10, 5),
-                    BorderThickness = new Thickness(0),
-                    Cursor = Cursors.Hand,
-                    HorizontalAlignment = HorizontalAlignment.Right,
-                    FontWeight = FontWeights.Bold
-                };
-                btnApply.Template = (ControlTemplate)System.Windows.Markup.XamlReader.Parse(@"
-                    <ControlTemplate TargetType=""Button"" xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation"">
-                        <Border Background=""{TemplateBinding Background}"" CornerRadius=""4"">
-                            <ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center"" Margin=""{TemplateBinding Padding}""/>
-                        </Border>
-                    </ControlTemplate>");
-                
-                btnApply.Click += (s, e) => {
-                    btnApply.IsEnabled = false;
-                    btnApply.Content = "已应用";
-                    btnApply.Background = new SolidColorBrush(Color.FromRgb(100, 100, 100));
-                    if (_txtInput != null) _txtInput.Text = "确认应用修改";
-                    BtnSend_Click(null, null);
-                };
-
-                container.Children.Add(btnApply);
-
-                if (_thinkingBubble != null) {
-                    _chatPanel.Children.Remove(_thinkingBubble);
-                    _chatPanel.Children.Add(container);
-                    _chatPanel.Children.Add(_thinkingBubble);
-                } else {
-                    _chatPanel.Children.Add(container);
-                }
-                _chatScroll.ScrollToEnd();
             }));
         }
 
@@ -6696,7 +6607,7 @@ namespace ADDGH
                 "---\n\n" +
                 "# Reference Index\n\n" +
                 "使用流程：\n" +
-                "1. 先规划：用简短步骤说明本任务的 GH 逻辑（数据流、关键电池、是否需非破坏性实验方案等）。\n" +
+                "1. 先规划：用简短步骤说明本任务的 GH 逻辑（数据流、关键电池、风险点等）。\n" +
                 "2. 再浏览：查阅下列参考条目，看是否与**已定方案**高度相关。\n" +
                 "3. 后读取：若相关，调用 `read_reference_json` 并传入对应 `file_name`，用 JSON 对齐细节、补充或改造实现。\n\n" +
                 "## References\n";

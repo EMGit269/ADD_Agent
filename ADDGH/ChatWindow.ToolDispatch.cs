@@ -100,8 +100,7 @@ namespace ADDGH
                 }
                 else if (funcName == "remove_gh_component")
                 {
-                    bool isSandbox = argsObj["is_sandbox"]?.ToObject<bool>() ?? false;
-                    result.ToolResult = ExecuteRemoveGhComponent(argsObj["id"]?.ToString(), isSandbox);
+                    result.ToolResult = ExecuteRemoveGhComponent(argsObj["id"]?.ToString());
                     result.DelComp++;
                 }
                 else if (funcName == "set_gh_component_value")
@@ -126,15 +125,13 @@ namespace ADDGH
                 else if (funcName == "create_component_graph")
                 {
                     bool autoGroup = argsObj["auto_group"]?.ToObject<bool>() ?? false;
-                    bool isSandbox = argsObj["is_sandbox"]?.ToObject<bool>() ?? false;
                     string groupName = argsObj["group_name"]?.ToString();
                     if (string.IsNullOrEmpty(groupName))
-                        groupName = autoGroup ? "AI Generated" : (isSandbox ? "SANDBOX" : null);
+                        groupName = autoGroup ? "AI Generated" : null;
                     result.ToolResult = ExecuteCreateComponentGraph(
                         argsObj["components"] as JArray,
                         argsObj["connections"] as JArray,
-                        groupName,
-                        isSandbox);
+                        groupName);
                     if (argsObj["components"] is JArray comps) result.AddComp += comps.Count;
                     if (argsObj["connections"] is JArray conns) result.AddConn += conns.Count;
                 }
@@ -213,10 +210,6 @@ namespace ADDGH
                             Reasoning = fullReasoning
                         };
                     }
-                }
-                else if (funcName == "apply_gh_sandbox")
-                {
-                    result.ToolResult = ExecuteApplyGhSandbox();
                 }
             }
             catch (Exception ex)
