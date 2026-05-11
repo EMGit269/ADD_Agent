@@ -136,8 +136,8 @@ namespace ADDGH
 1. In C# priority mode, new core modeling logic must use create_csharp_script_component, not create_script_component_graph.
 2. Existing C# Script body edits must use edit_csharp_script_component, not gh_native_script_editor or set_gh_component_value.
 3. The body field must contain only the RunScript method body. Do not include using statements, class declarations, the RunScript signature, or the default C# Script template.
-4. The create tool configures C# input ports first, then creates output ports named a, b, c... in order, then writes the body into the editable logic block.
-5. Output specs are business labels only. Actual C# output variables are always a, b, c...; assign to those variables in the body.
+4. The create tool configures C# input ports first, then creates output ports named b, c, d... in order, then writes the body into the editable logic block.
+5. Output specs are business labels only. Actual C# output variables start at b, c, d...; assign to those variables in the body. Do not assign to a in generated C# bodies because some GH C# Script builds keep a as a UI/default port but omit ref object a from the generated signature after dynamic port edits.
 6. Do not create unnecessary outputs. Prefer one or a few structured outputs; split into multiple script components only when the logic is genuinely clearer.
 7. Do not declare local variables whose names collide with output variables currently in use, such as a, b, c.
 8. Non-script helper components in this mode are limited to Params and Display categories for input, output, preview, and debugging.";
@@ -152,9 +152,9 @@ namespace ADDGH
 【当前排布模式：C# 优先】
 1. 强制使用一个或多个 C# Script 电池完成核心建模逻辑；逻辑复杂时可以拆成多个脚本电池组合，但优先保持数量少、数据流清晰。
 2. 其它非脚本电池只能来自 Params 或 Display 分类；必要时可用 add_gh_component 单独补充这些辅助电池，但只能作为脚本逻辑的输入、输出、显示或调试辅助，不能用普通 GH 电池替代核心逻辑。
-3. 新建 C# 脚本化逻辑必须调用 create_csharp_script_component，一次创建 C# Script、辅助电池、端口、方法体与连线；不要调用 create_script_component_graph、read_skill_file、read_reference_json 或读取 reference。
+3. 新建 C# 脚本化逻辑必须调用 create_csharp_script_component 创建 C# Script、辅助电池、端口与方法体；不要调用 create_script_component_graph、read_skill_file、read_reference_json 或读取 reference。为避免 Grasshopper/Rhino 崩溃，C# Script 创建阶段不要同时连线，待组件稳定后再单独连接。
 4. C# Script 的 RunScript 签名由 GH 根据当前输入/输出端口自动生成，不能在 body 中写自定义 RunScript 签名、using、class 或完整模板；body 只提供 RunScript 方法内部语句。
-5. C# 输出端口由工具按 outputs 数量硬编码创建为 a, b, c...；outputs 里只写业务 label/type_hint。方法体里只给这些标准输出变量赋值，例如 a = curve; b = points;。
+5. C# 输出端口由工具按 outputs 数量硬编码创建为 b, c, d...；outputs 里只写业务 label/type_hint。方法体里只给这些标准输出变量赋值，例如 b = curve; c = points;。不要给 a 赋值，因为部分 GH C# Script 在动态改端口后会显示 a 端口但签名中没有 ref object a。
 6. 若需要表达输出业务含义，把含义连接到带 label 的 Panel，或在最终说明中解释；不要把业务名写成 C# 输出变量名，也不要依赖工具从源码里推断输出数量。
 7. 修改已有 C# Script 的代码必须调用 edit_csharp_script_component，只替换 RunScript 方法体，保持原有 using、Script_Instance 类和签名模板。
 8. 若端口变更后出现签名未同步或变量不存在，先 recompute_gh_canvas 再只修正方法体；不要通过重写完整源码解决。";
@@ -3463,7 +3463,7 @@ namespace ADDGH
                 function = new
                 {
                     name = "create_script_component_graph",
-                    description = "脚本优先排布专用：一次创建一个或多个 C# Script / Python 3 Script 电池、端口、源码、辅助电池、连线与分组。C# / Python 优先模式下，新建核心逻辑必须使用本工具承载到脚本电池中；Python 仅使用 Rhino 8 Python 3 Script，找不到时不要自动改用 GhPython。C# source 只写 RunScript 方法内部语句，必须保留电池默认 using、Script_Instance 类和 RunScript 签名模板，不要传整份类模板。C# 模式不要填写 outputs；只填 output_count，工具会硬编码创建 a,b,c... 输出端口。",
+                    description = "脚本优先排布专用：一次创建一个或多个 C# Script / Python 3 Script 电池、端口、源码、辅助电池、连线与分组。C# / Python 优先模式下，新建核心逻辑必须使用本工具承载到脚本电池中；Python 仅使用 Rhino 8 Python 3 Script，找不到时不要自动改用 GhPython。C# 请改用 create_csharp_script_component；不要在通用工具里创建 C# Script。",
                     parameters = new
                     {
                         type = "object",
@@ -3484,7 +3484,7 @@ namespace ADDGH
                                         y = new { type = "number", description = "画布 Y 坐标。" },
                                         source = new { type = "string", description = "脚本源码。C# 只提供 RunScript 方法内部语句，不要包含 using、Script_Instance 类或 RunScript 签名；Python 3 写入 Text。" },
                                         inputs = new { type = "array", items = portSchema },
-                                        output_count = new { type = "integer", description = "C# 模式专用：输出端口数量。工具会创建 a,b,c...，默认 1，范围 1-26。" },
+                                        output_count = new { type = "integer", description = "已弃用：C# Script 请改用 create_csharp_script_component。" },
                                         outputs = new { type = "array", items = portSchema, description = "输出端口。C# 模式下不要填写，会被忽略；Python 模式可填写。" }
                                     },
                                     required = new[] { "alias_id", "x", "y", "source" }
@@ -3545,7 +3545,7 @@ namespace ADDGH
                 type = "object",
                 properties = new
                 {
-                    name = new { type = "string", description = "C# input variable name. Must be a valid identifier and must not collide with output variables a,b,c..." },
+                    name = new { type = "string", description = "C# input variable name. Must be a valid identifier and must not collide with reserved/output variables a,b,c..." },
                     type_hint = new { type = "string", description = "Optional type hint written to the port description only. No strong type is forced." }
                 },
                 required = new[] { "name" }
@@ -3556,7 +3556,7 @@ namespace ADDGH
                 type = "object",
                 properties = new
                 {
-                    label = new { type = "string", description = "Business label for this output. The actual C# variable name is forced to a,b,c... and this label is written to the port description." },
+                    label = new { type = "string", description = "Business label for this output. The actual C# variable name is forced to b,c,d... and this label is written to the port description." },
                     name = new { type = "string", description = "Optional alias for label. It is not used as the C# variable name." },
                     type_hint = new { type = "string", description = "Optional output type hint written to the port description only." }
                 }
@@ -3600,7 +3600,7 @@ namespace ADDGH
                 function = new
                 {
                     name = "create_csharp_script_component",
-                    description = "Dedicated C# Script layout tool. Creates one C# Script component, configures input ports, forces output ports to a,b,c..., writes only the RunScript method body into the default C# Script editable logic block, creates optional Params/Display helper components, connects them, and groups the result. Use this instead of create_script_component_graph for C# priority modeling.",
+                    description = "Dedicated C# Script layout tool. Creates one C# Script component, configures input ports, forces output ports to b,c,d... (not a), writes only the RunScript method body into the default C# Script editable logic block, and creates optional Params/Display helper components. It intentionally skips connections during creation to avoid Grasshopper/Rhino crashes; connect components later after the script component is stable. Use this instead of create_script_component_graph for C# priority modeling.",
                     parameters = new
                     {
                         type = "object",
@@ -3611,15 +3611,15 @@ namespace ADDGH
                             x = new { type = "number", description = "Canvas X coordinate." },
                             y = new { type = "number", description = "Canvas Y coordinate." },
                             inputs = new { type = "array", items = inputPortSchema },
-                            outputs = new { type = "array", items = outputPortSchema, description = "Business output labels. Actual C# variables are forced to a,b,c... in this order." },
+                            outputs = new { type = "array", items = outputPortSchema, description = "Business output labels. Actual C# variables are forced to b,c,d... in this order. Do not assign to a." },
                             body = new { type = "string", description = "Only the RunScript method body. No using statements, no class declaration, no RunScript signature, no template." },
                             components = new { type = "array", items = helperComponentSchema },
-                            connections = new { type = "array", items = connectionSchema },
+                            connections = new { type = "array", items = connectionSchema, description = "Optional. Currently skipped during C# creation for stability; use a later connection tool call after creation." },
                             group_name = new { type = "string", description = "Optional group name." },
                             summary = new { type = "string", description = "Required short Chinese summary for the UI operation card. Do not write the function name." },
                             summary_detail = new { type = "string", description = "Optional short secondary phrase for the UI operation card." }
                         },
-                        required = new[] { "x", "y", "body", "outputs", "connections", "summary" }
+                        required = new[] { "x", "y", "body", "outputs", "summary" }
                     }
                 }
             };
@@ -5906,9 +5906,10 @@ namespace ADDGH
 
         private static string GetCSharpOutputPortName(int index)
         {
-            if (index < 0) return "a";
+            if (index < 0) return "b";
             const string letters = "abcdefghijklmnopqrstuvwxyz";
-            if (index < letters.Length) return letters[index].ToString();
+            int shifted = index + 1;
+            if (shifted < letters.Length) return letters[shifted].ToString();
             return "out" + (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
 
@@ -6000,65 +6001,6 @@ namespace ADDGH
             param.Attributes?.ExpireLayout();
         }
 
-        private const string CSharpScriptLogicMarker = "// Write your logic here";
-
-        private const string CSharpScriptTemplate = @"// Grasshopper Script Instance
-#region Usings
-using System;
-using System.Linq;
-using System.Collections;
-using System.Collections.Generic;
-using System.Drawing;
-
-using Rhino;
-using Rhino.Geometry;
-
-using Grasshopper;
-using Grasshopper.Kernel;
-using Grasshopper.Kernel.Data;
-using Grasshopper.Kernel.Types;
-#endregion
-
-public class Script_Instance : GH_ScriptInstance
-{
-    #region Notes
-    /* 
-      Members:
-        RhinoDoc RhinoDocument
-        GH_Document GrasshopperDocument
-        IGH_Component Component
-        int Iteration
-
-      Methods (Virtual & overridable):
-        Print(string text)
-        Print(string format, params object[] args)
-        Reflect(object obj)
-        Reflect(object obj, string method_name)
-    */
-    #endregion
-
-    private void RunScript(object x, object y, ref object a)
-    {
-        // Write your logic here
-        a = null;
-    }
-}";
-
-        private static string IndentCSharpBodyForTemplate(string body)
-        {
-            string norm = (body ?? "").Replace("\r\n", "\n").Replace('\r', '\n').Trim('\n', '\r');
-            if (string.IsNullOrWhiteSpace(norm)) norm = "a = null;";
-            var lines = norm.Split('\n');
-            return string.Join(Environment.NewLine, lines.Select(line => "        " + line.TrimEnd()));
-        }
-
-        private static string BuildCSharpScriptTemplateWithBody(string body)
-        {
-            string indented = IndentCSharpBodyForTemplate(body);
-            string replacement = CSharpScriptLogicMarker + Environment.NewLine + indented;
-            return CSharpScriptTemplate.Replace(CSharpScriptLogicMarker + Environment.NewLine + "        a = null;", replacement);
-        }
-
         private static string NormalizeCSharpScriptSourceForMutableBlock(string source, List<string> warnings)
         {
             if (string.IsNullOrWhiteSpace(source)) return source ?? "";
@@ -6094,10 +6036,8 @@ public class Script_Instance : GH_ScriptInstance
             if (TrySetCSharpScriptBodyPreservingTemplate(obj, source, warnings))
                 return true;
 
-            string body = NormalizeCSharpScriptSourceForMutableBlock(source, warnings);
-            string fullTemplate = BuildCSharpScriptTemplateWithBody(body);
-            warnings?.Add("未找到 C# 可编辑代码块，已把逻辑硬编码插入默认模板的 Write your logic here 位置后写入。");
-            return TrySetNativeScriptContentViaReflection(obj, fullTemplate);
+            warnings?.Add("C# Script editable code block was not found; refused full-template replacement to avoid breaking Grasshopper-managed RunScript signatures.");
+            return false;
         }
 
         private static bool TrySetCSharpScriptBodyPreservingTemplate(Grasshopper.Kernel.IGH_DocumentObject obj, string source, List<string> warnings)
@@ -6305,6 +6245,7 @@ public class Script_Instance : GH_ScriptInstance
                 aliasId = string.IsNullOrWhiteSpace(aliasId) ? "core" : aliasId.Trim();
                 var outputSpecs = BuildCSharpOutputPortsFromLabels(outputs);
                 var outputNames = new HashSet<string>(Enumerable.Range(0, outputSpecs.Count).Select(GetCSharpOutputPortName), StringComparer.Ordinal);
+                outputNames.Add("a");
 
                 for (int i = 0; inputs != null && i < inputs.Count; i++)
                 {
@@ -6316,7 +6257,7 @@ public class Script_Instance : GH_ScriptInstance
                     }
                     if (outputNames.Contains(inputName))
                     {
-                        result = "Error: C# input port name '" + inputName + "' collides with forced output variable names a,b,c... Rename the input.";
+                        result = "Error: C# input port name '" + inputName + "' collides with reserved/output variable names. Rename the input.";
                         return;
                     }
                 }
@@ -6379,8 +6320,6 @@ public class Script_Instance : GH_ScriptInstance
                 doc.AddObject(scriptObj, false);
 
                 TryConfigureScriptPorts(scriptObj, inputs, outputSpecs, true, warnings);
-                try { scriptObj.ExpireSolution(true); } catch { }
-                try { doc.ScheduleSolution(1); } catch { }
 
                 bool wrote = TrySetCSharpScriptBodyIntoTemplate(scriptObj, body ?? "", warnings);
                 if (wrote) FinalizeGrasshopperScriptMutation(doc, scriptObj);
@@ -6431,31 +6370,7 @@ public class Script_Instance : GH_ScriptInstance
                 int connected = 0;
                 if (connections != null)
                 {
-                    foreach (var conn in connections)
-                    {
-                        string fromAlias = conn["from_alias"]?.ToString();
-                        string toAlias = conn["to_alias"]?.ToString();
-                        if (createdObjs.TryGetValue(fromAlias, out var f) && createdObjs.TryGetValue(toAlias, out var t))
-                        {
-                            int fIdx = conn["from_index"]?.ToObject<int>() ?? 0;
-                            int tIdx = conn["to_index"]?.ToObject<int>() ?? 0;
-                            var sP = (f is Grasshopper.Kernel.IGH_Component cF) ? (fIdx >= 0 && fIdx < cF.Params.Output.Count ? cF.Params.Output[fIdx] : null) : (f as Grasshopper.Kernel.IGH_Param);
-                            var tP = (t is Grasshopper.Kernel.IGH_Component cT) ? (tIdx >= 0 && tIdx < cT.Params.Input.Count ? cT.Params.Input[tIdx] : null) : (t as Grasshopper.Kernel.IGH_Param);
-                            if (sP != null && tP != null)
-                            {
-                                tP.AddSource(sP);
-                                connected++;
-                            }
-                            else
-                            {
-                                warnings.Add("Connection port index out of range: " + fromAlias + " -> " + toAlias);
-                            }
-                        }
-                        else
-                        {
-                            warnings.Add("Connection references missing alias: " + fromAlias + " -> " + toAlias);
-                        }
-                    }
+                    warnings.Add("C# Script connections were skipped during creation to avoid Grasshopper/Rhino crashes. Use connect_gh_components in a later step after the C# Script component is stable.");
                 }
 
                 if (!string.IsNullOrWhiteSpace(groupName) && createdObjs.Count > 0)
@@ -6479,8 +6394,9 @@ public class Script_Instance : GH_ScriptInstance
                     ["created_scripts"] = 1,
                     ["created_components"] = components?.Count ?? 0,
                     ["created_connections"] = connected,
+                    ["skipped_connections"] = connections?.Count ?? 0,
                     ["script_write_ok"] = wrote ? 1 : 0,
-                    ["forced_output_variables"] = new JArray(outputNames),
+                    ["forced_output_variables"] = new JArray(Enumerable.Range(0, outputSpecs.Count).Select(GetCSharpOutputPortName)),
                     ["aliases"] = aliasMap,
                     ["warnings"] = new JArray(warnings)
                 };
@@ -6588,7 +6504,7 @@ public class Script_Instance : GH_ScriptInstance
                     if (scriptComponentName == "C# Script")
                     {
                         if (outputSpecs != null && outputSpecs.Count > 0)
-                            warnings.Add("C# 模式忽略 scripts.outputs；输出端口已按 output_count 硬编码创建为 a,b,c...。");
+                            warnings.Add("C# mode is no longer handled by create_script_component_graph; use create_csharp_script_component.");
                         int outputCount = s["output_count"]?.ToObject<int?>() ?? 1;
                         outputSpecs = BuildCSharpOutputPortsFromCount(outputCount);
                     }
