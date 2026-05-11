@@ -135,6 +135,48 @@ namespace ADDGH
                     if (argsObj["components"] is JArray comps) result.AddComp += comps.Count;
                     if (argsObj["connections"] is JArray conns) result.AddConn += conns.Count;
                 }
+                else if (funcName == "create_csharp_script_component")
+                {
+                    result.ToolResult = ExecuteCreateCSharpScriptComponent(
+                        argsObj["alias_id"]?.ToString(),
+                        argsObj["label"]?.ToString(),
+                        argsObj["x"]?.ToObject<float>() ?? 0f,
+                        argsObj["y"]?.ToObject<float>() ?? 0f,
+                        argsObj["inputs"] as JArray,
+                        argsObj["outputs"] as JArray,
+                        argsObj["body"]?.ToString(),
+                        argsObj["components"] as JArray,
+                        argsObj["connections"] as JArray,
+                        argsObj["group_name"]?.ToString());
+                    if (!result.ToolResult.StartsWith("Error:"))
+                    {
+                        result.AddComp += 1;
+                        if (argsObj["components"] is JArray helperItems) result.AddComp += helperItems.Count;
+                        if (argsObj["connections"] is JArray connectionItems) result.AddConn += connectionItems.Count;
+                    }
+                }
+                else if (funcName == "edit_csharp_script_component")
+                {
+                    result.ToolResult = ExecuteEditCSharpScriptComponent(
+                        argsObj["id"]?.ToString(),
+                        argsObj["mode"]?.ToString(),
+                        argsObj["body"]?.ToString());
+                }
+                else if (funcName == "create_script_component_graph")
+                {
+                    result.ToolResult = ExecuteCreateScriptComponentGraph(
+                        argsObj["mode"]?.ToString(),
+                        argsObj["scripts"] as JArray,
+                        argsObj["components"] as JArray,
+                        argsObj["connections"] as JArray,
+                        argsObj["group_name"]?.ToString());
+                    if (!result.ToolResult.StartsWith("Error:"))
+                    {
+                        if (argsObj["scripts"] is JArray scriptItems) result.AddComp += scriptItems.Count;
+                        if (argsObj["components"] is JArray helperItems) result.AddComp += helperItems.Count;
+                        if (argsObj["connections"] is JArray connectionItems) result.AddConn += connectionItems.Count;
+                    }
+                }
                 else if (funcName == "check_gh_errors")
                 {
                     result.ToolResult = ExecuteCheckGhErrors();

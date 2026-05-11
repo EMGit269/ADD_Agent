@@ -83,6 +83,19 @@ namespace ADDGH
         private static Border _warningBar;
         private static TextBlock _txtWarning;
         private static Button _btnCloseWarning;
+        private static Button _btnModeNormal;
+        private static Button _btnModeCSharp;
+        private static Button _btnModePython;
+
+        private enum LayoutMode
+        {
+            Normal,
+            CSharpFirst,
+            PythonFirst
+        }
+
+        private const string LayoutModeSettingKey = "ADDGH_LayoutMode";
+        private static LayoutMode _layoutMode = LayoutMode.Normal;
 
         private const string SYSTEM_PROMPT = @"你是 GH 参数化专家。
 
@@ -106,6 +119,127 @@ namespace ADDGH
 
 【对用户表达】
 对用户表达要直接说明改动内容、影响范围和需要确认的风险点，避免暴露内部函数名或 API 名。";
+
+        private static string BuildSystemPrompt()
+        {
+            string prompt = SYSTEM_PROMPT + BuildModePrompt(_layoutMode);
+            if (_layoutMode == LayoutMode.CSharpFirst)
+                prompt += BuildCSharpDedicatedToolPrompt();
+            return prompt;
+        }
+
+        private static string BuildCSharpDedicatedToolPrompt()
+        {
+            return @"
+
+[C# Script dedicated tool rules]
+1. In C# priority mode, new core modeling logic must use create_csharp_script_component, not create_script_component_graph.
+2. Existing C# Script body edits must use edit_csharp_script_component, not gh_native_script_editor or set_gh_component_value.
+3. The body field must contain only the RunScript method body. Do not include using statements, class declarations, the RunScript signature, or the default C# Script template.
+4. The create tool configures C# input ports first, then creates output ports named a, b, c... in order, then writes the body into the editable logic block.
+5. Output specs are business labels only. Actual C# output variables are always a, b, c...; assign to those variables in the body.
+6. Do not create unnecessary outputs. Prefer one or a few structured outputs; split into multiple script components only when the logic is genuinely clearer.
+7. Do not declare local variables whose names collide with output variables currently in use, such as a, b, c.
+8. Non-script helper components in this mode are limited to Params and Display categories for input, output, preview, and debugging.";
+        }
+
+        private static string BuildModePrompt(LayoutMode mode)
+        {
+            if (mode == LayoutMode.CSharpFirst)
+            {
+                return @"
+
+【当前排布模式：C# 优先】
+1. 强制使用一个或多个 C# Script 电池完成核心建模逻辑；逻辑复杂时可以拆成多个脚本电池组合，但优先保持数量少、数据流清晰。
+2. 其它非脚本电池只能来自 Params 或 Display 分类；必要时可用 add_gh_component 单独补充这些辅助电池，但只能作为脚本逻辑的输入、输出、显示或调试辅助，不能用普通 GH 电池替代核心逻辑。
+3. 新建 C# 脚本化逻辑必须调用 create_csharp_script_component，一次创建 C# Script、辅助电池、端口、方法体与连线；不要调用 create_script_component_graph、read_skill_file、read_reference_json 或读取 reference。
+4. C# Script 的 RunScript 签名由 GH 根据当前输入/输出端口自动生成，不能在 body 中写自定义 RunScript 签名、using、class 或完整模板；body 只提供 RunScript 方法内部语句。
+5. C# 输出端口由工具按 outputs 数量硬编码创建为 a, b, c...；outputs 里只写业务 label/type_hint。方法体里只给这些标准输出变量赋值，例如 a = curve; b = points;。
+6. 若需要表达输出业务含义，把含义连接到带 label 的 Panel，或在最终说明中解释；不要把业务名写成 C# 输出变量名，也不要依赖工具从源码里推断输出数量。
+7. 修改已有 C# Script 的代码必须调用 edit_csharp_script_component，只替换 RunScript 方法体，保持原有 using、Script_Instance 类和签名模板。
+8. 若端口变更后出现签名未同步或变量不存在，先 recompute_gh_canvas 再只修正方法体；不要通过重写完整源码解决。";
+            }
+
+            if (mode == LayoutMode.PythonFirst)
+            {
+                return @"
+
+【当前排布模式：Python 优先】
+1. 强制使用一个或多个 Rhino 8 Python 3 Script 电池完成核心建模逻辑；逻辑复杂时可以拆成多个脚本电池组合，但优先保持数量少、数据流清晰。
+2. 其它非脚本电池只能来自 Params 或 Display 分类；必要时可用 add_gh_component 单独补充这些辅助电池，但只能作为脚本逻辑的输入、输出、显示或调试辅助，不能用普通 GH 电池替代核心逻辑。
+3. 新建脚本化逻辑必须优先调用 create_script_component_graph，一次创建 Python 3 Script、辅助电池、端口、源码与连线；不要调用 read_skill_file、read_reference_json 或读取 reference。
+4. Python 3 Script 的可执行源码必须写入 Text，严禁写入 Description；若找不到 Python 3 Script，不要自动改用 GhPython，应明确提示用户启用 Rhino 8 Python 3 Script。";
+            }
+
+            return @"
+
+【当前排布模式：常规】
+保持常规 Grasshopper 排布策略：新建一整块逻辑优先用 create_component_graph 批量创建原生 GH 电池与连线；仅在用户明确要求或方案确实需要脚本时使用脚本电池。";
+        }
+
+        private static string BuildInitialSystemContent()
+        {
+            return _layoutMode == LayoutMode.Normal
+                ? BuildSystemPrompt() + GetSkillsSummary()
+                : BuildSystemPrompt();
+        }
+
+        private static LayoutMode ReadLayoutModeSetting()
+        {
+            try
+            {
+                string raw = Grasshopper.Instances.Settings.GetValue(LayoutModeSettingKey, LayoutMode.Normal.ToString());
+                if (Enum.TryParse(raw, true, out LayoutMode mode)) return mode;
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("Read layout mode failed: " + ex.Message);
+            }
+            return LayoutMode.Normal;
+        }
+
+        private static void SaveLayoutModeSetting()
+        {
+            try { Grasshopper.Instances.Settings.SetValue(LayoutModeSettingKey, _layoutMode.ToString()); }
+            catch (Exception ex) { AddGhLog.Warn("Save layout mode failed: " + ex.Message); }
+        }
+
+        private static void ReplaceCurrentSystemPrompt()
+        {
+            if (_messages == null) return;
+            var sys = new { role = "system", content = BuildInitialSystemContent() };
+            if (_messages.Count > 0 && string.Equals(ChatMessageHelpers.TryGetRole(_messages[0]), "system", StringComparison.OrdinalIgnoreCase))
+                _messages[0] = sys;
+            else
+                _messages.Insert(0, sys);
+            RefreshContextMeter();
+        }
+
+        private static void SetLayoutMode(LayoutMode mode)
+        {
+            if (_isGenerating) return;
+            _layoutMode = mode;
+            SaveLayoutModeSetting();
+            UpdateLayoutModeButtons();
+            ReplaceCurrentSystemPrompt();
+        }
+
+        private static void UpdateLayoutModeButtons()
+        {
+            void Paint(Button button, bool selected)
+            {
+                if (button == null) return;
+                button.IsEnabled = !_isGenerating;
+                button.Background = new SolidColorBrush(selected ? Color.FromRgb(238, 238, 238) : Color.FromRgb(30, 30, 30));
+                button.Foreground = new SolidColorBrush(selected ? Color.FromRgb(18, 18, 18) : Color.FromRgb(160, 160, 160));
+                button.BorderBrush = new SolidColorBrush(selected ? Color.FromRgb(238, 238, 238) : Color.FromRgb(58, 58, 58));
+                button.FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal;
+            }
+
+            Paint(_btnModeNormal, _layoutMode == LayoutMode.Normal);
+            Paint(_btnModeCSharp, _layoutMode == LayoutMode.CSharpFirst);
+            Paint(_btnModePython, _layoutMode == LayoutMode.PythonFirst);
+        }
 
         private static List<object> _messages = new List<object>();
         private static string _cachedCanvasState = null;  // 画布状态缓存
@@ -707,6 +841,12 @@ namespace ADDGH
                                     </ContextMenu>
                                 </Button.ContextMenu>
                             </Button>
+
+                            <StackPanel Grid.Column=""5"" Orientation=""Horizontal"" HorizontalAlignment=""Left"" VerticalAlignment=""Center"" Margin=""10,0,0,0"">
+                                <Button x:Name=""BtnModeNormal"" Content=""常规"" Width=""42"" Height=""22"" Background=""Transparent"" Foreground=""#A0A0A0"" BorderBrush=""#3A3A3A"" BorderThickness=""1"" FontSize=""11"" Cursor=""Hand"" ToolTip=""常规排布模式""/>
+                                <Button x:Name=""BtnModeCSharp"" Content=""C#"" Width=""32"" Height=""22"" Background=""Transparent"" Foreground=""#A0A0A0"" BorderBrush=""#3A3A3A"" BorderThickness=""1,1,0,1"" FontSize=""11"" Cursor=""Hand"" ToolTip=""C# 优先排布模式""/>
+                                <Button x:Name=""BtnModePython"" Content=""Py"" Width=""32"" Height=""22"" Background=""Transparent"" Foreground=""#A0A0A0"" BorderBrush=""#3A3A3A"" BorderThickness=""1"" FontSize=""11"" Cursor=""Hand"" ToolTip=""Python 优先排布模式""/>
+                            </StackPanel>
                             
                             <Grid x:Name=""ContextMeterHost"" Grid.Column=""6"" Width=""17"" Height=""17"" Margin=""0,0,10,0"" VerticalAlignment=""Center"" ToolTip=""上下文使用情况"">
                                 <Ellipse Stroke=""#4A4A4A"" StrokeThickness=""1.3"" Fill=""Transparent""/>
@@ -871,6 +1011,14 @@ namespace ADDGH
             _chatScroll = (ScrollViewer)_window.FindName("ChatScroll");
             _txtInput = (TextBox)_window.FindName("TxtInput");
             _btnSend = (Button)_window.FindName("BtnSend");
+            _btnModeNormal = (Button)_window.FindName("BtnModeNormal");
+            _btnModeCSharp = (Button)_window.FindName("BtnModeCSharp");
+            _btnModePython = (Button)_window.FindName("BtnModePython");
+            _layoutMode = ReadLayoutModeSetting();
+            if (_btnModeNormal != null) _btnModeNormal.Click += (s, e) => SetLayoutMode(LayoutMode.Normal);
+            if (_btnModeCSharp != null) _btnModeCSharp.Click += (s, e) => SetLayoutMode(LayoutMode.CSharpFirst);
+            if (_btnModePython != null) _btnModePython.Click += (s, e) => SetLayoutMode(LayoutMode.PythonFirst);
+            UpdateLayoutModeButtons();
             _historySidebar = (Border)_window.FindName("HistorySidebar");
             _historyListPanel = (StackPanel)_window.FindName("HistoryListPanel");
             _historyCountText = (TextBlock)_window.FindName("TxtHistoryCount");
@@ -1068,7 +1216,7 @@ namespace ADDGH
             btnNewChat.Click += (s, e) => {
                 _activeHistoryId = null;
                 _messages.Clear();
-                _messages.Add(new { role = "system", content = SYSTEM_PROMPT });
+                _messages.Add(new { role = "system", content = BuildInitialSystemContent() });
                     if (_chatPanel != null) _chatPanel.Children.Clear();
                     _cachedCanvasState = null;
                     _canvasChanged = true;
@@ -1555,6 +1703,7 @@ namespace ADDGH
 
         private static void ApplySendButtonGeneratingState()
         {
+            UpdateLayoutModeButtons();
             if (_btnSend == null) return;
             _btnSend.Content = CreateStopSendGlyph();
             var bg = _btnSend.Template.FindName("bg", _btnSend) as Border;
@@ -1565,6 +1714,7 @@ namespace ADDGH
 
         private static void ApplySendButtonIdleState()
         {
+            UpdateLayoutModeButtons();
             if (_btnSend == null) return;
             _btnSend.Content = "➤";
             var bg = _btnSend.Template.FindName("bg", _btnSend) as Border;
@@ -1670,8 +1820,7 @@ namespace ADDGH
             _txtInput.Text = "";
 
             if (_messages.Count == 0) {
-                string skillsSummary = GetSkillsSummary();
-                _messages.Add(new { role = "system", content = SYSTEM_PROMPT + skillsSummary });
+                _messages.Add(new { role = "system", content = BuildInitialSystemContent() });
             }
 
             if (attachmentsToSend.Count > 0) {
@@ -2161,7 +2310,7 @@ namespace ADDGH
             try
             {
                 _activeHistoryId = conv.Id;
-                _messages = new List<object> { new { role = "system", content = SYSTEM_PROMPT + GetSkillsSummary() } };
+                _messages = new List<object> { new { role = "system", content = BuildInitialSystemContent() } };
                 foreach (var token in conv.Messages ?? new JArray())
                 {
                     if (token is JObject jo) _messages.Add(jo.DeepClone());
@@ -2193,7 +2342,7 @@ namespace ADDGH
                 if (_messages != null)
                 {
                     _messages.Clear();
-                    _messages.Add(new { role = "system", content = SYSTEM_PROMPT + GetSkillsSummary() });
+                    _messages.Add(new { role = "system", content = BuildInitialSystemContent() });
                     if (_chatPanel != null) _chatPanel.Children.Clear();
                     AppendSystemMessage("当前对话已删除，已切换到新会话。");
                     RefreshContextMeter();
@@ -3295,6 +3444,285 @@ namespace ADDGH
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => InsertChatElementBeforeThinking(stack)));
         }
 
+        private static object GetCreateScriptComponentGraphToolDefinition()
+        {
+            var portSchema = new
+            {
+                type = "object",
+                properties = new
+                {
+                    name = new { type = "string", description = "端口名称，同时写入 Name 与 NickName。" },
+                    type_hint = new { type = "string", description = "可选：端口类型提示，仅写入 Description，不做强类型约束。" }
+                },
+                required = new[] { "name" }
+            };
+
+            return new
+            {
+                type = "function",
+                function = new
+                {
+                    name = "create_script_component_graph",
+                    description = "脚本优先排布专用：一次创建一个或多个 C# Script / Python 3 Script 电池、端口、源码、辅助电池、连线与分组。C# / Python 优先模式下，新建核心逻辑必须使用本工具承载到脚本电池中；Python 仅使用 Rhino 8 Python 3 Script，找不到时不要自动改用 GhPython。C# source 只写 RunScript 方法内部语句，必须保留电池默认 using、Script_Instance 类和 RunScript 签名模板，不要传整份类模板。C# 模式不要填写 outputs；只填 output_count，工具会硬编码创建 a,b,c... 输出端口。",
+                    parameters = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            mode = new { type = "string", description = "csharp | python。csharp 创建 C# Script；python 创建 Python 3 Script。" },
+                            scripts = new
+                            {
+                                type = "array",
+                                items = new
+                                {
+                                    type = "object",
+                                    properties = new
+                                    {
+                                        alias_id = new { type = "string", description = "脚本电池临时代号，供 connections 引用，必须唯一。" },
+                                        label = new { type = "string", description = "可选：脚本电池 NickName。" },
+                                        x = new { type = "number", description = "画布 X 坐标。" },
+                                        y = new { type = "number", description = "画布 Y 坐标。" },
+                                        source = new { type = "string", description = "脚本源码。C# 只提供 RunScript 方法内部语句，不要包含 using、Script_Instance 类或 RunScript 签名；Python 3 写入 Text。" },
+                                        inputs = new { type = "array", items = portSchema },
+                                        output_count = new { type = "integer", description = "C# 模式专用：输出端口数量。工具会创建 a,b,c...，默认 1，范围 1-26。" },
+                                        outputs = new { type = "array", items = portSchema, description = "输出端口。C# 模式下不要填写，会被忽略；Python 模式可填写。" }
+                                    },
+                                    required = new[] { "alias_id", "x", "y", "source" }
+                                }
+                            },
+                            components = new
+                            {
+                                type = "array",
+                                items = new
+                                {
+                                    type = "object",
+                                    properties = new
+                                    {
+                                        alias_id = new { type = "string", description = "辅助电池临时代号，供 connections 引用，必须唯一。" },
+                                        name = new { type = "string", description = "辅助电池标准名称（与 component_guid 二选一）；脚本优先模式下只允许 Params 或 Display 分类。" },
+                                        component_guid = new { type = "string", description = "可选：类型 GUID（与 name 二选一）；脚本优先模式下只允许 Params 或 Display 分类。" },
+                                        label = new { type = "string", description = "仅限 Slider/Panel 的显示标签。" },
+                                        x = new { type = "number", description = "画布 X 坐标。" },
+                                        y = new { type = "number", description = "画布 Y 坐标。" },
+                                        value = new { type = "string", description = "Slider/Panel 初值。" },
+                                        min = new { type = "number", description = "Slider 最小值。" },
+                                        max = new { type = "number", description = "Slider 最大值。" },
+                                        decimals = new { type = "integer", description = "Slider 小数位数。" }
+                                    },
+                                    required = new[] { "alias_id", "x", "y" }
+                                }
+                            },
+                            connections = new
+                            {
+                                type = "array",
+                                items = new
+                                {
+                                    type = "object",
+                                    properties = new
+                                    {
+                                        from_alias = new { type = "string", description = "源电池临时代号。" },
+                                        from_index = new { type = "integer", description = "源输出端口索引，从 0 开始。" },
+                                        to_alias = new { type = "string", description = "目标电池临时代号。" },
+                                        to_index = new { type = "integer", description = "目标输入端口索引，从 0 开始。" }
+                                    },
+                                    required = new[] { "from_alias", "from_index", "to_alias", "to_index" }
+                                }
+                            },
+                            group_name = new { type = "string", description = "可选：自动为这些电池打组。" },
+                            summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                            summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
+                        },
+                        required = new[] { "mode", "scripts", "connections", "summary" }
+                    }
+                }
+            };
+        }
+
+        private static object GetCreateCSharpScriptComponentToolDefinition()
+        {
+            var inputPortSchema = new
+            {
+                type = "object",
+                properties = new
+                {
+                    name = new { type = "string", description = "C# input variable name. Must be a valid identifier and must not collide with output variables a,b,c..." },
+                    type_hint = new { type = "string", description = "Optional type hint written to the port description only. No strong type is forced." }
+                },
+                required = new[] { "name" }
+            };
+
+            var outputPortSchema = new
+            {
+                type = "object",
+                properties = new
+                {
+                    label = new { type = "string", description = "Business label for this output. The actual C# variable name is forced to a,b,c... and this label is written to the port description." },
+                    name = new { type = "string", description = "Optional alias for label. It is not used as the C# variable name." },
+                    type_hint = new { type = "string", description = "Optional output type hint written to the port description only." }
+                }
+            };
+
+            var helperComponentSchema = new
+            {
+                type = "object",
+                properties = new
+                {
+                    alias_id = new { type = "string", description = "Temporary alias used by connections." },
+                    name = new { type = "string", description = "Grasshopper component name. In C# priority mode only Params and Display categories are allowed." },
+                    component_guid = new { type = "string", description = "Optional component type GUID. In C# priority mode only Params and Display categories are allowed." },
+                    label = new { type = "string", description = "Optional label, mainly for Slider/Panel." },
+                    x = new { type = "number", description = "Canvas X coordinate." },
+                    y = new { type = "number", description = "Canvas Y coordinate." },
+                    value = new { type = "string", description = "Initial Slider/Panel value." },
+                    min = new { type = "number", description = "Slider minimum." },
+                    max = new { type = "number", description = "Slider maximum." },
+                    decimals = new { type = "integer", description = "Slider decimal places." }
+                },
+                required = new[] { "alias_id", "x", "y" }
+            };
+
+            var connectionSchema = new
+            {
+                type = "object",
+                properties = new
+                {
+                    from_alias = new { type = "string", description = "Source alias." },
+                    from_index = new { type = "integer", description = "Source output index, zero based." },
+                    to_alias = new { type = "string", description = "Target alias." },
+                    to_index = new { type = "integer", description = "Target input index, zero based." }
+                },
+                required = new[] { "from_alias", "from_index", "to_alias", "to_index" }
+            };
+
+            return new
+            {
+                type = "function",
+                function = new
+                {
+                    name = "create_csharp_script_component",
+                    description = "Dedicated C# Script layout tool. Creates one C# Script component, configures input ports, forces output ports to a,b,c..., writes only the RunScript method body into the default C# Script editable logic block, creates optional Params/Display helper components, connects them, and groups the result. Use this instead of create_script_component_graph for C# priority modeling.",
+                    parameters = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            alias_id = new { type = "string", description = "Temporary alias for the C# Script component. Defaults to core when omitted." },
+                            label = new { type = "string", description = "Optional C# Script component nickname." },
+                            x = new { type = "number", description = "Canvas X coordinate." },
+                            y = new { type = "number", description = "Canvas Y coordinate." },
+                            inputs = new { type = "array", items = inputPortSchema },
+                            outputs = new { type = "array", items = outputPortSchema, description = "Business output labels. Actual C# variables are forced to a,b,c... in this order." },
+                            body = new { type = "string", description = "Only the RunScript method body. No using statements, no class declaration, no RunScript signature, no template." },
+                            components = new { type = "array", items = helperComponentSchema },
+                            connections = new { type = "array", items = connectionSchema },
+                            group_name = new { type = "string", description = "Optional group name." },
+                            summary = new { type = "string", description = "Required short Chinese summary for the UI operation card. Do not write the function name." },
+                            summary_detail = new { type = "string", description = "Optional short secondary phrase for the UI operation card." }
+                        },
+                        required = new[] { "x", "y", "body", "outputs", "connections", "summary" }
+                    }
+                }
+            };
+        }
+
+        private static object GetEditCSharpScriptComponentToolDefinition()
+        {
+            return new
+            {
+                type = "function",
+                function = new
+                {
+                    name = "edit_csharp_script_component",
+                    description = "Dedicated safe editor for existing Grasshopper C# Script components. read_body returns only the editable RunScript body when available. set_body replaces only the editable RunScript body while preserving the built-in C# Script template, using statements, class declaration, and GH-managed RunScript signature. Never pass a full C# file, class, using block, or RunScript signature.",
+                    parameters = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            id = new { type = "string", description = "C# Script component InstanceGuid." },
+                            mode = new { type = "string", description = "read_body | set_body" },
+                            body = new { type = "string", description = "Required for set_body: only the RunScript method body. No using statements, no class declaration, no RunScript signature, no template." },
+                            summary = new { type = "string", description = "Required short Chinese summary for the UI operation card. Do not write the function name." },
+                            summary_detail = new { type = "string", description = "Optional short secondary phrase for the UI operation card." }
+                        },
+                        required = new[] { "id", "mode", "summary" }
+                    }
+                }
+            };
+        }
+
+        private static string GetToolDefinitionName(object toolDefinition)
+        {
+            try
+            {
+                JObject jo = JObject.FromObject(toolDefinition);
+                return jo["function"]?["name"]?.ToString();
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Debug("GetToolDefinitionName failed: " + ex.Message);
+                return null;
+            }
+        }
+
+        private static object[] FilterToolsForLayoutMode(object[] toolDefinitions)
+        {
+            if (toolDefinitions == null) return toolDefinitions;
+            if (_layoutMode == LayoutMode.Normal)
+                return toolDefinitions;
+
+            var blocked = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "create_component_graph",
+                "read_skill_file",
+                "read_reference_json",
+                "create_gh_skill",
+                ShowReferenceOptionsTool.FunctionName
+            };
+            if (_layoutMode == LayoutMode.CSharpFirst)
+            {
+                blocked.Add("create_script_component_graph");
+                blocked.Add("gh_native_script_editor");
+            }
+            if (_layoutMode == LayoutMode.PythonFirst)
+            {
+                blocked.Add("create_csharp_script_component");
+                blocked.Add("edit_csharp_script_component");
+            }
+
+            return toolDefinitions
+                .Where(t => !blocked.Contains(GetToolDefinitionName(t) ?? ""))
+                .Select(RestrictAddComponentToolForScriptMode)
+                .ToArray();
+        }
+
+        private static object RestrictAddComponentToolForScriptMode(object toolDefinition)
+        {
+            string name = GetToolDefinitionName(toolDefinition);
+            if (!string.Equals(name, "add_gh_component", StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.Equals(name, "set_gh_component_value", StringComparison.OrdinalIgnoreCase) && _layoutMode == LayoutMode.CSharpFirst)
+                {
+                    JObject setJo = JObject.FromObject(toolDefinition);
+                    var setFn = setJo["function"] as JObject;
+                    if (setFn != null)
+                    {
+                        setFn["description"] = "C# 优先模式下的受限辅助值设置工具：仅用于 Slider、Panel 等非脚本辅助电池的数值或显示文本。严禁用它写入 C# Script 源码；修改 C# Script 方法体必须使用 edit_csharp_script_component。";
+                    }
+                    return setJo;
+                }
+                return toolDefinition;
+            }
+
+            JObject jo = JObject.FromObject(toolDefinition);
+            var fn = jo["function"] as JObject;
+            if (fn != null)
+            {
+                fn["description"] = "脚本优先模式下的受限辅助工具：仅可单独补充 Grasshopper 的 Params 或 Display 分类内电池，作为 C#/Python 脚本电池的输入、输出、显示或调试辅助。严禁创建 Math/Sets/Vector/Curve/Surface/Mesh/Transform 等核心建模逻辑电池；C# 核心逻辑必须放在 create_csharp_script_component 创建的脚本电池中，Python 核心逻辑必须放在 create_script_component_graph 创建的 Python 3 Script 电池中。";
+            }
+            return jo;
+        }
+
         private static async Task<ApiResponse> CallLLMAPI(string apiKey, int depth = 0, System.Threading.CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
@@ -3353,6 +3781,9 @@ namespace ADDGH
                                 }
                             }
                         },
+                        GetCreateCSharpScriptComponentToolDefinition(),
+                        GetEditCSharpScriptComponentToolDefinition(),
+                        GetCreateScriptComponentGraphToolDefinition(),
                         new {
                             type = "function",
                             function = new {
@@ -3722,6 +4153,7 @@ namespace ADDGH
                         },
                         ShowReferenceOptionsTool.GetApiToolDefinition()
                     };
+                    toolDefinitions = FilterToolsForLayoutMode(toolDefinitions);
 
                 ShowThinkingAnimation("载入中...");
                 DateTime startTime = DateTime.Now;
@@ -3914,6 +4346,43 @@ namespace ADDGH
                                     gName);
                                 if (argsObj["components"] is JArray comps) addComp += comps.Count;
                                 if (argsObj["connections"] is JArray conns) addConn += conns.Count;
+                            }
+                            else if (funcName == "create_csharp_script_component") {
+                                toolResult = ExecuteCreateCSharpScriptComponent(
+                                    argsObj["alias_id"]?.ToString(),
+                                    argsObj["label"]?.ToString(),
+                                    argsObj["x"]?.ToObject<float>() ?? 0f,
+                                    argsObj["y"]?.ToObject<float>() ?? 0f,
+                                    argsObj["inputs"] as JArray,
+                                    argsObj["outputs"] as JArray,
+                                    argsObj["body"]?.ToString(),
+                                    argsObj["components"] as JArray,
+                                    argsObj["connections"] as JArray,
+                                    argsObj["group_name"]?.ToString());
+                                if (!toolResult.StartsWith("Error:")) {
+                                    addComp += 1;
+                                    if (argsObj["components"] is JArray compsArr) addComp += compsArr.Count;
+                                    if (argsObj["connections"] is JArray connsArr) addConn += connsArr.Count;
+                                }
+                            }
+                            else if (funcName == "edit_csharp_script_component") {
+                                toolResult = ExecuteEditCSharpScriptComponent(
+                                    argsObj["id"]?.ToString(),
+                                    argsObj["mode"]?.ToString(),
+                                    argsObj["body"]?.ToString());
+                            }
+                            else if (funcName == "create_script_component_graph") {
+                                toolResult = ExecuteCreateScriptComponentGraph(
+                                    argsObj["mode"]?.ToString(),
+                                    argsObj["scripts"] as JArray,
+                                    argsObj["components"] as JArray,
+                                    argsObj["connections"] as JArray,
+                                    argsObj["group_name"]?.ToString());
+                                if (!toolResult.StartsWith("Error:")) {
+                                    if (argsObj["scripts"] is JArray scriptsArr) addComp += scriptsArr.Count;
+                                    if (argsObj["components"] is JArray compsArr) addComp += compsArr.Count;
+                                    if (argsObj["connections"] is JArray connsArr) addConn += connsArr.Count;
+                                }
                             }
                             else if (funcName == "check_gh_errors") toolResult = ExecuteCheckGhErrors();
                             else if (funcName == "search_component_library")
@@ -4626,6 +5095,22 @@ namespace ADDGH
             return proxy?.CreateInstance() as Grasshopper.Kernel.IGH_DocumentObject;
         }
 
+        private static bool IsScriptModeAuxiliaryComponentAllowed(Grasshopper.Kernel.IGH_DocumentObject obj)
+        {
+            if (_layoutMode == LayoutMode.Normal) return true;
+            string category = obj?.Category ?? "";
+            return string.Equals(category, "Params", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(category, "Display", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string BuildScriptModeAuxiliaryComponentError(Grasshopper.Kernel.IGH_DocumentObject obj, string requestedName)
+        {
+            string displayName = !string.IsNullOrWhiteSpace(requestedName) ? requestedName : (obj?.Name ?? "该电池");
+            string category = string.IsNullOrWhiteSpace(obj?.Category) ? "未知" : obj.Category;
+            return "Error: 脚本优先模式下，非脚本辅助电池只允许使用 Params 或 Display 分类；"
+                + displayName + " 属于 " + category + "，已拒绝创建。核心建模逻辑请写入 C#/Python 脚本电池。";
+        }
+
         private static string ExecuteAddGhComponent(string name, float x, float y, string label = null, string componentGuid = null)
         {
             string result = "";
@@ -4640,6 +5125,12 @@ namespace ADDGH
                     result = !string.IsNullOrWhiteSpace(componentGuid)
                         ? "Error: component_guid 无效或未加载对应的电池类型。"
                         : "Error: 找不到电池 '" + name + "'。";
+                    return;
+                }
+
+                if (!IsScriptModeAuxiliaryComponentAllowed(obj))
+                {
+                    result = BuildScriptModeAuxiliaryComponentError(obj, name);
                     return;
                 }
 
@@ -5186,6 +5677,12 @@ namespace ADDGH
                 var obj = doc.FindObject(guid, true);
                 if (obj == null) { result = "Error: 找不到电池。"; return; }
 
+                if (_layoutMode == LayoutMode.CSharpFirst && IsCSharpScriptComponent(obj))
+                {
+                    result = "Error: C# priority mode does not allow set_gh_component_value to edit C# Script source. Use edit_csharp_script_component with mode=set_body.";
+                    return;
+                }
+
                 if (obj is Grasshopper.Kernel.Special.GH_NumberSlider slider) {
                     List<string> changes = new List<string>();
                     
@@ -5384,6 +5881,842 @@ namespace ADDGH
                 }
             }
             return proxy;
+        }
+
+        private static Grasshopper.Kernel.IGH_ObjectProxy FindExactComponentProxyByName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return null;
+            foreach (var p in Grasshopper.Instances.ComponentServer.ObjectProxies)
+            {
+                if (p.Obsolete) continue;
+                if (string.Equals(p.Desc.Name, name, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(p.Desc.NickName, name, StringComparison.OrdinalIgnoreCase))
+                    return p;
+            }
+            return null;
+        }
+
+        private static string ResolveScriptComponentName(string mode)
+        {
+            string m = (mode ?? "").Trim().ToLowerInvariant();
+            if (m == "csharp" || m == "cs" || m == "c#") return "C# Script";
+            if (m == "python" || m == "py") return "Python 3 Script";
+            return null;
+        }
+
+        private static string GetCSharpOutputPortName(int index)
+        {
+            if (index < 0) return "a";
+            const string letters = "abcdefghijklmnopqrstuvwxyz";
+            if (index < letters.Length) return letters[index].ToString();
+            return "out" + (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        private static JArray BuildCSharpOutputPortsFromCount(int count)
+        {
+            count = Math.Max(1, Math.Min(26, count));
+            var outputs = new JArray();
+            for (int i = 0; i < count; i++)
+            {
+                outputs.Add(new JObject
+                {
+                    ["name"] = GetCSharpOutputPortName(i),
+                    ["type_hint"] = "Auto-inferred C# output"
+                });
+            }
+            return outputs;
+        }
+
+        private static JArray BuildCSharpOutputPortsFromLabels(JArray outputLabels)
+        {
+            int count = outputLabels == null || outputLabels.Count == 0 ? 1 : Math.Min(26, outputLabels.Count);
+            var outputs = new JArray();
+            for (int i = 0; i < count; i++)
+            {
+                var spec = outputLabels != null && i < outputLabels.Count ? outputLabels[i] as JObject : null;
+                string label = spec?["label"]?.ToString();
+                if (string.IsNullOrWhiteSpace(label)) label = spec?["name"]?.ToString();
+                string typeHint = spec?["type_hint"]?.ToString();
+                outputs.Add(new JObject
+                {
+                    ["name"] = string.IsNullOrWhiteSpace(label) ? GetCSharpOutputPortName(i) : label.Trim(),
+                    ["type_hint"] = typeHint ?? ""
+                });
+            }
+            return outputs;
+        }
+
+        private static bool IsValidCSharpIdentifier(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return false;
+            name = name.Trim();
+            if (!(char.IsLetter(name[0]) || name[0] == '_')) return false;
+            for (int i = 1; i < name.Length; i++)
+            {
+                if (!(char.IsLetterOrDigit(name[i]) || name[i] == '_')) return false;
+            }
+
+            var keywords = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "abstract","as","base","bool","break","byte","case","catch","char","checked","class","const",
+                "continue","decimal","default","delegate","do","double","else","enum","event","explicit","extern",
+                "false","finally","fixed","float","for","foreach","goto","if","implicit","in","int","interface",
+                "internal","is","lock","long","namespace","new","null","object","operator","out","override","params",
+                "private","protected","public","readonly","ref","return","sbyte","sealed","short","sizeof","stackalloc",
+                "static","string","struct","switch","this","throw","true","try","typeof","uint","ulong","unchecked",
+                "unsafe","ushort","using","virtual","void","volatile","while"
+            };
+            return !keywords.Contains(name);
+        }
+
+        private static void ApplyPortMetadata(Grasshopper.Kernel.IGH_Param param, JToken specToken, bool forceCSharpOutputName = false, int portIndex = 0, List<string> warnings = null)
+        {
+            if (param == null || specToken == null) return;
+            string name = specToken["name"]?.ToString();
+            string typeHint = specToken["type_hint"]?.ToString();
+            if (forceCSharpOutputName)
+            {
+                string forced = GetCSharpOutputPortName(portIndex);
+                if (!string.IsNullOrWhiteSpace(name) && !string.Equals(name.Trim(), forced, StringComparison.Ordinal))
+                    warnings?.Add("C# 输出端口 " + name.Trim() + " 已规范为 " + forced + "；原名称写入 Description。");
+                param.Name = forced;
+                param.NickName = forced;
+                var descParts = new List<string>();
+                if (!string.IsNullOrWhiteSpace(name)) descParts.Add("label: " + name.Trim());
+                if (!string.IsNullOrWhiteSpace(typeHint)) descParts.Add("type: " + typeHint.Trim());
+                if (descParts.Count > 0) param.Description = string.Join("; ", descParts);
+            }
+            else if (!string.IsNullOrWhiteSpace(name))
+            {
+                param.Name = name.Trim();
+                param.NickName = name.Trim();
+                if (!string.IsNullOrWhiteSpace(typeHint))
+                    param.Description = typeHint.Trim();
+            }
+            else if (!string.IsNullOrWhiteSpace(typeHint))
+            {
+                param.Description = typeHint.Trim();
+            }
+            param.Attributes?.ExpireLayout();
+        }
+
+        private const string CSharpScriptLogicMarker = "// Write your logic here";
+
+        private const string CSharpScriptTemplate = @"// Grasshopper Script Instance
+#region Usings
+using System;
+using System.Linq;
+using System.Collections;
+using System.Collections.Generic;
+using System.Drawing;
+
+using Rhino;
+using Rhino.Geometry;
+
+using Grasshopper;
+using Grasshopper.Kernel;
+using Grasshopper.Kernel.Data;
+using Grasshopper.Kernel.Types;
+#endregion
+
+public class Script_Instance : GH_ScriptInstance
+{
+    #region Notes
+    /* 
+      Members:
+        RhinoDoc RhinoDocument
+        GH_Document GrasshopperDocument
+        IGH_Component Component
+        int Iteration
+
+      Methods (Virtual & overridable):
+        Print(string text)
+        Print(string format, params object[] args)
+        Reflect(object obj)
+        Reflect(object obj, string method_name)
+    */
+    #endregion
+
+    private void RunScript(object x, object y, ref object a)
+    {
+        // Write your logic here
+        a = null;
+    }
+}";
+
+        private static string IndentCSharpBodyForTemplate(string body)
+        {
+            string norm = (body ?? "").Replace("\r\n", "\n").Replace('\r', '\n').Trim('\n', '\r');
+            if (string.IsNullOrWhiteSpace(norm)) norm = "a = null;";
+            var lines = norm.Split('\n');
+            return string.Join(Environment.NewLine, lines.Select(line => "        " + line.TrimEnd()));
+        }
+
+        private static string BuildCSharpScriptTemplateWithBody(string body)
+        {
+            string indented = IndentCSharpBodyForTemplate(body);
+            string replacement = CSharpScriptLogicMarker + Environment.NewLine + indented;
+            return CSharpScriptTemplate.Replace(CSharpScriptLogicMarker + Environment.NewLine + "        a = null;", replacement);
+        }
+
+        private static string NormalizeCSharpScriptSourceForMutableBlock(string source, List<string> warnings)
+        {
+            if (string.IsNullOrWhiteSpace(source)) return source ?? "";
+            string text = source.Replace("\r\n", "\n").Replace('\r', '\n');
+            int runIdx = text.IndexOf("RunScript", StringComparison.Ordinal);
+            if (runIdx < 0 || text.IndexOf("Script_Instance", StringComparison.Ordinal) < 0)
+                return source;
+
+            int open = text.IndexOf('{', runIdx);
+            if (open < 0) return source;
+
+            int depth = 0;
+            for (int i = open; i < text.Length; i++)
+            {
+                if (text[i] == '{') depth++;
+                else if (text[i] == '}')
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        string body = text.Substring(open + 1, i - open - 1).Trim('\n', '\r');
+                        warnings?.Add("检测到 C# 完整模板，已仅保留 RunScript 方法内部逻辑，默认 using/class/签名模板未替换。");
+                        return body;
+                    }
+                }
+            }
+
+            return source;
+        }
+
+        private static bool TrySetCSharpScriptBodyIntoTemplate(Grasshopper.Kernel.IGH_DocumentObject obj, string source, List<string> warnings)
+        {
+            if (TrySetCSharpScriptBodyPreservingTemplate(obj, source, warnings))
+                return true;
+
+            string body = NormalizeCSharpScriptSourceForMutableBlock(source, warnings);
+            string fullTemplate = BuildCSharpScriptTemplateWithBody(body);
+            warnings?.Add("未找到 C# 可编辑代码块，已把逻辑硬编码插入默认模板的 Write your logic here 位置后写入。");
+            return TrySetNativeScriptContentViaReflection(obj, fullTemplate);
+        }
+
+        private static bool TrySetCSharpScriptBodyPreservingTemplate(Grasshopper.Kernel.IGH_DocumentObject obj, string source, List<string> warnings)
+        {
+            string body = NormalizeCSharpScriptSourceForMutableBlock(source, warnings);
+            Type t = obj?.GetType();
+            if (t == null) return false;
+
+            try
+            {
+                var codeBlocksField = t.GetField("m_codeBlocks", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (codeBlocksField != null && codeBlocksField.GetValue(obj) is GH_CodeBlocks blocks)
+                {
+                    codeBlocksField.SetValue(obj, GhBuildCodeBlocksReplacingFirstMutable(blocks, body));
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Debug("TrySetCSharpScriptBodyPreservingTemplate m_codeBlocks: " + ex.Message);
+            }
+
+            warnings?.Add("C# Script editable code block was not found; refused full-template replacement.");
+            return false;
+        }
+
+        private static bool TryReadCSharpScriptBodyPreservingTemplate(Grasshopper.Kernel.IGH_DocumentObject obj, out string body, out string detail)
+        {
+            body = "";
+            detail = "";
+            Type t = obj?.GetType();
+            if (t == null) return false;
+
+            try
+            {
+                var codeBlocksField = t.GetField("m_codeBlocks", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (codeBlocksField != null && codeBlocksField.GetValue(obj) is GH_CodeBlocks blocks)
+                {
+                    for (int i = 0; i < blocks.Count; i++)
+                    {
+                        GH_CodeBlock block = blocks[i];
+                        if (block == null || block.ReadOnly) continue;
+                        body = string.Join(Environment.NewLine, block.Lines ?? Array.Empty<string>());
+                        detail = "m_codeBlocks[" + i.ToString(System.Globalization.CultureInfo.InvariantCulture) + "]";
+                        return true;
+                    }
+                    detail = "m_codeBlocks has no editable block.";
+                }
+            }
+            catch (Exception ex)
+            {
+                detail = ex.Message;
+                AddGhLog.Debug("TryReadCSharpScriptBodyPreservingTemplate m_codeBlocks: " + ex.Message);
+            }
+
+            return false;
+        }
+
+        private static bool TryConfigureScriptPorts(Grasshopper.Kernel.IGH_DocumentObject obj, JArray inputs, JArray outputs, bool csharpMode, List<string> warnings)
+        {
+            if (!(obj is Grasshopper.Kernel.IGH_Component comp))
+            {
+                warnings?.Add((obj?.NickName ?? obj?.Name ?? "脚本电池") + " 不是可配置端口的组件。");
+                return false;
+            }
+
+            if (!(obj is Grasshopper.Kernel.IGH_VariableParameterComponent vpc))
+            {
+                warnings?.Add((obj.NickName ?? obj.Name ?? "脚本电池") + " 不支持动态端口，已保留默认端口。");
+            }
+            else
+            {
+                bool Resize(IList<Grasshopper.Kernel.IGH_Param> list, Grasshopper.Kernel.GH_ParameterSide side, int target)
+                {
+                    while (list.Count < target)
+                    {
+                        var created = vpc.CreateParameter(side, list.Count);
+                        if (created == null) return false;
+                        if (side == Grasshopper.Kernel.GH_ParameterSide.Input) comp.Params.RegisterInputParam(created);
+                        else comp.Params.RegisterOutputParam(created);
+                    }
+                    while (list.Count > target)
+                    {
+                        int last = list.Count - 1;
+                        if (!vpc.CanRemoveParameter(side, last)) return false;
+                        comp.Params.UnregisterParameter(list[last]);
+                    }
+                    return true;
+                }
+
+                int inputTarget = inputs?.Count ?? comp.Params.Input.Count;
+                int outputTarget = outputs?.Count ?? comp.Params.Output.Count;
+                if (!Resize(comp.Params.Input, Grasshopper.Kernel.GH_ParameterSide.Input, inputTarget))
+                    warnings?.Add((obj.NickName ?? obj.Name ?? "脚本电池") + " 输入端口数量未能完全调整。");
+                if (!Resize(comp.Params.Output, Grasshopper.Kernel.GH_ParameterSide.Output, outputTarget))
+                    warnings?.Add((obj.NickName ?? obj.Name ?? "脚本电池") + " 输出端口数量未能完全调整。");
+
+                try { vpc.VariableParameterMaintenance(); } catch (Exception ex) { warnings?.Add("端口维护失败：" + ex.Message); }
+                try { comp.Params.OnParametersChanged(); } catch (Exception ex) { warnings?.Add("端口刷新失败：" + ex.Message); }
+            }
+
+            for (int i = 0; inputs != null && i < inputs.Count && i < comp.Params.Input.Count; i++)
+                ApplyPortMetadata(comp.Params.Input[i], inputs[i], false, i, warnings);
+            for (int i = 0; outputs != null && i < outputs.Count && i < comp.Params.Output.Count; i++)
+                ApplyPortMetadata(comp.Params.Output[i], outputs[i], csharpMode, i, warnings);
+
+            return true;
+        }
+
+        private static bool IsCSharpScriptComponent(Grasshopper.Kernel.IGH_DocumentObject obj)
+        {
+            if (obj == null) return false;
+            string name = obj.Name ?? "";
+            string nick = obj.NickName ?? "";
+            if (name.IndexOf("C#", StringComparison.OrdinalIgnoreCase) >= 0 && name.IndexOf("Script", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            if (nick.IndexOf("C#", StringComparison.OrdinalIgnoreCase) >= 0 && nick.IndexOf("Script", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            if (TryReflectGhScriptLanguage(obj, out GH_ScriptLanguage lang, out _) && lang == GH_ScriptLanguage.CS)
+                return true;
+            return obj.GetType()?.GetField("m_codeBlocks", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) != null;
+        }
+
+        private static string ExecuteEditCSharpScriptComponent(string id, string mode, string body)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: no active Grasshopper canvas."; return; }
+                if (!Guid.TryParse(id, out Guid guid)) { result = "Error: invalid component id."; return; }
+                var obj = doc.FindObject(guid, true);
+                if (obj == null) { result = "Error: component not found."; return; }
+                if (!IsCSharpScriptComponent(obj))
+                {
+                    result = "Error: target is not a Grasshopper C# Script component.";
+                    return;
+                }
+
+                string m = (mode ?? "").Trim();
+                if (m.Equals("read_body", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (TryReadCSharpScriptBodyPreservingTemplate(obj, out string currentBody, out string detail))
+                    {
+                        var payload = new JObject
+                        {
+                            ["status"] = "ok",
+                            ["mode"] = "read_body",
+                            ["id"] = obj.InstanceGuid.ToString(),
+                            ["body"] = currentBody,
+                            ["source"] = detail,
+                            ["warning"] = "This is only the editable RunScript body. Do not add using/class/signature when writing it back."
+                        };
+                        result = payload.ToString(Formatting.None);
+                    }
+                    else
+                    {
+                        result = "Error: could not read the editable C# Script body without touching the template.";
+                    }
+                    return;
+                }
+
+                if (!m.Equals("set_body", StringComparison.OrdinalIgnoreCase))
+                {
+                    result = "Error: mode must be read_body or set_body.";
+                    return;
+                }
+                if (body == null)
+                {
+                    result = "Error: set_body requires body.";
+                    return;
+                }
+
+                var warnings = new List<string>();
+                bool wrote = TrySetCSharpScriptBodyPreservingTemplate(obj, body, warnings);
+                if (!wrote)
+                {
+                    result = "Error: could not write C# Script body safely. The template was not replaced.";
+                    if (warnings.Count > 0) result += " " + string.Join(" ", warnings);
+                    return;
+                }
+
+                FinalizeGrasshopperScriptMutation(doc, obj);
+                var payloadSet = new JObject
+                {
+                    ["status"] = "ok",
+                    ["mode"] = "set_body",
+                    ["id"] = obj.InstanceGuid.ToString(),
+                    ["template_preserved"] = true,
+                    ["warnings"] = new JArray(warnings)
+                };
+                string errors = GetCanvasErrors(doc);
+                if (!string.IsNullOrWhiteSpace(errors)) payloadSet["canvas_errors"] = errors;
+                result = payloadSet.ToString(Formatting.None);
+            }));
+            return result;
+        }
+
+        private static string ExecuteCreateCSharpScriptComponent(string aliasId, string label, float x, float y, JArray inputs, JArray outputs, string body, JArray components, JArray connections, string groupName = null)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: no active Grasshopper canvas."; return; }
+
+                aliasId = string.IsNullOrWhiteSpace(aliasId) ? "core" : aliasId.Trim();
+                var outputSpecs = BuildCSharpOutputPortsFromLabels(outputs);
+                var outputNames = new HashSet<string>(Enumerable.Range(0, outputSpecs.Count).Select(GetCSharpOutputPortName), StringComparer.Ordinal);
+
+                for (int i = 0; inputs != null && i < inputs.Count; i++)
+                {
+                    string inputName = inputs[i]?["name"]?.ToString()?.Trim();
+                    if (!IsValidCSharpIdentifier(inputName))
+                    {
+                        result = "Error: C# input port name must be a valid identifier: " + (inputName ?? "");
+                        return;
+                    }
+                    if (outputNames.Contains(inputName))
+                    {
+                        result = "Error: C# input port name '" + inputName + "' collides with forced output variable names a,b,c... Rename the input.";
+                        return;
+                    }
+                }
+
+                var aliasSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                aliasSet.Add(aliasId);
+
+                var scriptProxy = FindExactComponentProxyByName("C# Script");
+                if (scriptProxy == null)
+                {
+                    result = "Error: cannot find C# Script component. Confirm the Grasshopper script component is loaded.";
+                    return;
+                }
+
+                var scriptProbe = scriptProxy.CreateInstance() as Grasshopper.Kernel.IGH_DocumentObject;
+                if (!(scriptProbe is Grasshopper.Kernel.IGH_Component))
+                {
+                    result = "Error: C# Script component cannot be instantiated as a connectable component.";
+                    return;
+                }
+
+                if (components != null)
+                {
+                    foreach (var c in components)
+                    {
+                        string alias = c["alias_id"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(alias)) { result = "Error: every helper component must provide alias_id."; return; }
+                        if (!aliasSet.Add(alias)) { result = "Error: duplicate alias_id: " + alias; return; }
+
+                        string name = c["name"]?.ToString();
+                        string cguid = c["component_guid"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(name) && string.IsNullOrWhiteSpace(cguid))
+                        {
+                            result = "Error: helper component " + alias + " must provide name or component_guid.";
+                            return;
+                        }
+
+                        var probe = InstantiateDocumentObjectFromLibrary(name ?? "", cguid);
+                        if (probe == null)
+                        {
+                            result = "Error: cannot instantiate helper component " + alias + ".";
+                            return;
+                        }
+                        if (!IsScriptModeAuxiliaryComponentAllowed(probe))
+                        {
+                            result = BuildScriptModeAuxiliaryComponentError(probe, name ?? alias);
+                            return;
+                        }
+                    }
+                }
+
+                var createdObjs = new Dictionary<string, Grasshopper.Kernel.IGH_DocumentObject>(StringComparer.OrdinalIgnoreCase);
+                var aliasMap = new JObject();
+                var warnings = new List<string>();
+
+                var scriptObj = scriptProxy.CreateInstance() as Grasshopper.Kernel.IGH_DocumentObject;
+                scriptObj.CreateAttributes();
+                scriptObj.Attributes.Pivot = new System.Drawing.PointF(x, y);
+                if (!string.IsNullOrWhiteSpace(label)) scriptObj.NickName = label;
+                doc.AddObject(scriptObj, false);
+
+                TryConfigureScriptPorts(scriptObj, inputs, outputSpecs, true, warnings);
+                try { scriptObj.ExpireSolution(true); } catch { }
+                try { doc.ScheduleSolution(1); } catch { }
+
+                bool wrote = TrySetCSharpScriptBodyIntoTemplate(scriptObj, body ?? "", warnings);
+                if (wrote) FinalizeGrasshopperScriptMutation(doc, scriptObj);
+                else warnings.Add("C# Script body was not written.");
+
+                createdObjs[aliasId] = scriptObj;
+                aliasMap[aliasId] = scriptObj.InstanceGuid.ToString();
+
+                if (components != null)
+                {
+                    foreach (var c in components)
+                    {
+                        string name = c["name"]?.ToString();
+                        string cguid = c["component_guid"]?.ToString();
+                        string helperLabel = c["label"]?.ToString();
+                        float hx = c["x"]?.ToObject<float>() ?? 0;
+                        float hy = c["y"]?.ToObject<float>() ?? 0;
+                        string val = c["value"]?.ToString();
+                        double? min = c["min"]?.ToObject<double>();
+                        double? max = c["max"]?.ToObject<double>();
+                        int? decimals = c["decimals"]?.ToObject<int>();
+                        string alias = c["alias_id"]?.ToString();
+
+                        var obj = InstantiateDocumentObjectFromLibrary(name ?? "", cguid);
+                        obj.CreateAttributes();
+                        obj.Attributes.Pivot = new System.Drawing.PointF(hx, hy);
+                        if (!string.IsNullOrEmpty(helperLabel)) obj.NickName = helperLabel;
+                        doc.AddObject(obj, false);
+
+                        if (obj is Grasshopper.Kernel.Special.GH_NumberSlider slider)
+                        {
+                            if (min.HasValue) slider.Slider.Minimum = (decimal)min.Value;
+                            if (max.HasValue) slider.Slider.Maximum = (decimal)max.Value;
+                            if (decimals.HasValue) slider.Slider.DecimalPlaces = Math.Max(0, Math.Min(10, decimals.Value));
+                            if (!string.IsNullOrEmpty(val) && decimal.TryParse(val, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out decimal d))
+                                slider.Slider.Value = d;
+                        }
+                        else if (obj is Grasshopper.Kernel.Special.GH_Panel panel && !string.IsNullOrEmpty(val))
+                        {
+                            panel.UserText = val;
+                        }
+
+                        createdObjs[alias] = obj;
+                        aliasMap[alias] = obj.InstanceGuid.ToString();
+                    }
+                }
+
+                int connected = 0;
+                if (connections != null)
+                {
+                    foreach (var conn in connections)
+                    {
+                        string fromAlias = conn["from_alias"]?.ToString();
+                        string toAlias = conn["to_alias"]?.ToString();
+                        if (createdObjs.TryGetValue(fromAlias, out var f) && createdObjs.TryGetValue(toAlias, out var t))
+                        {
+                            int fIdx = conn["from_index"]?.ToObject<int>() ?? 0;
+                            int tIdx = conn["to_index"]?.ToObject<int>() ?? 0;
+                            var sP = (f is Grasshopper.Kernel.IGH_Component cF) ? (fIdx >= 0 && fIdx < cF.Params.Output.Count ? cF.Params.Output[fIdx] : null) : (f as Grasshopper.Kernel.IGH_Param);
+                            var tP = (t is Grasshopper.Kernel.IGH_Component cT) ? (tIdx >= 0 && tIdx < cT.Params.Input.Count ? cT.Params.Input[tIdx] : null) : (t as Grasshopper.Kernel.IGH_Param);
+                            if (sP != null && tP != null)
+                            {
+                                tP.AddSource(sP);
+                                connected++;
+                            }
+                            else
+                            {
+                                warnings.Add("Connection port index out of range: " + fromAlias + " -> " + toAlias);
+                            }
+                        }
+                        else
+                        {
+                            warnings.Add("Connection references missing alias: " + fromAlias + " -> " + toAlias);
+                        }
+                    }
+                }
+
+                if (!string.IsNullOrWhiteSpace(groupName) && createdObjs.Count > 0)
+                {
+                    var group = new Grasshopper.Kernel.Special.GH_Group();
+                    group.NickName = groupName;
+                    group.Colour = System.Drawing.Color.FromArgb(80, 100, 150, 250);
+                    foreach (var obj in createdObjs.Values) group.AddObject(obj.InstanceGuid);
+                    doc.AddObject(group, false);
+                    group.ExpireSolution(true);
+                }
+
+                _canvasChanged = true;
+                try { doc.ScheduleSolution(150); }
+                catch (Exception ex) { AddGhLog.Warn("ExecuteCreateCSharpScriptComponent Schedule failed: " + ex.Message); }
+
+                var payload = new JObject
+                {
+                    ["status"] = "ok",
+                    ["mode"] = "csharp",
+                    ["created_scripts"] = 1,
+                    ["created_components"] = components?.Count ?? 0,
+                    ["created_connections"] = connected,
+                    ["script_write_ok"] = wrote ? 1 : 0,
+                    ["forced_output_variables"] = new JArray(outputNames),
+                    ["aliases"] = aliasMap,
+                    ["warnings"] = new JArray(warnings)
+                };
+                string errors = GetCanvasErrors(doc);
+                if (!string.IsNullOrWhiteSpace(errors)) payload["canvas_errors"] = errors;
+                result = payload.ToString(Formatting.None);
+            }));
+            return result;
+        }
+
+        private static string ExecuteCreateScriptComponentGraph(string mode, JArray scripts, JArray components, JArray connections, string groupName = null)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+
+                string scriptComponentName = ResolveScriptComponentName(mode);
+                if (string.IsNullOrWhiteSpace(scriptComponentName))
+                {
+                    result = "Error: mode 必须是 csharp 或 python。";
+                    return;
+                }
+
+                if (scriptComponentName == "C# Script")
+                {
+                    result = "Error: C# Script must be created with create_csharp_script_component so ports are configured before only the RunScript body is written.";
+                    return;
+                }
+
+                if (scripts == null || scripts.Count == 0)
+                {
+                    result = "Error: scripts 至少需要一个脚本电池定义。";
+                    return;
+                }
+
+                var aliasSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var scriptProxy = FindExactComponentProxyByName(scriptComponentName);
+                if (scriptProxy == null)
+                {
+                    result = scriptComponentName == "Python 3 Script"
+                        ? "Error: 找不到 Python 3 Script 电池。Python 优先模式只适配 Rhino 8 Python 3 Script，请确认已安装并启用该组件。"
+                        : "Error: 找不到 C# Script 电池。请确认 Grasshopper 脚本组件已加载。";
+                    return;
+                }
+
+                foreach (var s in scripts)
+                {
+                    string alias = s["alias_id"]?.ToString();
+                    if (string.IsNullOrWhiteSpace(alias)) { result = "Error: 每个脚本电池都必须提供 alias_id。"; return; }
+                    if (!aliasSet.Add(alias)) { result = "Error: alias_id 重复：" + alias; return; }
+                    var probe = scriptProxy.CreateInstance() as Grasshopper.Kernel.IGH_DocumentObject;
+                    if (probe == null) { result = "Error: 无法实例化 " + scriptComponentName + "。"; return; }
+                    if (!(probe is Grasshopper.Kernel.IGH_Component)) { result = "Error: " + scriptComponentName + " 不是可连线组件。"; return; }
+                }
+
+                if (components != null)
+                {
+                    foreach (var c in components)
+                    {
+                        string alias = c["alias_id"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(alias)) { result = "Error: 每个辅助电池都必须提供 alias_id。"; return; }
+                        if (!aliasSet.Add(alias)) { result = "Error: alias_id 重复：" + alias; return; }
+                        string name = c["name"]?.ToString();
+                        string cguid = c["component_guid"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(name) && string.IsNullOrWhiteSpace(cguid))
+                        {
+                            result = "Error: 辅助电池 " + alias + " 必须提供 name 或 component_guid。";
+                            return;
+                        }
+                        var probe = InstantiateDocumentObjectFromLibrary(name ?? "", cguid);
+                        if (probe == null)
+                        {
+                            result = "Error: 无法实例化辅助电池 " + alias + "。";
+                            return;
+                        }
+                        if (!IsScriptModeAuxiliaryComponentAllowed(probe))
+                        {
+                            result = BuildScriptModeAuxiliaryComponentError(probe, name ?? alias);
+                            return;
+                        }
+                    }
+                }
+
+                var createdObjs = new Dictionary<string, Grasshopper.Kernel.IGH_DocumentObject>(StringComparer.OrdinalIgnoreCase);
+                var aliasMap = new JObject();
+                var warnings = new List<string>();
+                int scriptWriteOk = 0;
+
+                foreach (var s in scripts)
+                {
+                    string alias = s["alias_id"]?.ToString();
+                    string label = s["label"]?.ToString();
+                    string source = s["source"]?.ToString() ?? "";
+                    float x = s["x"]?.ToObject<float>() ?? 0f;
+                    float y = s["y"]?.ToObject<float>() ?? 0f;
+
+                    var obj = scriptProxy.CreateInstance() as Grasshopper.Kernel.IGH_DocumentObject;
+                    obj.CreateAttributes();
+                    obj.Attributes.Pivot = new System.Drawing.PointF(x, y);
+                    if (!string.IsNullOrWhiteSpace(label)) obj.NickName = label;
+                    doc.AddObject(obj, false);
+
+                    JArray outputSpecs = s["outputs"] as JArray;
+                    if (scriptComponentName == "C# Script")
+                    {
+                        if (outputSpecs != null && outputSpecs.Count > 0)
+                            warnings.Add("C# 模式忽略 scripts.outputs；输出端口已按 output_count 硬编码创建为 a,b,c...。");
+                        int outputCount = s["output_count"]?.ToObject<int?>() ?? 1;
+                        outputSpecs = BuildCSharpOutputPortsFromCount(outputCount);
+                    }
+
+                    TryConfigureScriptPorts(obj, s["inputs"] as JArray, outputSpecs, scriptComponentName == "C# Script", warnings);
+
+                    bool wrote = false;
+                    if (scriptComponentName == "C# Script")
+                    {
+                        wrote = TrySetCSharpScriptBodyIntoTemplate(obj, source, warnings);
+                    }
+                    else
+                    {
+                        wrote = TrySetScriptMemberExact(obj, "Text", source, out _);
+                        if (!wrote) wrote = TrySetGrasshopperScriptOrFormula(obj, source, out _);
+                    }
+
+                    if (wrote)
+                    {
+                        scriptWriteOk++;
+                        FinalizeGrasshopperScriptMutation(doc, obj);
+                    }
+                    else
+                    {
+                        warnings.Add("脚本源码未能写入：" + alias);
+                    }
+
+                    createdObjs[alias] = obj;
+                    aliasMap[alias] = obj.InstanceGuid.ToString();
+                }
+
+                if (components != null)
+                {
+                    foreach (var c in components)
+                    {
+                        string name = c["name"]?.ToString();
+                        string cguid = c["component_guid"]?.ToString();
+                        string label = c["label"]?.ToString();
+                        float x = c["x"]?.ToObject<float>() ?? 0;
+                        float y = c["y"]?.ToObject<float>() ?? 0;
+                        string val = c["value"]?.ToString();
+                        double? min = c["min"]?.ToObject<double>();
+                        double? max = c["max"]?.ToObject<double>();
+                        int? decimals = c["decimals"]?.ToObject<int>();
+                        string alias = c["alias_id"]?.ToString();
+
+                        var obj = InstantiateDocumentObjectFromLibrary(name ?? "", cguid);
+                        obj.CreateAttributes();
+                        obj.Attributes.Pivot = new System.Drawing.PointF(x, y);
+                        if (!string.IsNullOrEmpty(label)) obj.NickName = label;
+                        doc.AddObject(obj, false);
+
+                        if (obj is Grasshopper.Kernel.Special.GH_NumberSlider slider)
+                        {
+                            if (min.HasValue) slider.Slider.Minimum = (decimal)min.Value;
+                            if (max.HasValue) slider.Slider.Maximum = (decimal)max.Value;
+                            if (decimals.HasValue) slider.Slider.DecimalPlaces = Math.Max(0, Math.Min(10, decimals.Value));
+                            if (!string.IsNullOrEmpty(val) && decimal.TryParse(val, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out decimal d))
+                                slider.Slider.Value = d;
+                        }
+                        else if (obj is Grasshopper.Kernel.Special.GH_Panel panel && !string.IsNullOrEmpty(val))
+                        {
+                            panel.UserText = val;
+                        }
+
+                        createdObjs[alias] = obj;
+                        aliasMap[alias] = obj.InstanceGuid.ToString();
+                    }
+                }
+
+                int connected = 0;
+                if (connections != null)
+                {
+                    foreach (var conn in connections)
+                    {
+                        if (createdObjs.TryGetValue(conn["from_alias"]?.ToString(), out var f) && createdObjs.TryGetValue(conn["to_alias"]?.ToString(), out var t))
+                        {
+                            int fIdx = conn["from_index"]?.ToObject<int>() ?? 0;
+                            int tIdx = conn["to_index"]?.ToObject<int>() ?? 0;
+                            var sP = (f is Grasshopper.Kernel.IGH_Component cF) ? (fIdx >= 0 && fIdx < cF.Params.Output.Count ? cF.Params.Output[fIdx] : null) : (f as Grasshopper.Kernel.IGH_Param);
+                            var tP = (t is Grasshopper.Kernel.IGH_Component cT) ? (tIdx >= 0 && tIdx < cT.Params.Input.Count ? cT.Params.Input[tIdx] : null) : (t as Grasshopper.Kernel.IGH_Param);
+                            if (sP != null && tP != null)
+                            {
+                                tP.AddSource(sP);
+                                connected++;
+                            }
+                            else
+                            {
+                                warnings.Add("连线端口越界：" + conn["from_alias"] + " -> " + conn["to_alias"]);
+                            }
+                        }
+                        else
+                        {
+                            warnings.Add("连线引用了不存在的 alias：" + conn["from_alias"] + " -> " + conn["to_alias"]);
+                        }
+                    }
+                }
+
+                if (!string.IsNullOrWhiteSpace(groupName) && createdObjs.Count > 0)
+                {
+                    var group = new Grasshopper.Kernel.Special.GH_Group();
+                    group.NickName = groupName;
+                    group.Colour = System.Drawing.Color.FromArgb(80, 100, 150, 250);
+                    foreach (var obj in createdObjs.Values) group.AddObject(obj.InstanceGuid);
+                    doc.AddObject(group, false);
+                    group.ExpireSolution(true);
+                }
+
+                _canvasChanged = true;
+                try { doc.ScheduleSolution(150); }
+                catch (Exception ex) { AddGhLog.Warn("ExecuteCreateScriptComponentGraph Schedule failed: " + ex.Message); }
+
+                var payload = new JObject
+                {
+                    ["status"] = "ok",
+                    ["mode"] = scriptComponentName == "C# Script" ? "csharp" : "python",
+                    ["created_scripts"] = scripts.Count,
+                    ["created_components"] = components?.Count ?? 0,
+                    ["created_connections"] = connected,
+                    ["script_write_ok"] = scriptWriteOk,
+                    ["aliases"] = aliasMap,
+                    ["warnings"] = new JArray(warnings)
+                };
+                string errors = GetCanvasErrors(doc);
+                if (!string.IsNullOrWhiteSpace(errors)) payload["canvas_errors"] = errors;
+                result = payload.ToString(Formatting.None);
+            }));
+            return result;
         }
 
         private static string ExecuteCreateComponentGraph(JArray components, JArray connections, string groupName = null)
@@ -6975,8 +8308,7 @@ namespace ADDGH
             _txtInput.Text = "";
 
             if (_messages.Count == 0) {
-                string skillsSummary = GetSkillsSummary();
-                _messages.Add(new { role = "system", content = SYSTEM_PROMPT + skillsSummary });
+                _messages.Add(new { role = "system", content = BuildInitialSystemContent() });
             }
 
             _messages.Add(new { role = "user", content = actualPrompt });
