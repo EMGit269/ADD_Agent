@@ -5380,7 +5380,7 @@ namespace ADDGH
             try
             {
                 // 先尝试找到并修改 GH_CodeBlocks 相关的属性/字段
-                var codeBlocksField = t.GetField("m_codeBlocks", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                var codeBlocksField = FindInstanceFieldInHierarchy(t, "m_codeBlocks");
                 if (codeBlocksField != null)
                 {
                     var currentBlocks = codeBlocksField.GetValue(obj);
@@ -5535,6 +5535,17 @@ namespace ADDGH
             }
         }
 
+        private static FieldInfo FindInstanceFieldInHierarchy(Type type, string fieldName)
+        {
+            if (type == null || string.IsNullOrWhiteSpace(fieldName)) return null;
+            for (Type t = type; t != null && t != typeof(object); t = t.BaseType)
+            {
+                var field = t.GetField(fieldName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+                if (field != null) return field;
+            }
+            return null;
+        }
+
         private static bool GhHasWritableStringMember(Grasshopper.Kernel.IGH_DocumentObject obj, string name)
         {
             if (obj == null || string.IsNullOrWhiteSpace(name)) return false;
@@ -5612,7 +5623,7 @@ namespace ADDGH
 
             // 跳过内置 C#/VB 脚本电池（有 m_codeBlocks 字段），避免破坏内部结构
             Type tt = obj.GetType();
-            if (tt != null && tt.GetField("m_codeBlocks", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) != null)
+            if (tt != null && FindInstanceFieldInHierarchy(tt, "m_codeBlocks") != null)
                 return false;
 
             var propCandidates = new List<System.Reflection.PropertyInfo>();
@@ -6081,7 +6092,7 @@ namespace ADDGH
 
             try
             {
-                var codeBlocksField = t.GetField("m_codeBlocks", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                var codeBlocksField = FindInstanceFieldInHierarchy(t, "m_codeBlocks");
                 if (codeBlocksField != null && codeBlocksField.GetValue(obj) is GH_CodeBlocks blocks)
                 {
                     codeBlocksField.SetValue(obj, GhBuildCodeBlocksReplacingFirstMutable(blocks, body));
@@ -6106,7 +6117,7 @@ namespace ADDGH
 
             try
             {
-                var codeBlocksField = t.GetField("m_codeBlocks", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                var codeBlocksField = FindInstanceFieldInHierarchy(t, "m_codeBlocks");
                 if (codeBlocksField != null && codeBlocksField.GetValue(obj) is GH_CodeBlocks blocks)
                 {
                     for (int i = 0; i < blocks.Count; i++)
@@ -6303,7 +6314,26 @@ namespace ADDGH
                     }
                     else
                     {
-                        result = "Error: could not read the editable C# Script body without touching the template.";
+                        string fallback = GhReadScriptSourceViaReflection(obj, 150000, 120000);
+                        try
+                        {
+                            var jo = JObject.Parse(fallback);
+                            var payload = new JObject
+                            {
+                                ["status"] = "ok",
+                                ["mode"] = "read_body",
+                                ["id"] = obj.InstanceGuid.ToString(),
+                                ["body"] = jo["primary_for_edit"]?.ToString() ?? "",
+                                ["source"] = jo["primary_key"]?.ToString() ?? "reflection_fallback",
+                                ["runtime_type_hint"] = jo["runtime_type_hint"]?.ToString() ?? "",
+                                ["warning"] = "Editable code block structure was not recognized; returned reflection-based fallback text."
+                            };
+                            result = payload.ToString(Formatting.None);
+                        }
+                        catch (Exception ex)
+                        {
+                            result = "Error: could not read the editable C# Script body without touching the template. " + ex.Message;
+                        }
                     }
                     return;
                 }
@@ -6320,10 +6350,10 @@ namespace ADDGH
                 }
 
                 var warnings = new List<string>();
-                bool wrote = TrySetCSharpScriptBodyPreservingTemplate(obj, body, warnings);
+                bool wrote = TrySetCSharpScriptBodyIntoTemplate(obj, body, warnings);
                 if (!wrote)
                 {
-                    result = "Error: could not write C# Script body safely. The template was not replaced.";
+                    result = "Error: could not write C# Script body safely. The editable block structure was not recognized.";
                     if (warnings.Count > 0) result += " " + string.Join(" ", warnings);
                     return;
                 }
