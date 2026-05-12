@@ -85,22 +85,22 @@ namespace ADDGH
         private static TextBlock _txtWarning;
         private static Button _btnCloseWarning;
         private static Button _btnModeDropdown;
-        private static Button _btnModeNormal;
+        private static Button _btnModeBattery;
         private static Button _btnModeCSharp;
-        private static Button _btnModePython;
-        private static MenuItem _menuModeNormal;
+        private static Button _btnModeMixed;
+        private static MenuItem _menuModeBattery;
         private static MenuItem _menuModeCSharp;
-        private static MenuItem _menuModePython;
+        private static MenuItem _menuModeMixed;
 
         private enum LayoutMode
         {
-            Normal,
-            CSharpFirst,
-            PythonFirst
+            Battery,
+            Mixed,
+            CSharpFirst
         }
 
         private const string LayoutModeSettingKey = "ADDGH_LayoutMode";
-        private static LayoutMode _layoutMode = LayoutMode.Normal;
+        private static LayoutMode _layoutMode = LayoutMode.Mixed;
 
         private const string SYSTEM_PROMPT = @"你是 GH 参数化专家。
 
@@ -165,26 +165,29 @@ namespace ADDGH
 8. 若端口变更后出现签名未同步或变量不存在，先 recompute_gh_canvas 再只修正方法体；不要通过重写完整源码解决。";
             }
 
-            if (mode == LayoutMode.PythonFirst)
+            if (mode == LayoutMode.Battery)
             {
                 return @"
 
-【当前排布模式：Python 优先】
-1. 强制使用一个或多个 Rhino 8 Python 3 Script 电池完成核心建模逻辑；逻辑复杂时可以拆成多个脚本电池组合，但优先保持数量少、数据流清晰。
-2. 其它非脚本电池只能来自 Params 或 Display 分类；必要时可用 add_gh_component 单独补充这些辅助电池，但只能作为脚本逻辑的输入、输出、显示或调试辅助，不能用普通 GH 电池替代核心逻辑。
-3. 新建脚本化逻辑必须优先调用 create_script_component_graph，一次创建 Python 3 Script、辅助电池、端口、源码与连线；不要调用 read_skill_file、read_reference_json 或读取 reference。
-4. Python 3 Script 的可执行源码必须写入 Text，严禁写入 Description；若找不到 Python 3 Script，不要自动改用 GhPython，应明确提示用户启用 Rhino 8 Python 3 Script。";
+【当前排布模式：电池模式】
+1. 优先使用原生 Grasshopper 电池完成建模逻辑，新增逻辑优先用 create_component_graph 批量创建电池与连线。
+2. 本模式禁止新建 C# Script 电池；不要把新功能写成新的 C# 脚本组件。
+3. 如果画布上已有 C# Script，仍可查看、读取、编辑或修复已有脚本；该限制只针对“新建 C# 电池”。
+4. 只有在用户明确要求或现有画布已经依赖脚本时，才编辑已有脚本；常规建模尽量用电池网络表达。";
             }
 
             return @"
 
-【当前排布模式：常规】
-保持常规 Grasshopper 排布策略：新建一整块逻辑优先用 create_component_graph 批量创建原生 GH 电池与连线；仅在用户明确要求或方案确实需要脚本时使用脚本电池。";
+【当前排布模式：混合模式】
+1. 在原生 GH 电池和 C# Script 之间平衡选择：简单、可视化、参数化的数据流优先用电池；复杂循环、几何算法、批量数据处理或重复逻辑可用 C# Script。
+2. 新建一整块原生电池逻辑时优先用 create_component_graph；新建 C# 逻辑时使用 create_csharp_script_component。
+3. 不要为了很小的参数、面板或基础数学操作创建 C# Script；也不要为了复杂算法硬堆大量电池。
+4. 需要修改已有 C# Script 时使用专用编辑工具，保持现有模板和端口约定。";
         }
 
         private static string BuildInitialSystemContent()
         {
-            return _layoutMode == LayoutMode.Normal
+            return _layoutMode != LayoutMode.CSharpFirst
                 ? BuildSystemPrompt() + GetSkillsSummary()
                 : BuildSystemPrompt();
         }
@@ -192,7 +195,7 @@ namespace ADDGH
         private static List<object> BuildInitialSystemMessages()
         {
             string basePrompt = BuildSystemPrompt();
-            string skills = _layoutMode == LayoutMode.Normal ? GetSkillsSummary() : "";
+            string skills = _layoutMode != LayoutMode.CSharpFirst ? GetSkillsSummary() : "";
             var list = new List<object>();
 
             if (string.IsNullOrWhiteSpace(skills) || DeploymentOptions.MergeSkillsIntoSameSystemPromptAsLibraryIndex)
@@ -210,14 +213,16 @@ namespace ADDGH
         {
             try
             {
-                string raw = Grasshopper.Instances.Settings.GetValue(LayoutModeSettingKey, LayoutMode.Normal.ToString());
+                string raw = Grasshopper.Instances.Settings.GetValue(LayoutModeSettingKey, LayoutMode.Mixed.ToString());
+                if (string.Equals(raw, "Normal", StringComparison.OrdinalIgnoreCase)) return LayoutMode.Mixed;
+                if (string.Equals(raw, "PythonFirst", StringComparison.OrdinalIgnoreCase)) return LayoutMode.Mixed;
                 if (Enum.TryParse(raw, true, out LayoutMode mode)) return mode;
             }
             catch (Exception ex)
             {
                 AddGhLog.Warn("Read layout mode failed: " + ex.Message);
             }
-            return LayoutMode.Normal;
+            return LayoutMode.Mixed;
         }
 
         private static void SaveLayoutModeSetting()
@@ -251,9 +256,9 @@ namespace ADDGH
             {
                 switch (mode)
                 {
+                    case LayoutMode.Battery: return "电池模式";
                     case LayoutMode.CSharpFirst: return "C# 优先";
-                    case LayoutMode.PythonFirst: return "Py 优先";
-                    default: return "常规";
+                    default: return "混合模式";
                 }
             }
 
@@ -264,9 +269,9 @@ namespace ADDGH
                 _btnModeDropdown.Foreground = new SolidColorBrush(Color.FromRgb(160, 160, 160));
             }
 
-            if (_menuModeNormal != null) _menuModeNormal.Header = (_layoutMode == LayoutMode.Normal ? "✓ " : "   ") + "常规";
+            if (_menuModeBattery != null) _menuModeBattery.Header = (_layoutMode == LayoutMode.Battery ? "✓ " : "   ") + "电池模式";
+            if (_menuModeMixed != null) _menuModeMixed.Header = (_layoutMode == LayoutMode.Mixed ? "✓ " : "   ") + "混合模式";
             if (_menuModeCSharp != null) _menuModeCSharp.Header = (_layoutMode == LayoutMode.CSharpFirst ? "✓ " : "   ") + "C# 优先";
-            if (_menuModePython != null) _menuModePython.Header = (_layoutMode == LayoutMode.PythonFirst ? "✓ " : "   ") + "Py 优先";
 
             void Paint(Button button, bool selected)
             {
@@ -278,9 +283,9 @@ namespace ADDGH
                 button.FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal;
             }
 
-            Paint(_btnModeNormal, _layoutMode == LayoutMode.Normal);
+            Paint(_btnModeBattery, _layoutMode == LayoutMode.Battery);
+            Paint(_btnModeMixed, _layoutMode == LayoutMode.Mixed);
             Paint(_btnModeCSharp, _layoutMode == LayoutMode.CSharpFirst);
-            Paint(_btnModePython, _layoutMode == LayoutMode.PythonFirst);
         }
 
         private static List<object> _messages = new List<object>();
@@ -885,7 +890,7 @@ namespace ADDGH
                                 </Button.ContextMenu>
                             </Button>
 
-                            <Button x:Name=""BtnModeDropdown"" Grid.Column=""5"" Style=""{StaticResource IconButtonStyle}"" Content=""常规 ▾"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""排布模式"" HorizontalAlignment=""Left"" VerticalAlignment=""Center"" Margin=""10,0,0,0"">
+                            <Button x:Name=""BtnModeDropdown"" Grid.Column=""5"" Style=""{StaticResource IconButtonStyle}"" Content=""混合模式 ▾"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""排布模式"" HorizontalAlignment=""Left"" VerticalAlignment=""Center"" Margin=""10,0,0,0"">
                                 <Button.ContextMenu>
                                     <ContextMenu Background=""#1E1E1E"" Foreground=""#E0E0E0"" BorderBrush=""#333"" BorderThickness=""1"" Padding=""4"">
                                         <ContextMenu.Template>
@@ -916,9 +921,9 @@ namespace ADDGH
                                                 </Setter>
                                             </Style>
                                         </ContextMenu.Resources>
-                                        <MenuItem x:Name=""MenuModeNormal"" Header=""常规""/>
+                                        <MenuItem x:Name=""MenuModeBattery"" Header=""电池模式""/>
+                                        <MenuItem x:Name=""MenuModeMixed"" Header=""混合模式""/>
                                         <MenuItem x:Name=""MenuModeCSharp"" Header=""C# 优先""/>
-                                        <MenuItem x:Name=""MenuModePython"" Header=""Py 优先""/>
                                     </ContextMenu>
                                 </Button.ContextMenu>
                             </Button>
@@ -1090,12 +1095,12 @@ namespace ADDGH
             _txtInput = (TextBox)_window.FindName("TxtInput");
             _btnSend = (Button)_window.FindName("BtnSend");
             _btnModeDropdown = (Button)_window.FindName("BtnModeDropdown");
-            _btnModeNormal = (Button)_window.FindName("BtnModeNormal");
+            _btnModeBattery = (Button)_window.FindName("BtnModeBattery");
             _btnModeCSharp = (Button)_window.FindName("BtnModeCSharp");
-            _btnModePython = (Button)_window.FindName("BtnModePython");
-            _menuModeNormal = (MenuItem)_window.FindName("MenuModeNormal");
+            _btnModeMixed = (Button)_window.FindName("BtnModeMixed");
+            _menuModeBattery = (MenuItem)_window.FindName("MenuModeBattery");
             _menuModeCSharp = (MenuItem)_window.FindName("MenuModeCSharp");
-            _menuModePython = (MenuItem)_window.FindName("MenuModePython");
+            _menuModeMixed = (MenuItem)_window.FindName("MenuModeMixed");
             _layoutMode = ReadLayoutModeSetting();
             if (_btnModeDropdown != null) {
                 _btnModeDropdown.Click += (s, e) => {
@@ -1106,12 +1111,12 @@ namespace ADDGH
                     }
                 };
             }
-            if (_btnModeNormal != null) _btnModeNormal.Click += (s, e) => SetLayoutMode(LayoutMode.Normal);
+            if (_btnModeBattery != null) _btnModeBattery.Click += (s, e) => SetLayoutMode(LayoutMode.Battery);
+            if (_btnModeMixed != null) _btnModeMixed.Click += (s, e) => SetLayoutMode(LayoutMode.Mixed);
             if (_btnModeCSharp != null) _btnModeCSharp.Click += (s, e) => SetLayoutMode(LayoutMode.CSharpFirst);
-            if (_btnModePython != null) _btnModePython.Click += (s, e) => SetLayoutMode(LayoutMode.PythonFirst);
-            if (_menuModeNormal != null) _menuModeNormal.Click += (s, e) => SetLayoutMode(LayoutMode.Normal);
+            if (_menuModeBattery != null) _menuModeBattery.Click += (s, e) => SetLayoutMode(LayoutMode.Battery);
+            if (_menuModeMixed != null) _menuModeMixed.Click += (s, e) => SetLayoutMode(LayoutMode.Mixed);
             if (_menuModeCSharp != null) _menuModeCSharp.Click += (s, e) => SetLayoutMode(LayoutMode.CSharpFirst);
-            if (_menuModePython != null) _menuModePython.Click += (s, e) => SetLayoutMode(LayoutMode.PythonFirst);
             UpdateLayoutModeButtons();
             _historySidebar = (Border)_window.FindName("HistorySidebar");
             _historyListPanel = (StackPanel)_window.FindName("HistoryListPanel");
@@ -2792,7 +2797,7 @@ namespace ADDGH
                 type = "object",
                 properties = new
                 {
-                    name = new { type = "string", description = "端口名称，同时写入 Name 与 NickName。" },
+                    name = new { type = "string", description = "Port name; also applied to Name and NickName." },
                     type_hint = new { type = "string", description = "可选：端口类型提示，仅写入 Description，不做强类型约束。" }
                 },
                 required = new[] { "name" }
@@ -2804,7 +2809,7 @@ namespace ADDGH
                 function = new
                 {
                     name = "create_script_component_graph",
-                    description = "脚本优先排布专用：一次创建一个或多个 C# Script / Python 3 Script 电池、端口、源码、辅助电池、连线与分组。C# / Python 优先模式下，新建核心逻辑必须使用本工具承载到脚本电池中；Python 仅使用 Rhino 8 Python 3 Script，找不到时不要自动改用 GhPython。C# 请改用 create_csharp_script_component；不要在通用工具里创建 C# Script。",
+                    description = "Create one or more Python 3 Script components with ports, source, helper components, connections, and group. Use this in mixed mode only when Python scripting is clearly better than native GH components. Python uses Rhino 8 Python 3 Script only; do not fall back to GhPython. For C# Script use create_csharp_script_component instead.",
                     parameters = new
                     {
                         type = "object",
@@ -2840,8 +2845,8 @@ namespace ADDGH
                                     properties = new
                                     {
                                         alias_id = new { type = "string", description = "辅助电池临时代号，供 connections 引用，必须唯一。" },
-                                        name = new { type = "string", description = "辅助电池标准名称（与 component_guid 二选一）；脚本优先模式下只允许 Params 或 Display 分类。" },
-                                        component_guid = new { type = "string", description = "可选：类型 GUID（与 name 二选一）；脚本优先模式下只允许 Params 或 Display 分类。" },
+                                        name = new { type = "string", description = "Helper component standard name; alternative to component_guid." },
+                                        component_guid = new { type = "string", description = "Optional type GUID; alternative to name." },
                                         label = new { type = "string", description = "仅限 Slider/Panel 的显示标签。" },
                                         x = new { type = "number", description = "画布 X 坐标。" },
                                         y = new { type = "number", description = "画布 Y 坐标。" },
@@ -3010,26 +3015,21 @@ namespace ADDGH
         private static object[] FilterToolsForLayoutMode(object[] toolDefinitions)
         {
             if (toolDefinitions == null) return toolDefinitions;
-            if (_layoutMode == LayoutMode.Normal)
-                return toolDefinitions;
 
-            var blocked = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            {
-                "create_component_graph",
-                "read_skill_file",
-                "read_reference_json",
-                "create_gh_skill",
-                ShowReferenceOptionsTool.FunctionName
-            };
-            if (_layoutMode == LayoutMode.CSharpFirst)
-            {
-                blocked.Add("create_script_component_graph");
-                blocked.Add("gh_native_script_editor");
-            }
-            if (_layoutMode == LayoutMode.PythonFirst)
+            var blocked = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (_layoutMode == LayoutMode.Battery)
             {
                 blocked.Add("create_csharp_script_component");
-                blocked.Add("edit_csharp_script_component");
+            }
+            else if (_layoutMode == LayoutMode.CSharpFirst)
+            {
+                blocked.Add("create_component_graph");
+                blocked.Add("create_script_component_graph");
+                blocked.Add("gh_native_script_editor");
+                blocked.Add("read_skill_file");
+                blocked.Add("read_reference_json");
+                blocked.Add("create_gh_skill");
+                blocked.Add(ShowReferenceOptionsTool.FunctionName);
             }
 
             return toolDefinitions
@@ -3041,7 +3041,7 @@ namespace ADDGH
         private static object RestrictAddComponentToolForScriptMode(object toolDefinition)
         {
             string name = GetToolDefinitionName(toolDefinition);
-            if (!string.Equals(name, "add_gh_component", StringComparison.OrdinalIgnoreCase))
+            if (_layoutMode != LayoutMode.CSharpFirst || !string.Equals(name, "add_gh_component", StringComparison.OrdinalIgnoreCase))
             {
                 if (string.Equals(name, "set_gh_component_value", StringComparison.OrdinalIgnoreCase) && _layoutMode == LayoutMode.CSharpFirst)
                 {
@@ -3060,7 +3060,7 @@ namespace ADDGH
             var fn = jo["function"] as JObject;
             if (fn != null)
             {
-                fn["description"] = "脚本优先模式下的受限辅助工具：仅可单独补充 Grasshopper 的 Params 或 Display 分类内电池，作为 C#/Python 脚本电池的输入、输出、显示或调试辅助。严禁创建 Math/Sets/Vector/Curve/Surface/Mesh/Transform 等核心建模逻辑电池；C# 核心逻辑必须放在 create_csharp_script_component 创建的脚本电池中，Python 核心逻辑必须放在 create_script_component_graph 创建的 Python 3 Script 电池中。";
+                fn["description"] = "C# priority mode helper tool: only add Params or Display components as inputs, outputs, preview, or debugging helpers for C# Script. Do not create core modeling components here; put core logic in create_csharp_script_component.";
             }
             return jo;
         }
@@ -4987,7 +4987,7 @@ namespace ADDGH
 
         private static bool IsScriptModeAuxiliaryComponentAllowed(Grasshopper.Kernel.IGH_DocumentObject obj)
         {
-            if (_layoutMode == LayoutMode.Normal) return true;
+            if (_layoutMode != LayoutMode.CSharpFirst) return true;
             string category = obj?.Category ?? "";
             return string.Equals(category, "Params", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(category, "Display", StringComparison.OrdinalIgnoreCase);
@@ -4997,8 +4997,8 @@ namespace ADDGH
         {
             string displayName = !string.IsNullOrWhiteSpace(requestedName) ? requestedName : (obj?.Name ?? "该电池");
             string category = string.IsNullOrWhiteSpace(obj?.Category) ? "未知" : obj.Category;
-            return "Error: 脚本优先模式下，非脚本辅助电池只允许使用 Params 或 Display 分类；"
-                + displayName + " 属于 " + category + "，已拒绝创建。核心建模逻辑请写入 C#/Python 脚本电池。";
+            return "Error: C# 优先模式下，非脚本辅助电池只允许使用 Params 或 Display 分类；"
+                + displayName + " 属于 " + category + "，已拒绝创建。核心建模逻辑请写入 C# Script 电池。";
         }
 
         private static string ExecuteAddGhComponent(string name, float x, float y, string label = null, string componentGuid = null, string graphMapperType = null)
@@ -6629,7 +6629,7 @@ namespace ADDGH
                 if (scriptProxy == null)
                 {
                     result = scriptComponentName == "Python 3 Script"
-                        ? "Error: 找不到 Python 3 Script 电池。Python 优先模式只适配 Rhino 8 Python 3 Script，请确认已安装并启用该组件。"
+                        ? "Error: 找不到 Python 3 Script 电池。混合模式只适配 Rhino 8 Python 3 Script，请确认已安装并启用该组件。"
                         : "Error: 找不到 C# Script 电池。请确认 Grasshopper 脚本组件已加载。";
                     return;
                 }
