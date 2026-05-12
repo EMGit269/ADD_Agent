@@ -6075,12 +6075,132 @@ namespace ADDGH
             return source;
         }
 
+        private static bool TryFindRunScriptBodyBounds(string source, out int bodyStart, out int bodyEnd)
+        {
+            bodyStart = -1;
+            bodyEnd = -1;
+            if (string.IsNullOrEmpty(source)) return false;
+
+            int runIdx = source.IndexOf("RunScript", StringComparison.Ordinal);
+            if (runIdx < 0) return false;
+
+            int open = source.IndexOf('{', runIdx);
+            if (open < 0) return false;
+
+            int depth = 0;
+            for (int i = open; i < source.Length; i++)
+            {
+                char ch = source[i];
+                if (ch == '{') depth++;
+                else if (ch == '}')
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        bodyStart = open + 1;
+                        bodyEnd = i;
+                        return bodyEnd >= bodyStart;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private static string IndentCSharpBodyForTemplate(string body, string indent)
+        {
+            string norm = (body ?? "").Replace("\r\n", "\n").Replace('\r', '\n').Trim('\n', '\r');
+            if (string.IsNullOrEmpty(norm)) return "";
+
+            var lines = norm.Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                if (lines[i].Length > 0) lines[i] = indent + lines[i];
+                else lines[i] = indent;
+            }
+            return string.Join(Environment.NewLine, lines);
+        }
+
+        private static bool TrySetCSharpBodyByReplacingRunScriptInStringMembers(Grasshopper.Kernel.IGH_DocumentObject obj, string body, out string detail)
+        {
+            detail = null;
+            if (obj == null || body == null) return false;
+
+            for (Type t = obj.GetType(); t != null && t != typeof(object); t = t.BaseType)
+            {
+                foreach (var prop in t.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                    .Where(p => p.PropertyType == typeof(string) && p.GetIndexParameters().Length == 0 && p.GetSetMethod(true) != null)
+                    .OrderByDescending(p => GhScriptMemberPreference(p.Name)))
+                {
+                    if (!GhScriptNameLooksLikePayload(prop.Name)) continue;
+                    try
+                    {
+                        string current = prop.GetGetMethod(true)?.Invoke(obj, null) as string;
+                        if (!TryReplaceRunScriptBodyInSource(current, body, out string updated)) continue;
+                        prop.GetSetMethod(true).Invoke(obj, new object[] { updated });
+                        detail = prop.Name + " (prop RunScript body)";
+                        return true;
+                    }
+                    catch (Exception ex) { AddGhLog.Debug("TrySetCSharpBodyByReplacingRunScript prop " + prop.Name + ": " + ex.Message); }
+                }
+
+                foreach (var fld in t.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                    .Where(f => f.FieldType == typeof(string))
+                    .OrderByDescending(f => GhScriptMemberPreference(f.Name)))
+                {
+                    if (!GhScriptNameLooksLikePayload(fld.Name)) continue;
+                    try
+                    {
+                        string current = fld.GetValue(obj) as string;
+                        if (!TryReplaceRunScriptBodyInSource(current, body, out string updated)) continue;
+                        fld.SetValue(obj, updated);
+                        detail = fld.Name + " (field RunScript body)";
+                        return true;
+                    }
+                    catch (Exception ex) { AddGhLog.Debug("TrySetCSharpBodyByReplacingRunScript field " + fld.Name + ": " + ex.Message); }
+                }
+            }
+
+            return false;
+        }
+
+        private static bool TryReplaceRunScriptBodyInSource(string source, string body, out string updated)
+        {
+            updated = null;
+            if (!TryFindRunScriptBodyBounds(source, out int bodyStart, out int bodyEnd)) return false;
+
+            int lineStart = source.LastIndexOf('\n', Math.Max(0, bodyStart - 1));
+            string newline = source.IndexOf("\r\n", StringComparison.Ordinal) >= 0 ? "\r\n" : "\n";
+            string indent = "        ";
+            if (lineStart >= 0)
+            {
+                int i = lineStart + 1;
+                var sb = new StringBuilder();
+                while (i < source.Length && (source[i] == ' ' || source[i] == '\t'))
+                {
+                    sb.Append(source[i]);
+                    i++;
+                }
+                if (sb.Length > 0) indent = sb.ToString();
+            }
+
+            string replacement = newline + IndentCSharpBodyForTemplate(body, indent) + newline + indent.Substring(0, Math.Max(0, indent.Length - 4));
+            updated = source.Substring(0, bodyStart) + replacement + source.Substring(bodyEnd);
+            return true;
+        }
+
         private static bool TrySetCSharpScriptBodyIntoTemplate(Grasshopper.Kernel.IGH_DocumentObject obj, string source, List<string> warnings)
         {
             if (TrySetCSharpScriptBodyPreservingTemplate(obj, source, warnings))
                 return true;
 
-            warnings?.Add("C# Script editable code block was not found; refused full-template replacement to avoid breaking Grasshopper-managed RunScript signatures.");
+            if (TrySetCSharpBodyByReplacingRunScriptInStringMembers(obj, source, out string detail))
+            {
+                warnings?.Add("C# Script body was written by replacing the existing RunScript body in " + detail + ".");
+                return true;
+            }
+
+            warnings?.Add("C# Script editable code block or full RunScript template was not found; refused unsafe full-template replacement.");
             return false;
         }
 
