@@ -1,0 +1,3626 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using System.Text;
+using System.Windows.Media;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using Grasshopper.Kernel;
+using Grasshopper.GUI.Canvas;
+using Grasshopper.GUI.Script;
+
+namespace ADDGH
+{
+    public static partial class ChatWindow
+    {
+        private static string ExecuteEnsureGhCanvas()
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                try
+                {
+                    var currentDoc = Grasshopper.Instances.ActiveCanvas?.Document;
+                    if (currentDoc != null)
+                    {
+                        result = "当前已存在可用 Grasshopper 画布。";
+                        return;
+                    }
+
+                    try
+                    {
+                        var editor = Grasshopper.Instances.DocumentEditor;
+                        if (editor != null)
+                        {
+                            var showMethod = editor.GetType().GetMethod("Show", Type.EmptyTypes);
+                            showMethod?.Invoke(editor, null);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        AddGhLog.Debug("DocumentEditor.Show fallback: " + ex.Message);
+                    }
+
+                    var doc = new Grasshopper.Kernel.GH_Document();
+                    bool addedToServer = false;
+
+                    var server = Grasshopper.Instances.DocumentServer;
+                    if (server != null)
+                    {
+                        foreach (var method in server.GetType().GetMethods().Where(m => m.Name == "AddDocument"))
+                        {
+                            var parameters = method.GetParameters();
+                            if (parameters.Length == 0 || !parameters[0].ParameterType.IsAssignableFrom(typeof(Grasshopper.Kernel.GH_Document))) continue;
+
+                            object[] callArgs = new object[parameters.Length];
+                            callArgs[0] = doc;
+                            for (int i = 1; i < parameters.Length; i++)
+                            {
+                                callArgs[i] = parameters[i].ParameterType == typeof(bool) ? (object)true : Type.Missing;
+                            }
+
+                            method.Invoke(server, callArgs);
+                            addedToServer = true;
+                            break;
+                        }
+                    }
+
+                    var canvas = Grasshopper.Instances.ActiveCanvas;
+                    if (canvas != null)
+                    {
+                        var docProp = canvas.GetType().GetProperty("Document");
+                        if (docProp != null && docProp.CanWrite)
+                        {
+                            docProp.SetValue(canvas, doc, null);
+                        }
+                        canvas.Refresh();
+                    }
+
+                    _canvasChanged = true;
+                    _cachedCanvasState = null;
+                    result = addedToServer
+                        ? "未检测到可用画布，已新建空白 Grasshopper 画布。"
+                        : "未检测到可用画布，已创建空白 Grasshopper 文档，但未能加入文档服务器。";
+                }
+                catch (Exception ex)
+                {
+                    result = "Error: 新建 Grasshopper 画布失败 - " + ex.Message;
+                }
+            }));
+            return result;
+        }
+
+        private static string GetRhinoUnitSignature()
+        {
+            var rhinoDoc = Rhino.RhinoDoc.ActiveDoc;
+            if (rhinoDoc == null) return "no-rhino-doc";
+            return string.Join("|",
+                rhinoDoc.ModelUnitSystem,
+                rhinoDoc.PageUnitSystem,
+                rhinoDoc.ModelAbsoluteTolerance.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                rhinoDoc.ModelRelativeTolerance.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                rhinoDoc.ModelAngleToleranceDegrees.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                rhinoDoc.PageAbsoluteTolerance.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                rhinoDoc.PageRelativeTolerance.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                rhinoDoc.PageAngleToleranceDegrees.ToString("R", System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        private static JObject BuildRhinoUnitsJson()
+        {
+            var rhinoDoc = Rhino.RhinoDoc.ActiveDoc;
+            if (rhinoDoc == null)
+            {
+                return new JObject { ["available"] = false };
+            }
+
+            return new JObject
+            {
+                ["available"] = true,
+                ["model_unit_system"] = rhinoDoc.ModelUnitSystem.ToString(),
+                ["model_unit_system_value"] = (int)rhinoDoc.ModelUnitSystem,
+                ["page_unit_system"] = rhinoDoc.PageUnitSystem.ToString(),
+                ["page_unit_system_value"] = (int)rhinoDoc.PageUnitSystem,
+                ["model_absolute_tolerance"] = rhinoDoc.ModelAbsoluteTolerance,
+                ["model_relative_tolerance"] = rhinoDoc.ModelRelativeTolerance,
+                ["model_angle_tolerance_degrees"] = rhinoDoc.ModelAngleToleranceDegrees,
+                ["page_absolute_tolerance"] = rhinoDoc.PageAbsoluteTolerance,
+                ["page_relative_tolerance"] = rhinoDoc.PageRelativeTolerance,
+                ["page_angle_tolerance_degrees"] = rhinoDoc.PageAngleToleranceDegrees
+            };
+        }
+
+        private static string ExecuteGetGhComponents()
+        {
+            string currentUnitSignature = GetRhinoUnitSignature();
+            if (!_canvasChanged && _cachedCanvasState != null && string.Equals(_cachedRhinoUnitSignature, currentUnitSignature, StringComparison.Ordinal)) {
+                return _cachedCanvasState;
+            }
+
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+
+                var graph = new JObject();
+                if (DeploymentOptions.IncludeCanvasExportTimestamp)
+                    graph["timestamp"] = DateTime.Now.ToString("HH:mm:ss");
+                graph["rhino_units"] = BuildRhinoUnitsJson();
+
+                var globalErrors = new JArray();
+                var components = new JArray();
+                var groups = new JArray(); // 存储组信息
+
+                foreach (var obj in doc.Objects)
+                {
+                    if (obj is Grasshopper.Kernel.Special.GH_Group group)
+                    {
+                        var groupJson = new JObject();
+                        groupJson["id"] = group.InstanceGuid.ToString();
+                        groupJson["name"] = group.NickName;
+                        var members = new JArray();
+                        foreach (var memberId in group.Objects()) members.Add(memberId.ToString());
+                        groupJson["members"] = members;
+                        groups.Add(groupJson);
+                        continue;
+                    }
+
+                    var compJson = new JObject();
+                    compJson["name"] = obj.Name;
+                    compJson["nickname"] = obj.NickName;
+                    compJson["id"] = obj.InstanceGuid.ToString();
+                    compJson["pivot"] = new JObject { { "x", Math.Round(obj.Attributes.Pivot.X) }, { "y", Math.Round(obj.Attributes.Pivot.Y) } };
+
+                    // 检查报错
+                    if (obj is IGH_ActiveObject ao && ao.RuntimeMessageLevel != GH_RuntimeMessageLevel.Blank)
+                    {
+                        var msgs = new JArray();
+                        foreach (string m in ao.RuntimeMessages(GH_RuntimeMessageLevel.Error)) {
+                            msgs.Add("Error: " + m);
+                            globalErrors.Add(new JObject { { "id", obj.InstanceGuid.ToString() }, { "name", obj.Name }, { "level", "Error" }, { "message", m } });
+                        }
+                        foreach (string m in ao.RuntimeMessages(GH_RuntimeMessageLevel.Warning)) {
+                            msgs.Add("Warning: " + m);
+                            globalErrors.Add(new JObject { { "id", obj.InstanceGuid.ToString() }, { "name", obj.Name }, { "level", "Warning" }, { "message", m } });
+                        }
+                        compJson["runtime_messages"] = msgs;
+                    }
+
+                    if (obj is Grasshopper.Kernel.IGH_Component comp)
+                    {
+                        var inputs = new JArray();
+                        for (int i = 0; i < comp.Params.Input.Count; i++)
+                        {
+                            var param = comp.Params.Input[i];
+                            var paramJson = new JObject();
+                            paramJson["index"] = i;
+                            paramJson["name"] = param.Name;
+                            paramJson["type"] = param.TypeName;
+
+                            // 增加数据结构概况
+                            if (param.VolatileDataCount > 0) {
+                                var tree = param.VolatileData;
+                                paramJson["data_structure"] = $"Tree ({tree.PathCount} branches, {tree.DataCount} items total)";
+                            } else {
+                                paramJson["data_structure"] = "Empty";
+                            }
+
+                            // 增加数据操作状态
+                            if (param.DataMapping == Grasshopper.Kernel.GH_DataMapping.Flatten) paramJson["is_flattened"] = true;
+                            if (param.DataMapping == Grasshopper.Kernel.GH_DataMapping.Graft) paramJson["is_grafted"] = true;
+                            if (param.Reverse) paramJson["is_reversed"] = true;
+                            if (param.Simplify) paramJson["is_simplified"] = true;
+
+                            var sources = new JArray();
+                            foreach (var source in param.Sources)
+                            {
+                                var srcObj = source.Attributes.GetTopLevel.DocObject;
+                                int srcIdx = (srcObj is Grasshopper.Kernel.IGH_Component srcC) ? srcC.Params.Output.IndexOf(source) : 0;
+                                sources.Add(new JObject { { "id", srcObj.InstanceGuid.ToString() }, { "output_index", srcIdx }, { "name", srcObj.Name } });
+                            }
+                            paramJson["sources"] = sources;
+                            if (param.SourceCount == 0 && param.VolatileDataCount > 0) paramJson["has_internal_data"] = true;
+                            inputs.Add(paramJson);
+                        }
+                        compJson["inputs"] = inputs;
+
+                        var outputs = new JArray();
+                        for (int i = 0; i < comp.Params.Output.Count; i++)
+                        {
+                            var param = comp.Params.Output[i];
+                            var portJson = new JObject { { "index", i }, { "name", param.Name }, { "type", param.TypeName } };
+                            if (param.VolatileDataCount > 0) {
+                                portJson["data_structure"] = $"Tree ({param.VolatileData.PathCount} branches, {param.VolatileData.DataCount} items total)";
+                            }
+                            if (param.DataMapping == Grasshopper.Kernel.GH_DataMapping.Flatten) portJson["is_flattened"] = true;
+                            if (param.DataMapping == Grasshopper.Kernel.GH_DataMapping.Graft) portJson["is_grafted"] = true;
+                            if (param.Reverse) portJson["is_reversed"] = true;
+                            if (param.Simplify) portJson["is_simplified"] = true;
+                            outputs.Add(portJson);
+                        }
+                        compJson["outputs"] = outputs;
+                    }
+                    else if (obj is Grasshopper.Kernel.IGH_Param param)
+                    {
+                        compJson["type"] = param.TypeName;
+                        if (param.VolatileDataCount > 0) {
+                            compJson["data_structure"] = $"Tree ({param.VolatileData.PathCount} branches, {param.VolatileData.DataCount} items total)";
+                        }
+                        if (param.DataMapping == Grasshopper.Kernel.GH_DataMapping.Flatten) compJson["is_flattened"] = true;
+                        if (param.DataMapping == Grasshopper.Kernel.GH_DataMapping.Graft) compJson["is_grafted"] = true;
+                        if (param.Reverse) compJson["is_reversed"] = true;
+                        if (param.Simplify) compJson["is_simplified"] = true;
+
+                        var sources = new JArray();
+                        foreach (var source in param.Sources)
+                        {
+                            var srcObj = source.Attributes.GetTopLevel.DocObject;
+                            int srcIdx = (srcObj is Grasshopper.Kernel.IGH_Component srcC) ? srcC.Params.Output.IndexOf(source) : 0;
+                            sources.Add(new JObject { { "id", srcObj.InstanceGuid.ToString() }, { "output_index", srcIdx }, { "name", srcObj.Name } });
+                        }
+                        compJson["sources"] = sources;
+                    }
+                    AppendScriptBodiesToComponentJson(compJson, obj);
+                    components.Add(compJson);
+                }
+                graph["canvas_errors"] = globalErrors;
+                graph["components"] = components;
+                graph["groups"] = groups;
+
+                result = graph.ToString(Formatting.None); // 使用压缩格式节省 Token
+                _cachedCanvasState = result;
+                _cachedRhinoUnitSignature = currentUnitSignature;
+                _canvasChanged = false;
+                UpdateCodeView();
+            }));
+            return result;
+        }
+
+        // ── 共享序列化 helper（不改变任何字段结构）──────────────────────────
+        private static JObject BuildComponentJson(Grasshopper.Kernel.IGH_DocumentObject obj)
+        {
+            return BuildComponentJson(obj, true);
+        }
+
+        private static JObject BuildComponentJson(Grasshopper.Kernel.IGH_DocumentObject obj, bool includeScriptBodies)
+        {
+            var j = new JObject();
+            j["name"]     = obj.Name;
+            j["nickname"] = obj.NickName;
+            j["id"]       = obj.InstanceGuid.ToString();
+            j["pivot"]    = new JObject { { "x", Math.Round(obj.Attributes.Pivot.X) }, { "y", Math.Round(obj.Attributes.Pivot.Y) } };
+            if (IsGraphMapperObject(obj)) j["graph_mapper_type"] = CurrentGraphMapperTypeName(obj) ?? "";
+            if (obj is IGH_ActiveObject ao && ao.RuntimeMessageLevel != GH_RuntimeMessageLevel.Blank)
+            {
+                var msgs = new JArray();
+                foreach (string m in ao.RuntimeMessages(GH_RuntimeMessageLevel.Error))   msgs.Add("Error: " + m);
+                foreach (string m in ao.RuntimeMessages(GH_RuntimeMessageLevel.Warning)) msgs.Add("Warning: " + m);
+                j["runtime_messages"] = msgs;
+            }
+            if (obj is Grasshopper.Kernel.IGH_Component comp)
+            {
+                var inputs = new JArray();
+                for (int i = 0; i < comp.Params.Input.Count; i++)
+                {
+                    var param = comp.Params.Input[i];
+                    var pj = new JObject { ["index"] = i, ["name"] = param.Name, ["type"] = param.TypeName };
+                    if (param.VolatileDataCount > 0) pj["data_structure"] = $"Tree ({param.VolatileData.PathCount} branches, {param.VolatileData.DataCount} items total)";
+                    else pj["data_structure"] = "Empty";
+                    if (param.DataMapping == Grasshopper.Kernel.GH_DataMapping.Flatten) pj["is_flattened"] = true;
+                    if (param.DataMapping == Grasshopper.Kernel.GH_DataMapping.Graft)   pj["is_grafted"]  = true;
+                    if (param.Reverse)  pj["is_reversed"]  = true;
+                    if (param.Simplify) pj["is_simplified"] = true;
+                    var srcs = new JArray();
+                    foreach (var src in param.Sources) {
+                        var so = src.Attributes.GetTopLevel.DocObject;
+                        srcs.Add(new JObject { { "id", so.InstanceGuid.ToString() }, { "output_index", (so is Grasshopper.Kernel.IGH_Component sc) ? sc.Params.Output.IndexOf(src) : 0 }, { "name", so.Name } });
+                    }
+                    pj["sources"] = srcs;
+                    if (param.SourceCount == 0 && param.VolatileDataCount > 0) pj["has_internal_data"] = true;
+                    inputs.Add(pj);
+                }
+                j["inputs"] = inputs;
+                var outputs = new JArray();
+                for (int i = 0; i < comp.Params.Output.Count; i++)
+                {
+                    var param = comp.Params.Output[i];
+                    var pj = new JObject { { "index", i }, { "name", param.Name }, { "type", param.TypeName } };
+                    if (param.VolatileDataCount > 0) pj["data_structure"] = $"Tree ({param.VolatileData.PathCount} branches, {param.VolatileData.DataCount} items total)";
+                    if (param.DataMapping == Grasshopper.Kernel.GH_DataMapping.Flatten) pj["is_flattened"] = true;
+                    if (param.DataMapping == Grasshopper.Kernel.GH_DataMapping.Graft)   pj["is_grafted"]  = true;
+                    if (param.Reverse)  pj["is_reversed"]  = true;
+                    if (param.Simplify) pj["is_simplified"] = true;
+                    outputs.Add(pj);
+                }
+                j["outputs"] = outputs;
+            }
+            else if (obj is Grasshopper.Kernel.IGH_Param pm)
+            {
+                j["type"] = pm.TypeName;
+                if (pm.VolatileDataCount > 0) j["data_structure"] = $"Tree ({pm.VolatileData.PathCount} branches, {pm.VolatileData.DataCount} items total)";
+                if (pm.DataMapping == Grasshopper.Kernel.GH_DataMapping.Flatten) j["is_flattened"] = true;
+                if (pm.DataMapping == Grasshopper.Kernel.GH_DataMapping.Graft)   j["is_grafted"]  = true;
+                if (pm.Reverse)  j["is_reversed"]  = true;
+                if (pm.Simplify) j["is_simplified"] = true;
+                var srcs = new JArray();
+                foreach (var src in pm.Sources) {
+                    var so = src.Attributes.GetTopLevel.DocObject;
+                    srcs.Add(new JObject { { "id", so.InstanceGuid.ToString() }, { "output_index", (so is Grasshopper.Kernel.IGH_Component sc) ? sc.Params.Output.IndexOf(src) : 0 }, { "name", so.Name } });
+                }
+                j["sources"] = srcs;
+            }
+            if (includeScriptBodies)
+                AppendScriptBodiesToComponentJson(j, obj);
+            return j;
+        }
+
+        // ── 摘要：仅 id/name/pivot + 首条报错，不含端口 ──────────────────────
+        private static void GetComponentIssueCounts(Grasshopper.Kernel.IGH_DocumentObject obj, out int errorCount, out int warningCount, out string firstIssue)
+        {
+            errorCount = 0;
+            warningCount = 0;
+            firstIssue = null;
+            if (!(obj is IGH_ActiveObject ao) || ao.RuntimeMessageLevel == GH_RuntimeMessageLevel.Blank) return;
+
+            var errs = ao.RuntimeMessages(GH_RuntimeMessageLevel.Error);
+            var warns = ao.RuntimeMessages(GH_RuntimeMessageLevel.Warning);
+            errorCount = errs?.Count ?? 0;
+            warningCount = warns?.Count ?? 0;
+
+            if (errorCount > 0) firstIssue = errs[0];
+            else if (warningCount > 0) firstIssue = warns[0];
+        }
+
+        private static bool ComponentHasConnections(Grasshopper.Kernel.IGH_DocumentObject obj)
+        {
+            if (obj is Grasshopper.Kernel.IGH_Component comp)
+            {
+                foreach (var p in comp.Params.Input) if (p.SourceCount > 0) return true;
+                foreach (var p in comp.Params.Output) if (p.Recipients.Count > 0) return true;
+                return false;
+            }
+            if (obj is Grasshopper.Kernel.IGH_Param param)
+                return param.SourceCount > 0 || param.Recipients.Count > 0;
+            return false;
+        }
+
+        private static bool ComponentHasPortName(Grasshopper.Kernel.IGH_DocumentObject obj, string portNameContains)
+        {
+            string needle = (portNameContains ?? "").Trim();
+            if (needle.Length == 0) return true;
+
+            bool HasName(string a, string b)
+            {
+                return (!string.IsNullOrEmpty(a) && a.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0)
+                    || (!string.IsNullOrEmpty(b) && b.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0);
+            }
+
+            if (obj is Grasshopper.Kernel.IGH_Component comp)
+            {
+                foreach (var p in comp.Params.Input)
+                    if (HasName(p.Name, p.NickName)) return true;
+                foreach (var p in comp.Params.Output)
+                    if (HasName(p.Name, p.NickName)) return true;
+                return false;
+            }
+
+            if (obj is Grasshopper.Kernel.IGH_Param param)
+                return HasName(param.Name, param.NickName);
+
+            return false;
+        }
+
+        private static bool ComponentLooksLikeScript(Grasshopper.Kernel.IGH_DocumentObject obj)
+        {
+            if (obj == null) return false;
+            if (IsCSharpScriptComponent(obj)) return true;
+
+            string[] probes =
+            {
+                obj.Name ?? "",
+                obj.NickName ?? "",
+                obj.GetType()?.Name ?? ""
+            };
+            foreach (string probe in probes)
+            {
+                if (probe.IndexOf("script", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                if (probe.IndexOf("python", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                if (probe.IndexOf("ghpython", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                if (probe.IndexOf("evaluate", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                if (probe.IndexOf("expression", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                if (probe.IndexOf("c#", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                if (probe.IndexOf("vb", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            }
+
+            try { return GhEnumerateScriptPayloadStrings(obj).Count > 0; }
+            catch { return false; }
+        }
+
+        private static JObject BuildComponentQuerySummary(Grasshopper.Kernel.IGH_DocumentObject obj)
+        {
+            GetComponentIssueCounts(obj, out int errorCount, out int warningCount, out string firstIssue);
+            var jo = new JObject
+            {
+                ["id"] = obj.InstanceGuid.ToString(),
+                ["name"] = obj.Name,
+                ["nickname"] = obj.NickName,
+                ["pivot"] = new JObject { { "x", Math.Round(obj.Attributes.Pivot.X) }, { "y", Math.Round(obj.Attributes.Pivot.Y) } },
+                ["is_script"] = ComponentLooksLikeScript(obj),
+                ["has_connections"] = ComponentHasConnections(obj)
+            };
+
+            if (obj is Grasshopper.Kernel.IGH_Component comp)
+            {
+                jo["kind"] = "component";
+                jo["input_count"] = comp.Params.Input.Count;
+                jo["output_count"] = comp.Params.Output.Count;
+            }
+            else if (obj is Grasshopper.Kernel.IGH_Param param)
+            {
+                jo["kind"] = "param";
+                jo["type"] = param.TypeName;
+                jo["source_count"] = param.SourceCount;
+                jo["recipient_count"] = param.Recipients.Count;
+            }
+            else
+            {
+                jo["kind"] = "object";
+            }
+
+            if (errorCount > 0) jo["error_count"] = errorCount;
+            if (warningCount > 0) jo["warning_count"] = warningCount;
+            if (!string.IsNullOrWhiteSpace(firstIssue)) jo["first_issue"] = firstIssue;
+            return jo;
+        }
+
+        private static List<Grasshopper.Kernel.IGH_DocumentObject> CollectComponentContextObjects(
+            GH_Document doc,
+            Grasshopper.Kernel.IGH_DocumentObject target,
+            int depth)
+        {
+            var orderedIds = new List<Guid>();
+            var visited = new HashSet<Guid>();
+
+            void Traverse(Grasshopper.Kernel.IGH_DocumentObject obj, int remaining)
+            {
+                if (obj == null || remaining <= 0) return;
+                if (obj is Grasshopper.Kernel.IGH_Component comp)
+                {
+                    foreach (var p in comp.Params.Input)
+                    {
+                        foreach (var s in p.Sources)
+                        {
+                            var nb = s.Attributes?.GetTopLevel?.DocObject;
+                            if (nb == null || !visited.Add(nb.InstanceGuid)) continue;
+                            orderedIds.Add(nb.InstanceGuid);
+                            Traverse(nb, remaining - 1);
+                        }
+                    }
+                    foreach (var p in comp.Params.Output)
+                    {
+                        foreach (var r in p.Recipients)
+                        {
+                            var nb = r.Attributes?.GetTopLevel?.DocObject;
+                            if (nb == null || !visited.Add(nb.InstanceGuid)) continue;
+                            orderedIds.Add(nb.InstanceGuid);
+                            Traverse(nb, remaining - 1);
+                        }
+                    }
+                }
+                else if (obj is Grasshopper.Kernel.IGH_Param param)
+                {
+                    foreach (var s in param.Sources)
+                    {
+                        var nb = s.Attributes?.GetTopLevel?.DocObject;
+                        if (nb == null || !visited.Add(nb.InstanceGuid)) continue;
+                        orderedIds.Add(nb.InstanceGuid);
+                        Traverse(nb, remaining - 1);
+                    }
+                    foreach (var r in param.Recipients)
+                    {
+                        var nb = r.Attributes?.GetTopLevel?.DocObject;
+                        if (nb == null || !visited.Add(nb.InstanceGuid)) continue;
+                        orderedIds.Add(nb.InstanceGuid);
+                        Traverse(nb, remaining - 1);
+                    }
+                }
+            }
+
+            visited.Add(target.InstanceGuid);
+            orderedIds.Add(target.InstanceGuid);
+            Traverse(target, Math.Max(0, depth));
+
+            var result = new List<Grasshopper.Kernel.IGH_DocumentObject>();
+            foreach (var guid in orderedIds)
+            {
+                var obj = doc.FindObject(guid, true);
+                if (obj != null) result.Add(obj);
+            }
+            return result;
+        }
+
+        private static string ExecuteQueryGhComponents(
+            string id = null,
+            string nameContains = null,
+            bool? hasErrors = null,
+            bool? isScript = null,
+            bool? hasConnections = null,
+            string portNameContains = null,
+            int maxResults = 8,
+            int neighborDepth = 1)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+
+                string idNeedle = (id ?? "").Trim();
+                string nameNeedle = (nameContains ?? "").Trim();
+                string portNeedle = (portNameContains ?? "").Trim();
+                maxResults = Math.Max(1, Math.Min(50, maxResults));
+                neighborDepth = Math.Max(0, Math.Min(2, neighborDepth));
+
+                var matched = new List<Grasshopper.Kernel.IGH_DocumentObject>();
+                foreach (var obj in doc.Objects)
+                {
+                    if (obj is Grasshopper.Kernel.Special.GH_Group) continue;
+
+                    if (idNeedle.Length > 0 && !obj.InstanceGuid.ToString().Equals(idNeedle, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    if (nameNeedle.Length > 0)
+                    {
+                        bool nameMatch =
+                            (!string.IsNullOrEmpty(obj.Name) && obj.Name.IndexOf(nameNeedle, StringComparison.OrdinalIgnoreCase) >= 0) ||
+                            (!string.IsNullOrEmpty(obj.NickName) && obj.NickName.IndexOf(nameNeedle, StringComparison.OrdinalIgnoreCase) >= 0);
+                        if (!nameMatch) continue;
+                    }
+
+                    if (hasErrors.HasValue)
+                    {
+                        GetComponentIssueCounts(obj, out int errorCount, out int warningCount, out _);
+                        bool objHasErrors = errorCount > 0 || warningCount > 0;
+                        if (objHasErrors != hasErrors.Value) continue;
+                    }
+
+                    if (isScript.HasValue && ComponentLooksLikeScript(obj) != isScript.Value)
+                        continue;
+
+                    if (hasConnections.HasValue && ComponentHasConnections(obj) != hasConnections.Value)
+                        continue;
+
+                    if (portNeedle.Length > 0 && !ComponentHasPortName(obj, portNeedle))
+                        continue;
+
+                    matched.Add(obj);
+                }
+
+                var hits = new JArray();
+                foreach (var obj in matched.Take(maxResults))
+                {
+                    var hit = new JObject
+                    {
+                        ["summary"] = BuildComponentQuerySummary(obj),
+                        ["component"] = BuildComponentJson(obj, false)
+                    };
+
+                    if (neighborDepth > 0)
+                    {
+                        var neighbors = new JArray();
+                        foreach (var ctxObj in CollectComponentContextObjects(doc, obj, neighborDepth))
+                        {
+                            if (ctxObj.InstanceGuid == obj.InstanceGuid) continue;
+                            neighbors.Add(BuildComponentQuerySummary(ctxObj));
+                        }
+                        hit["neighbors"] = neighbors;
+                    }
+
+                    hits.Add(hit);
+                }
+
+                result = new JObject
+                {
+                    ["query"] = new JObject
+                    {
+                        ["id"] = idNeedle,
+                        ["name_contains"] = nameNeedle,
+                        ["has_errors"] = hasErrors.HasValue ? JToken.FromObject(hasErrors.Value) : JValue.CreateNull(),
+                        ["is_script"] = isScript.HasValue ? JToken.FromObject(isScript.Value) : JValue.CreateNull(),
+                        ["has_connections"] = hasConnections.HasValue ? JToken.FromObject(hasConnections.Value) : JValue.CreateNull(),
+                        ["port_name_contains"] = portNeedle,
+                        ["neighbor_depth"] = neighborDepth
+                    },
+                    ["total_hits"] = matched.Count,
+                    ["returned_hits"] = hits.Count,
+                    ["hits"] = hits
+                }.ToString(Formatting.None);
+            }));
+            return result;
+        }
+
+        private static string ExecuteGetCanvasSummary()
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+                var arr = new JArray();
+                foreach (var obj in doc.Objects)
+                {
+                    if (obj is Grasshopper.Kernel.Special.GH_Group) continue;
+                    var j = new JObject {
+                        ["id"]    = obj.InstanceGuid.ToString(),
+                        ["name"]  = obj.Name,
+                        ["pivot"] = new JObject { { "x", Math.Round(obj.Attributes.Pivot.X) }, { "y", Math.Round(obj.Attributes.Pivot.Y) } }
+                    };
+                    if (obj is IGH_ActiveObject ao && ao.RuntimeMessageLevel != GH_RuntimeMessageLevel.Blank)
+                    {
+                        var errs = ao.RuntimeMessages(GH_RuntimeMessageLevel.Error);
+                        var warn = ao.RuntimeMessages(GH_RuntimeMessageLevel.Warning);
+                        if (errs.Count > 0)      j["error"] = "❌ " + errs[0];
+                        else if (warn.Count > 0) j["error"] = "⚠️ " + warn[0];
+                    }
+                    arr.Add(j);
+                }
+                var groups = new JArray();
+                foreach (var g in doc.Objects.OfType<Grasshopper.Kernel.Special.GH_Group>()) {
+                    var members = new JArray();
+                    foreach (var mid in g.Objects()) members.Add(mid.ToString());
+                    groups.Add(new JObject { ["id"] = g.InstanceGuid.ToString(), ["name"] = g.NickName, ["members"] = members });
+                }
+                result = new JObject
+                {
+                    ["rhino_units"] = BuildRhinoUnitsJson(),
+                    ["components"] = arr,
+                    ["groups"] = groups
+                }.ToString(Formatting.None);
+            }));
+            return result;
+        }
+
+        // ── 上下文：目标 + 前后各 depth 层邻居（完整详情）───────────────────
+        private static string ExecuteGetComponentContext(string id, int depth = 1, bool includeScriptBodies = false)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+                if (!Guid.TryParse(id, out Guid guid)) { result = "Error: ID 格式错误。"; return; }
+                var target = doc.FindObject(guid, true);
+                if (target == null) { result = "Error: 找不到该电池。"; return; }
+
+                var arr = new JArray();
+                foreach (var obj in CollectComponentContextObjects(doc, target, depth))
+                    arr.Add(BuildComponentJson(obj, includeScriptBodies));
+                result = new JObject { ["context_components"] = arr }.ToString(Formatting.None);
+            }));
+            return result;
+        }
+
+        private static string ExecuteReadComponentScript(string id)
+        {
+            const int readCap = 150000;
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+                if (!Guid.TryParse(id, out Guid guid)) { result = "Error: ID 格式错误。"; return; }
+                var obj = doc.FindObject(guid, true);
+                if (obj == null) { result = "Error: 找不到该电池。"; return; }
+                result = GhReadScriptSourceViaReflection(obj, readCap, Math.Min(readCap, 120000));
+            }));
+            return result;
+        }
+
+        private static void SyncCodeIssuesStripHeightToInputArea()
+        {
+            if (_codeCanvasIssuesHost == null || _inputAreaBorder == null) return;
+            double h = _inputAreaBorder.ActualHeight;
+            if (double.IsNaN(h) || h < 1) return;
+            _codeCanvasIssuesHost.Height = h;
+        }
+
+        private static void ScheduleCodeSurfaceRefreshFromCanvas()
+        {
+            _canvasChanged = true;
+            if (_window?.Dispatcher == null) return;
+
+            Action armTimer = () =>
+            {
+                if (_codeSurfaceDebounceTimer != null)
+                {
+                    _codeSurfaceDebounceTimer.Stop();
+                    _codeSurfaceDebounceTimer = null;
+                }
+                _codeSurfaceDebounceTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(90) };
+                _codeSurfaceDebounceTimer.Tick += (_, __) =>
+                {
+                    if (_codeSurfaceDebounceTimer != null)
+                    {
+                        _codeSurfaceDebounceTimer.Stop();
+                        _codeSurfaceDebounceTimer = null;
+                    }
+                    Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+                    {
+                        _canvasChanged = true;
+                        UpdateCodeView();
+                    }));
+                };
+                _codeSurfaceDebounceTimer.Start();
+            };
+
+            if (_window.Dispatcher.CheckAccess())
+                armTimer();
+            else
+                _window.Dispatcher.Invoke(armTimer);
+        }
+
+        private static void OnGhDocObjectsChanged(object sender, GH_DocObjectEventArgs e)
+        {
+            ScheduleCodeSurfaceRefreshFromCanvas();
+        }
+
+        private static void OnGhDocSolutionEnd(object sender, GH_SolutionEventArgs e)
+        {
+            ScheduleCodeSurfaceRefreshFromCanvas();
+        }
+
+        private static void OnGhCanvasDocumentChanged(object sender, GH_CanvasDocumentChangedEventArgs e)
+        {
+            AttachGrasshopperDocumentForCodeRefresh(e?.NewDocument);
+            ScheduleCodeSurfaceRefreshFromCanvas();
+        }
+
+        private static void DetachGrasshopperDocumentForCodeRefresh()
+        {
+            if (_codeSurfaceHookedDoc == null) return;
+            try {
+                _codeSurfaceHookedDoc.ObjectsAdded -= OnGhDocObjectsChanged;
+                _codeSurfaceHookedDoc.ObjectsDeleted -= OnGhDocObjectsChanged;
+                _codeSurfaceHookedDoc.SolutionEnd -= OnGhDocSolutionEnd;
+            } catch (Exception ex) {
+                AddGhLog.Warn("DetachGrasshopperDocumentForCodeRefresh: " + ex.Message);
+            }
+            _codeSurfaceHookedDoc = null;
+        }
+
+        private static void AttachGrasshopperDocumentForCodeRefresh(GH_Document doc)
+        {
+            if (doc == _codeSurfaceHookedDoc) return;
+            DetachGrasshopperDocumentForCodeRefresh();
+            _codeSurfaceHookedDoc = doc;
+            if (doc == null) return;
+            doc.ObjectsAdded += OnGhDocObjectsChanged;
+            doc.ObjectsDeleted += OnGhDocObjectsChanged;
+            doc.SolutionEnd += OnGhDocSolutionEnd;
+        }
+
+        private static void DetachCodeSurfaceCanvasHookOnly()
+        {
+            if (_codeSurfaceHookedCanvas == null) return;
+            try { _codeSurfaceHookedCanvas.DocumentChanged -= OnGhCanvasDocumentChanged; }
+            catch (Exception ex) { AddGhLog.Warn("Detach canvas hook: " + ex.Message); }
+            _codeSurfaceHookedCanvas = null;
+        }
+
+        private static void AttachCodeSurfaceCanvasHook()
+        {
+            var canvas = Grasshopper.Instances.ActiveCanvas as GH_Canvas;
+            if (canvas == null) return;
+            if (canvas == _codeSurfaceHookedCanvas) return;
+            DetachCodeSurfaceCanvasHookOnly();
+            _codeSurfaceHookedCanvas = canvas;
+            _codeSurfaceHookedCanvas.DocumentChanged += OnGhCanvasDocumentChanged;
+        }
+
+        private static void TeardownGrasshopperCodeSurfaceHooks()
+        {
+            try {
+                DetachCodeSurfaceCanvasHookOnly();
+                DetachGrasshopperDocumentForCodeRefresh();
+                if (_codeSurfaceDebounceTimer != null)
+                {
+                    _codeSurfaceDebounceTimer.Stop();
+                    _codeSurfaceDebounceTimer = null;
+                }
+            } catch (Exception ex) {
+                AddGhLog.Warn("TeardownGrasshopperCodeSurfaceHooks: " + ex.Message);
+            }
+        }
+
+        private static void StartGrasshopperCodeSurfaceHooks()
+        {
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                try {
+                    AttachCodeSurfaceCanvasHook();
+                    AttachGrasshopperDocumentForCodeRefresh(Grasshopper.Instances.ActiveCanvas?.Document);
+                } catch (Exception ex) {
+                    AddGhLog.Warn("StartGrasshopperCodeSurfaceHooks: " + ex.Message);
+                }
+            }));
+        }
+
+        private static void UpdateCodePanelCanvasIssues()
+        {
+            if (_txtCanvasIssues == null) return;
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                if (!_isCodeVisible) return;
+
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) {
+                    _txtCanvasIssues.Text = "当前无激活的 Grasshopper 文档。";
+                    return;
+                }
+
+                string err = GetCanvasErrors(doc)?.Trim();
+                if (string.IsNullOrEmpty(err))
+                    _txtCanvasIssues.Foreground = new SolidColorBrush(Color.FromRgb(140, 140, 140));
+                else
+                    _txtCanvasIssues.Foreground = new SolidColorBrush(Color.FromRgb(200, 200, 200));
+                _txtCanvasIssues.Text = string.IsNullOrEmpty(err)
+                    ? "画布暂无组件级 Error / Warning 运行时提示。"
+                    : err;
+            }));
+        }
+
+        private static void UpdateCodeView()
+        {
+            if (!_isCodeVisible || _richCodeView == null) return;
+
+            if (!_isJsonMode)
+            {
+                string raw = ExecuteGetGhComponents();
+                Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+                {
+                    try {
+                        // 尝试在 UI 上进行格式化展示，即使 AI 接收的是压缩版
+                        var obj = JsonConvert.DeserializeObject(raw);
+                        SetRichCodeViewContent(_richCodeView, JsonConvert.SerializeObject(obj, Formatting.Indented));
+                    } catch (Exception ex) {
+                        AddGhLog.Debug("UpdateCodeView JSON indent failed: " + ex.Message);
+                        SetRichCodeViewContent(_richCodeView, raw);
+                    }
+                    UpdateCodePanelCanvasIssues();
+                }));
+                return;
+            }
+
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                try {
+                    var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                    if (doc == null) {
+                        SetRichCodeViewContent(_richCodeView, "// 没有激活的画布", asPlainComment: true);
+                        return;
+                    }
+
+                    var graph = new JObject();
+                    if (DeploymentOptions.IncludeCanvasExportTimestamp)
+                        graph["timestamp"] = DateTime.Now.ToString("HH:mm:ss");
+                    graph["object_count"] = doc.ObjectCount;
+
+                    var components = new JArray();
+                    foreach (var obj in doc.Objects)
+                    {
+                        var compJson = new JObject();
+                        compJson["name"] = obj.Name;
+                        compJson["nickname"] = obj.NickName;
+                        compJson["id"] = obj.InstanceGuid.ToString();
+                        compJson["pivot"] = new JObject { { "x", Math.Round(obj.Attributes.Pivot.X) }, { "y", Math.Round(obj.Attributes.Pivot.Y) } };
+
+                        if (obj is Grasshopper.Kernel.IGH_Component comp)
+                        {
+                            var inputs = new JArray();
+                            foreach (var param in comp.Params.Input)
+                            {
+                                var paramJson = new JObject();
+                                paramJson["name"] = param.Name;
+                                paramJson["nickname"] = param.NickName;
+
+                                var sources = new JArray();
+                                foreach (var source in param.Sources)
+                                {
+                                    sources.Add(source.Attributes.GetTopLevel.DocObject.InstanceGuid.ToString());
+                                }
+                                paramJson["sources"] = sources;
+                                inputs.Add(paramJson);
+                            }
+                            compJson["inputs"] = inputs;
+
+                            var outputs = new JArray();
+                            foreach (var param in comp.Params.Output)
+                            {
+                                var paramJson = new JObject();
+                                paramJson["name"] = param.Name;
+                                paramJson["nickname"] = param.NickName;
+                                outputs.Add(paramJson);
+                            }
+                            compJson["outputs"] = outputs;
+                        }
+                        else if (obj is Grasshopper.Kernel.IGH_Param param)
+                        {
+                            var sources = new JArray();
+                            foreach (var source in param.Sources)
+                            {
+                                sources.Add(source.Attributes.GetTopLevel.DocObject.InstanceGuid.ToString());
+                            }
+                            compJson["sources"] = sources;
+                        }
+
+                        components.Add(compJson);
+                    }
+                    graph["components"] = components;
+
+                    SetRichCodeViewContent(_richCodeView, graph.ToString(Formatting.Indented));
+                } finally {
+                    UpdateCodePanelCanvasIssues();
+                }
+            }));
+        }
+
+        /// <summary>
+        /// 优先按名称从组件库创建实例；若提供合法 component_guid 则按类型 GUID 创建（用于同名或脚本类）。
+        /// </summary>
+        private static Grasshopper.Kernel.IGH_DocumentObject InstantiateDocumentObjectFromLibrary(string name, string componentGuid)
+        {
+            if (!string.IsNullOrWhiteSpace(componentGuid) && Guid.TryParse(componentGuid.Trim(), out Guid cid)) {
+                var emitted = Grasshopper.Instances.ComponentServer.EmitObject(cid) as Grasshopper.Kernel.IGH_DocumentObject;
+                if (emitted != null) return emitted;
+            }
+            if (string.IsNullOrWhiteSpace(name)) return null;
+            var proxy = FindComponentProxy(name);
+            return proxy?.CreateInstance() as Grasshopper.Kernel.IGH_DocumentObject;
+        }
+
+        private const string DefaultGraphMapperType = "Bezier";
+
+        private static bool IsGraphMapperObject(Grasshopper.Kernel.IGH_DocumentObject obj)
+        {
+            return obj is Grasshopper.Kernel.Special.GH_GraphMapper;
+        }
+
+        private static string FirstNonEmpty(params string[] values)
+        {
+            if (values == null) return null;
+            foreach (string value in values)
+            {
+                if (!string.IsNullOrWhiteSpace(value)) return value.Trim();
+            }
+            return null;
+        }
+
+        private static string GetGraphMapperTypeRequest(JToken token, string valueFallback = null)
+        {
+            if (token == null) return FirstNonEmpty(valueFallback, DefaultGraphMapperType);
+            return FirstNonEmpty(
+                token["graph_mapper_type"]?.ToString(),
+                token["graph_type"]?.ToString(),
+                token["mapper_type"]?.ToString(),
+                valueFallback,
+                DefaultGraphMapperType);
+        }
+
+        private static string CurrentGraphMapperTypeName(Grasshopper.Kernel.IGH_DocumentObject obj)
+        {
+            var mapper = obj as Grasshopper.Kernel.Special.GH_GraphMapper;
+            return mapper?.Graph?.Name;
+        }
+
+        private static Grasshopper.Kernel.GH_GraphProxy FindGraphMapperProxy(string keyword)
+        {
+            var proxies = Grasshopper.Instances.ComponentServer?.GraphProxies;
+            if (proxies == null) return null;
+
+            string wanted = (keyword ?? DefaultGraphMapperType).Trim();
+            if (wanted.Length == 0) wanted = DefaultGraphMapperType;
+
+            var list = proxies.ToList();
+            var exact = list.FirstOrDefault(p => string.Equals(p.Name, wanted, StringComparison.OrdinalIgnoreCase));
+            if (exact != null) return exact;
+
+            exact = list.FirstOrDefault(p => string.Equals(p.Type?.Name, wanted, StringComparison.OrdinalIgnoreCase));
+            if (exact != null) return exact;
+
+            return list.FirstOrDefault(p =>
+                (!string.IsNullOrWhiteSpace(p.Name) && p.Name.IndexOf(wanted, StringComparison.OrdinalIgnoreCase) >= 0) ||
+                (!string.IsNullOrWhiteSpace(p.Description) && p.Description.IndexOf(wanted, StringComparison.OrdinalIgnoreCase) >= 0) ||
+                (!string.IsNullOrWhiteSpace(p.Type?.Name) && p.Type.Name.IndexOf(wanted, StringComparison.OrdinalIgnoreCase) >= 0));
+        }
+
+        private static string DescribeGraphMapperTypes(int maxNames = 20)
+        {
+            var proxies = Grasshopper.Instances.ComponentServer?.GraphProxies;
+            if (proxies == null || proxies.Count == 0) return "";
+            return " 可用类型：" + string.Join(", ", proxies.Select(p => p.Name).Where(n => !string.IsNullOrWhiteSpace(n)).Take(maxNames));
+        }
+
+        private static bool TrySetGraphMapperType(Grasshopper.Kernel.IGH_DocumentObject obj, string graphType, out string detail)
+        {
+            detail = "";
+            var mapper = obj as Grasshopper.Kernel.Special.GH_GraphMapper;
+            if (mapper == null)
+            {
+                detail = "Error: 该电池不是 Graph Mapper。";
+                return false;
+            }
+
+            string requested = FirstNonEmpty(graphType, DefaultGraphMapperType);
+            var proxy = FindGraphMapperProxy(requested);
+            if (proxy == null)
+            {
+                detail = "Error: 找不到 Graph Mapper 类型 '" + requested + "'。" + DescribeGraphMapperTypes();
+                return false;
+            }
+
+            var graph = Grasshopper.Instances.ComponentServer.EmitGraph(proxy.GUID);
+            if (graph == null)
+            {
+                detail = "Error: 无法创建 Graph Mapper 类型 '" + proxy.Name + "'。";
+                return false;
+            }
+
+            try { graph.PrepareForUse(); } catch { }
+
+            if (mapper.Container == null)
+                mapper.Container = new Grasshopper.Kernel.Graphs.GH_GraphContainer(graph, 0.0, 1.0, 0.0, 1.0);
+            else
+                mapper.Container.Graph = graph;
+
+            try { mapper.Container.PrepareForUse(); } catch { }
+            mapper.ExpireSolution(true);
+            try { mapper.Attributes?.ExpireLayout(); } catch { }
+
+            detail = "Graph Mapper 类型=" + proxy.Name;
+            return true;
+        }
+
+        private static bool IsScriptModeAuxiliaryComponentAllowed(Grasshopper.Kernel.IGH_DocumentObject obj)
+        {
+            if (_layoutMode != LayoutMode.CSharpFirst) return true;
+            string category = obj?.Category ?? "";
+            return string.Equals(category, "Params", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(category, "Display", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string BuildScriptModeAuxiliaryComponentError(Grasshopper.Kernel.IGH_DocumentObject obj, string requestedName)
+        {
+            string displayName = !string.IsNullOrWhiteSpace(requestedName) ? requestedName : (obj?.Name ?? "该电池");
+            string category = string.IsNullOrWhiteSpace(obj?.Category) ? "未知" : obj.Category;
+            return "Error: C# 优先模式下，非脚本辅助电池只允许使用 Params 或 Display 分类；"
+                + displayName + " 属于 " + category + "，已拒绝创建。核心建模逻辑请写入 C# Script 电池。";
+        }
+
+        private static string ExecuteAddGhComponent(string name, float x, float y, string label = null, string componentGuid = null, string graphMapperType = null)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+
+                var obj = InstantiateDocumentObjectFromLibrary(name, componentGuid);
+
+                if (obj == null) {
+                    result = !string.IsNullOrWhiteSpace(componentGuid)
+                        ? "Error: component_guid 无效或未加载对应的电池类型。"
+                        : "Error: 找不到电池 '" + name + "'。";
+                    return;
+                }
+
+                if (!IsScriptModeAuxiliaryComponentAllowed(obj))
+                {
+                    result = BuildScriptModeAuxiliaryComponentError(obj, name);
+                    return;
+                }
+
+                obj.CreateAttributes();
+                obj.Attributes.Pivot = new System.Drawing.PointF(x, y);
+                if (!string.IsNullOrEmpty(label)) obj.NickName = label;
+                obj.Attributes.ExpireLayout();
+
+                string graphMapperDetail = null;
+                if (IsGraphMapperObject(obj) && !TrySetGraphMapperType(obj, FirstNonEmpty(graphMapperType, DefaultGraphMapperType), out graphMapperDetail))
+                {
+                    result = graphMapperDetail;
+                    return;
+                }
+
+                doc.AddObject(obj, false);
+                _canvasChanged = true;
+                try { doc.ScheduleSolution(150); }
+                catch (Exception ex) { AddGhLog.Warn("ExecuteAddGhComponent Schedule failed: " + ex.Message); }
+                string displayName = !string.IsNullOrWhiteSpace(name) ? name : (obj.Name ?? "组件");
+                result = "已添加 " + displayName + " (ID: " + obj.InstanceGuid + ").";
+                if (!string.IsNullOrWhiteSpace(graphMapperDetail)) result += " " + graphMapperDetail + "。";
+            }));
+            return result;
+        }
+
+        private static string ExecuteConnectGhComponents(string fromId, int fromIndex, string toId, int toIndex)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+                if (!Guid.TryParse(fromId, out Guid guidFrom) || !Guid.TryParse(toId, out Guid guidTo)) { result = "Error: ID 格式错误。"; return; }
+
+                var objFrom = doc.FindObject(guidFrom, true);
+                var objTo = doc.FindObject(guidTo, true);
+                if (objFrom == null || objTo == null) { result = "Error: 找不到电池。"; return; }
+
+                Grasshopper.Kernel.IGH_Param sourceParam = (objFrom is Grasshopper.Kernel.IGH_Component cF) ? (fromIndex < cF.Params.Output.Count ? cF.Params.Output[fromIndex] : null) : (objFrom as Grasshopper.Kernel.IGH_Param);
+                Grasshopper.Kernel.IGH_Param targetParam = (objTo is Grasshopper.Kernel.IGH_Component cT) ? (toIndex < cT.Params.Input.Count ? cT.Params.Input[toIndex] : null) : (objTo as Grasshopper.Kernel.IGH_Param);
+
+                if (sourceParam == null || targetParam == null) { result = "Error: 端口越界。"; return; }
+
+                targetParam.AddSource(sourceParam);
+                _canvasChanged = true;
+                try { doc.ScheduleSolution(150); }
+                catch (Exception ex) { AddGhLog.Warn("ExecuteConnectGhComponents Schedule failed: " + ex.Message); }
+                result = "连线成功。";
+                result += GetCanvasErrors(doc);
+            }));
+            return result;
+        }
+
+        private static string ExecuteRemoveGhComponent(string id)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+                if (!Guid.TryParse(id, out Guid guid)) { result = "Error: ID 格式错误。"; return; }
+                var obj = doc.FindObject(guid, true);
+                if (obj == null) { result = "Error: 找不到电池。"; return; }
+
+                doc.RemoveObject(obj, false);
+                result = "删除成功。";
+                _canvasChanged = true;
+                try { doc.ScheduleSolution(150); }
+                catch (Exception ex) { AddGhLog.Warn("ExecuteRemoveGhComponent Schedule failed: " + ex.Message); }
+            }));
+            return result;
+        }
+
+        private static bool GhScriptMetaExcludedName(string pn)
+        {
+            if (string.IsNullOrEmpty(pn)) return true;
+            foreach (var ex in new[] {
+                "NickName", "Category", "SubCategory", "Description", "Keywords", "InstanceDescription",
+                "Path", "FileName", "Url", "Message", "ToolTip", "IconDisplayName", "LanguageName"
+            })
+                if (pn.Equals(ex, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        private static bool GhScriptNameLooksLikePayload(string pn)
+        {
+            if (GhScriptMetaExcludedName(pn)) return false;
+            // 支持完整接口名如 RhinoCodePlatform.GH.IScriptComponent.Text
+            string shortName = pn.Contains('.') ? pn.Substring(pn.LastIndexOf('.') + 1) : pn;
+            // GhPython / Rhino「Python 3 Script」等：可执行正文在 Text，不用子串「Text」以免误匹配如 Texture。
+            if (string.Equals(shortName, "Text", StringComparison.OrdinalIgnoreCase)) return true;
+            foreach (var part in new[] {
+                "Code", "Script", "Formula", "Expression", "Source", "Snippet", "Program", "Definition",
+                "Logic", "Statement", "Body", "Python", "CSharp", "Csharp", "VB", "VBA", "IronPython", "Compile",
+                "ScriptSource", "Editor", "UserCode", "RawCode", "TextBody", "Document", "PyCode", "Roslyn"
+            })
+                if (shortName.IndexOf(part, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            return false;
+        }
+
+        private static int GhScriptMemberPreference(string pn)
+        {
+            string sn = pn.Contains('.') ? pn.Substring(pn.LastIndexOf('.') + 1) : pn;
+            if (string.Equals(sn, "Code", StringComparison.OrdinalIgnoreCase)) return 500;
+            if (string.Equals(sn, "Script", StringComparison.OrdinalIgnoreCase)) return 490;
+            if (string.Equals(sn, "Text", StringComparison.OrdinalIgnoreCase)) return 485;
+            if (sn.IndexOf("Formula", StringComparison.OrdinalIgnoreCase) >= 0) return 480;
+            if (sn.IndexOf("Expression", StringComparison.OrdinalIgnoreCase) >= 0) return 470;
+            if (sn.IndexOf("ScriptSource", StringComparison.OrdinalIgnoreCase) >= 0) return 460;
+            if (sn.IndexOf("Editor", StringComparison.OrdinalIgnoreCase) >= 0) return 450;
+            if (sn.IndexOf("Python", StringComparison.OrdinalIgnoreCase) >= 0) return 440;
+            if (sn.IndexOf("CSharp", StringComparison.OrdinalIgnoreCase) >= 0 || sn.IndexOf("Csharp", StringComparison.OrdinalIgnoreCase) >= 0) return 430;
+            if (sn.IndexOf("VB", StringComparison.OrdinalIgnoreCase) >= 0) return 420;
+            if (sn.IndexOf("Source", StringComparison.OrdinalIgnoreCase) >= 0) return 400;
+            if (sn.IndexOf("Content", StringComparison.OrdinalIgnoreCase) >= 0) return 350;
+            if (sn.IndexOf("Body", StringComparison.OrdinalIgnoreCase) >= 0) return 340;
+            return 100;
+        }
+
+        private static string GhTruncateScriptSnippet(string text, int maxChars)
+        {
+            if (string.IsNullOrEmpty(text)) return text;
+            if (text.Length <= maxChars) return text;
+            return text.Substring(0, maxChars) + "\n...[truncated " + (text.Length - maxChars) + " chars]";
+        }
+
+        /// <summary> 枚举电池实例上「像脚本正文」的可读 string 属性/字段（顺序已按启发式偏好排好）。 </summary>
+        private static List<(string label, string text, int pref)> GhEnumerateScriptPayloadStrings(Grasshopper.Kernel.IGH_DocumentObject obj)
+        {
+            var results = new List<(string label, string text, int pref)>();
+            if (obj == null) return results;
+
+            var propCandidates = new List<System.Reflection.PropertyInfo>();
+            var fieldCandidates = new List<System.Reflection.FieldInfo>();
+            var seenProp = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seenFieldSig = new HashSet<string>();
+
+            for (Type t = obj.GetType(); t != null && t != typeof(object); t = t.BaseType)
+            {
+                foreach (var prop in t.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    if (prop.PropertyType != typeof(string)) continue;
+                    if (prop.GetIndexParameters().Length != 0) continue;
+                    if (!GhScriptNameLooksLikePayload(prop.Name)) continue;
+                    if (!seenProp.Add(prop.Name)) continue;
+                    propCandidates.Add(prop);
+                }
+
+                foreach (var fld in t.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    if (fld.FieldType != typeof(string)) continue;
+                    if (!GhScriptNameLooksLikePayload(fld.Name)) continue;
+                    string sig = (t.FullName ?? t.Name) + "::" + fld.Name;
+                    if (!seenFieldSig.Add(sig)) continue;
+                    fieldCandidates.Add(fld);
+                }
+            }
+
+            foreach (var prop in propCandidates.OrderByDescending(p => GhScriptMemberPreference(p.Name)).ThenBy(p => p.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    object v = prop.GetGetMethod(true)?.Invoke(obj, null);
+                    if (v is string sv && !string.IsNullOrEmpty(sv))
+                        results.Add((prop.Name + " (prop)", sv, GhScriptMemberPreference(prop.Name)));
+                }
+                catch (Exception ex) { AddGhLog.Debug("GhEnumerateScriptPayloadStrings prop " + prop.Name + ": " + ex.Message); }
+            }
+
+            foreach (var fld in fieldCandidates.OrderByDescending(f => GhScriptMemberPreference(f.Name)).ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    object v = fld.GetValue(obj);
+                    if (v is string sv && !string.IsNullOrEmpty(sv))
+                        results.Add((fld.Name + " (field)", sv, GhScriptMemberPreference(fld.Name)));
+                }
+                catch (Exception ex) { AddGhLog.Debug("GhEnumerateScriptPayloadStrings field " + fld.Name + ": " + ex.Message); }
+            }
+
+            return results.OrderByDescending(x => x.pref).ThenBy(x => x.label, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        /// <summary>read_source：不打开 GH_ScriptEditor（GetSourceCode 易在未就绪时崩溃），与 get_gh_components.script_bodies 同源反射读取。 </summary>
+        private static string GhReadScriptSourceViaReflection(Grasshopper.Kernel.IGH_DocumentObject obj, int readCap, int maxPerMember)
+        {
+            var items = GhEnumerateScriptPayloadStrings(obj);
+            var jo = new JObject();
+            jo["via"] = "component_reflection";
+            jo["runtime_type_hint"] = obj?.GetType()?.Name ?? "";
+
+            if (items.Count == 0)
+            {
+                jo["script_bodies"] = new JObject();
+                jo["primary_key"] = "";
+                jo["primary_for_edit"] = "";
+                jo["truncated"] = false;
+                jo["hint"] = "未反射到脚本类 string 成员；若为内置 C# Script 仍可用 open_focus 人工查看，或换 get_gh_components/correct property。";
+                return jo.ToString(Formatting.None);
+            }
+
+            bool truncated = false;
+            var bag = new JObject();
+            int approxTotal = 0;
+            foreach (var (label, text, _) in items)
+            {
+                string s = text;
+                if (s.Length > maxPerMember)
+                {
+                    s = GhTruncateScriptSnippet(s, maxPerMember);
+                    truncated = true;
+                }
+
+                int bump = (label?.Length ?? 0) + s.Length + 40;
+                if (approxTotal + bump > readCap)
+                {
+                    truncated = true;
+                    break;
+                }
+
+                bag[label] = s;
+                approxTotal += bump;
+            }
+
+            var best = items[0];
+            string primary = best.text;
+            if (primary.Length > maxPerMember)
+            {
+                primary = GhTruncateScriptSnippet(primary, maxPerMember);
+                truncated = true;
+            }
+
+            jo["script_bodies"] = bag;
+            jo["primary_key"] = best.label;
+            jo["primary_for_edit"] = primary;
+            jo["truncated"] = truncated;
+            jo["hint"] = "与 get_gh_components 的 script_bodies 同源；不调用 GH_ScriptEditor。内置 C# 改代码仍用 set_source_commit（只替换首个可编辑块）或 property 精确写入。";
+            return jo.ToString(Formatting.None);
+        }
+
+        /// <summary>尝试通过反射直接写入脚本电池的内容，优先 m_codeBlocks，其次按启发式匹配 string 属性/字段。</summary>
+        private static bool TrySetNativeScriptContentViaReflection(Grasshopper.Kernel.IGH_DocumentObject obj, string newCode)
+        {
+            if (obj == null || newCode == null) return false;
+            Type t = obj.GetType();
+            if (t == null) return false;
+
+            try
+            {
+                // 先尝试找到并修改 GH_CodeBlocks 相关的属性/字段
+                var codeBlocksField = FindInstanceFieldInHierarchy(t, "m_codeBlocks");
+                if (codeBlocksField != null)
+                {
+                    var currentBlocks = codeBlocksField.GetValue(obj);
+                    if (currentBlocks != null)
+                    {
+                        try
+                        {
+                            GH_CodeBlocks blocks = currentBlocks as GH_CodeBlocks;
+                            if (blocks != null)
+                            {
+                                GH_CodeBlocks merged = GhBuildCodeBlocksReplacingFirstMutable(blocks, newCode);
+                                codeBlocksField.SetValue(obj, merged);
+                                AddGhLog.Debug("Successfully set native script via m_codeBlocks field");
+                                return true;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            AddGhLog.Debug("Failed to set via m_codeBlocks: " + ex.Message);
+                        }
+                    }
+                }
+
+                // 备选：按启发式枚举所有 string 属性/字段（支持完整接口名如 RhinoCodePlatform.GH.IScriptComponent.Text）
+                var propCandidates = new List<System.Reflection.PropertyInfo>();
+                var fieldCandidates = new List<System.Reflection.FieldInfo>();
+                var seenProp = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var seenFieldSig = new HashSet<string>();
+
+                for (Type tt = t; tt != null && tt != typeof(object); tt = tt.BaseType)
+                {
+                    foreach (var prop in tt.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                    {
+                        if (prop.PropertyType != typeof(string)) continue;
+                        if (!seenProp.Add(prop.Name)) continue;
+                        if (prop.GetIndexParameters().Length != 0) continue;
+                        if (prop.GetSetMethod(true) == null) continue;
+                        if (!GhScriptNameLooksLikePayload(prop.Name)) continue;
+                        propCandidates.Add(prop);
+                    }
+                    foreach (var fld in tt.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                    {
+                        if (fld.FieldType != typeof(string)) continue;
+                        string sig = (tt.FullName ?? tt.Name) + "::" + fld.Name;
+                        if (!seenFieldSig.Add(sig)) continue;
+                        if (!GhScriptNameLooksLikePayload(fld.Name)) continue;
+                        fieldCandidates.Add(fld);
+                    }
+                }
+
+                foreach (var prop in propCandidates.OrderByDescending(p => GhScriptMemberPreference(p.Name)).ThenBy(p => p.Name, StringComparer.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        prop.GetSetMethod(true).Invoke(obj, new object[] { newCode });
+                        AddGhLog.Debug("Successfully set script via property: " + prop.Name);
+                        return true;
+                    }
+                    catch (Exception ex)
+                    {
+                        AddGhLog.Debug("Failed to set via property " + prop.Name + ": " + ex.Message);
+                    }
+                }
+
+                foreach (var fld in fieldCandidates.OrderByDescending(f => GhScriptMemberPreference(f.Name)).ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        fld.SetValue(obj, newCode);
+                        AddGhLog.Debug("Successfully set script via field: " + fld.Name);
+                        return true;
+                    }
+                    catch (Exception ex)
+                    {
+                        AddGhLog.Debug("Failed to set via field " + fld.Name + ": " + ex.Message);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("TrySetNativeScriptContentViaReflection failed: " + ex.Message);
+            }
+
+            return false;
+        }
+
+        /// <summary>把脚本/表达式类电池中能读到的 string 成员填入 script_bodies（截断以适应 token）。</summary>
+        private static void AppendScriptBodiesToComponentJson(JObject compJson, Grasshopper.Kernel.IGH_DocumentObject obj)
+        {
+            if (obj == null || compJson == null) return;
+
+            const int maxTotalApprox = 24000;
+            const int maxPerMember = 12000;
+            var bag = new JObject();
+            int used = 0;
+
+            bool TryPut(string logicalName, string raw)
+            {
+                if (string.IsNullOrEmpty(raw)) return false;
+                string s = GhTruncateScriptSnippet(raw, maxPerMember);
+                int bump = logicalName.Length + s.Length + 40;
+                if (used + bump > maxTotalApprox) return false;
+                bag[logicalName] = s;
+                used += bump;
+                return true;
+            }
+
+            foreach (var entry in GhEnumerateScriptPayloadStrings(obj))
+                TryPut(entry.label, entry.text);
+
+            if (bag.Count > 0) {
+                compJson["script_bodies"] = bag;
+                compJson["runtime_type_hint"] = obj.GetType()?.Name ?? "";
+            }
+        }
+
+        private static void FinalizeGrasshopperScriptMutation(GH_Document doc, Grasshopper.Kernel.IGH_DocumentObject obj)
+        {
+            if (doc == null) return;
+            obj?.ExpireSolution(true);
+            _canvasChanged = true;
+            try { doc.ScheduleSolution(150); }
+            catch (Exception ex) { AddGhLog.Warn("FinalizeGrasshopperScriptMutation Schedule failed: " + ex.Message); }
+            try { Grasshopper.Instances.ActiveCanvas?.Refresh(); }
+            catch (Exception ex) { AddGhLog.Debug("FinalizeGrasshopperScriptMutation Refresh failed: " + ex.Message); }
+        }
+
+        private static void WaitForUiResponsiveDelay(int milliseconds)
+        {
+            if (milliseconds <= 0) return;
+            var dispatcher = _window?.Dispatcher;
+            if (dispatcher != null && dispatcher.CheckAccess())
+            {
+                var frame = new System.Windows.Threading.DispatcherFrame();
+                var timer = new System.Windows.Threading.DispatcherTimer(
+                    System.Windows.Threading.DispatcherPriority.Background,
+                    dispatcher)
+                {
+                    Interval = TimeSpan.FromMilliseconds(milliseconds)
+                };
+                timer.Tick += (s, e) =>
+                {
+                    timer.Stop();
+                    frame.Continue = false;
+                };
+                timer.Start();
+                System.Windows.Threading.Dispatcher.PushFrame(frame);
+            }
+            else
+            {
+                System.Threading.Thread.Sleep(milliseconds);
+            }
+        }
+
+        private static FieldInfo FindInstanceFieldInHierarchy(Type type, string fieldName)
+        {
+            if (type == null || string.IsNullOrWhiteSpace(fieldName)) return null;
+            for (Type t = type; t != null && t != typeof(object); t = t.BaseType)
+            {
+                var field = t.GetField(fieldName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+                if (field != null) return field;
+            }
+            return null;
+        }
+
+        private static bool GhHasWritableStringMember(Grasshopper.Kernel.IGH_DocumentObject obj, string name)
+        {
+            if (obj == null || string.IsNullOrWhiteSpace(name)) return false;
+            for (Type t = obj.GetType(); t != null && t != typeof(object); t = t.BaseType)
+            {
+                foreach (var prop in t.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    if (prop.PropertyType != typeof(string)) continue;
+                    if (prop.GetIndexParameters().Length != 0) continue;
+                    if (!prop.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (prop.GetSetMethod(true) != null) return true;
+                }
+                foreach (var fld in t.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    if (fld.FieldType != typeof(string)) continue;
+                    if (!fld.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) continue;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static bool TrySetScriptMemberExact(Grasshopper.Kernel.IGH_DocumentObject obj, string member, string text, out string detail)
+        {
+            detail = null;
+            if (obj == null || string.IsNullOrWhiteSpace(member) || text == null) return false;
+            member = member.Trim();
+            member = member.Replace("[prop]", "").Replace("[field]", "").Trim();
+
+            // 模型常误把 Python 3 Script / GhPython 正文写进 Description；可执行源码在 Text。
+            if (member.Equals("Description", StringComparison.OrdinalIgnoreCase) && GhHasWritableStringMember(obj, "Text"))
+                member = "Text";
+
+            for (Type t = obj.GetType(); t != null && t != typeof(object); t = t.BaseType)
+            {
+                foreach (var prop in t.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    if (prop.PropertyType != typeof(string)) continue;
+                    if (prop.GetIndexParameters().Length != 0) continue;
+                    if (!prop.Name.Equals(member, StringComparison.OrdinalIgnoreCase)) continue;
+                    var setter = prop.GetSetMethod(true);
+                    if (setter == null) continue;
+                    try {
+                        setter.Invoke(obj, new object[] { text });
+                        detail = prop.Name + " (prop)";
+                        return true;
+                    } catch (Exception ex) {
+                        AddGhLog.Debug("TrySetScriptMemberExact prop " + prop.Name + ": " + ex.Message);
+                        return false;
+                    }
+                }
+
+                foreach (var fld in t.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    if (fld.FieldType != typeof(string)) continue;
+                    if (!fld.Name.Equals(member, StringComparison.OrdinalIgnoreCase)) continue;
+                    try {
+                        fld.SetValue(obj, text);
+                        detail = fld.Name + " (field)";
+                        return true;
+                    } catch (Exception ex) {
+                        AddGhLog.Debug("TrySetScriptMemberExact field " + fld.Name + ": " + ex.Message);
+                        return false;
+                    }
+                }
+            }
+            return false;
+        }
+
+        /// <summary> 脚本/表达式类电池：按 string 属性/字段名启发式写入。 </summary>
+        private static bool TrySetGrasshopperScriptOrFormula(Grasshopper.Kernel.IGH_DocumentObject obj, string text, out string detail)
+        {
+            detail = null;
+            if (obj == null || text == null) return false;
+
+            // 跳过内置 C#/VB 脚本电池（有 m_codeBlocks 字段），避免破坏内部结构
+            Type tt = obj.GetType();
+            if (tt != null && FindInstanceFieldInHierarchy(tt, "m_codeBlocks") != null)
+                return false;
+
+            var propCandidates = new List<System.Reflection.PropertyInfo>();
+            var fieldCandidates = new List<System.Reflection.FieldInfo>();
+            var seenProp = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seenFieldSig = new HashSet<string>();
+
+            for (Type t = obj.GetType(); t != null && t != typeof(object); t = t.BaseType)
+            {
+                foreach (var prop in t.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    if (prop.PropertyType != typeof(string)) continue;
+                    if (!seenProp.Add(prop.Name)) continue;
+                    if (prop.GetIndexParameters().Length != 0) continue;
+                    if (prop.GetSetMethod(true) == null) continue;
+                    if (!GhScriptNameLooksLikePayload(prop.Name)) continue;
+                    propCandidates.Add(prop);
+                }
+
+                foreach (var fld in t.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    if (fld.FieldType != typeof(string)) continue;
+                    string sig = (t.FullName ?? t.Name) + "::" + fld.Name;
+                    if (!seenFieldSig.Add(sig)) continue;
+                    if (!GhScriptNameLooksLikePayload(fld.Name)) continue;
+                    fieldCandidates.Add(fld);
+                }
+            }
+
+            foreach (var prop in propCandidates.OrderByDescending(p => GhScriptMemberPreference(p.Name)).ThenBy(p => p.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                try {
+                    prop.GetSetMethod(true).Invoke(obj, new object[] { text });
+                    detail = prop.Name + " (prop)";
+                    return true;
+                } catch (Exception ex) {
+                    AddGhLog.Debug("TrySetGrasshopperScriptOrFormula prop " + prop?.Name + ": " + ex.Message);
+                }
+            }
+
+            foreach (var fld in fieldCandidates.OrderByDescending(f => GhScriptMemberPreference(f.Name)).ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                try {
+                    fld.SetValue(obj, text);
+                    detail = fld.Name + " (field)";
+                    return true;
+                } catch (Exception ex) {
+                    AddGhLog.Debug("TrySetGrasshopperScriptOrFormula field " + fld?.Name + ": " + ex.Message);
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary> 用于错误提示：列出实例上可写的 string 属性与字段名。 </summary>
+        private static string DescribeWritableStringProperties(Grasshopper.Kernel.IGH_DocumentObject obj, int maxNames = 20)
+        {
+            if (obj == null) return "";
+            var names = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (Type t = obj.GetType(); t != null && t != typeof(object); t = t.BaseType)
+            {
+                foreach (var prop in t.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    if (prop.PropertyType != typeof(string)) continue;
+                    if (prop.GetIndexParameters().Length != 0) continue;
+                    if (prop.GetSetMethod(true) == null) continue;
+                    if (!seen.Add(prop.Name)) continue;
+                    names.Add(prop.Name + "[prop]");
+                    if (names.Count >= maxNames) break;
+                }
+                if (names.Count >= maxNames) break;
+            }
+            for (Type t = obj.GetType(); t != null && t != typeof(object) && names.Count < maxNames; t = t.BaseType)
+            {
+                foreach (var fld in t.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    if (fld.FieldType != typeof(string)) continue;
+                    if (!seen.Add(fld.Name)) continue;
+                    names.Add(fld.Name + "[field]");
+                    if (names.Count >= maxNames) break;
+                }
+            }
+            return names.Count == 0 ? "" : " 可写 string 成员：" + string.Join(", ", names);
+        }
+
+        private static string ExecuteSetGhComponentValue(string id, string value, double? min, double? max, int? decimals, string exactMember = null, string graphMapperType = null)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+                if (!Guid.TryParse(id, out Guid guid)) { result = "Error: ID 格式错误。"; return; }
+                var obj = doc.FindObject(guid, true);
+                if (obj == null) { result = "Error: 找不到电池。"; return; }
+
+                if (_layoutMode == LayoutMode.CSharpFirst && IsCSharpScriptComponent(obj))
+                {
+                    result = "Error: C# priority mode does not allow set_gh_component_value to edit C# Script source. Use edit_csharp_script_component with mode=set_body.";
+                    return;
+                }
+
+                if (IsGraphMapperObject(obj)) {
+                    string requestedGraphType = FirstNonEmpty(
+                        graphMapperType,
+                        string.Equals(exactMember, "graph_mapper_type", StringComparison.OrdinalIgnoreCase) ? value : null,
+                        string.Equals(exactMember, "graph_type", StringComparison.OrdinalIgnoreCase) ? value : null,
+                        value,
+                        DefaultGraphMapperType);
+                    if (!TrySetGraphMapperType(obj, requestedGraphType, out string graphMapperDetail))
+                    {
+                        result = graphMapperDetail;
+                        return;
+                    }
+                    _canvasChanged = true;
+                    try { doc.ScheduleSolution(150); }
+                    catch (Exception ex) { AddGhLog.Warn("ExecuteSetGhComponentValue (Graph Mapper) Schedule failed: " + ex.Message); }
+                    result = graphMapperDetail + "。";
+                } else if (obj is Grasshopper.Kernel.Special.GH_NumberSlider slider) {
+                    List<string> changes = new List<string>();
+
+                    if (min.HasValue) {
+                        slider.Slider.Minimum = (decimal)min.Value;
+                        changes.Add("最小值=" + min.Value);
+                    }
+                    if (max.HasValue) {
+                        slider.Slider.Maximum = (decimal)max.Value;
+                        changes.Add("最大值=" + max.Value);
+                    }
+                    if (decimals.HasValue) {
+                        int dec = Math.Max(0, Math.Min(10, decimals.Value));
+                        slider.Slider.DecimalPlaces = dec;
+                        changes.Add("小数位=" + dec);
+                    }
+
+                    if (value != null) {
+                        if (decimal.TryParse(value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out decimal decVal)) {
+                            slider.Slider.Value = decVal;
+                            changes.Add("值=" + decVal);
+                        } else { result = "Error: 数值解析失败。"; return; }
+                    }
+
+                    if (changes.Count > 0) {
+                        _canvasChanged = true;
+                        try { doc.ScheduleSolution(150); }
+                        catch (Exception ex) { AddGhLog.Warn("ExecuteSetGhComponentValue (Slider) Schedule failed: " + ex.Message); }
+                        result = "Slider 设置成功：" + string.Join("，", changes);
+                    } else {
+                        result = "未指定任何属性更改。";
+                    }
+                } else if (obj is Grasshopper.Kernel.Special.GH_Panel panel) {
+                    if (value == null) {
+                        result = "Error: Panel 必须提供 value 参数。"; return;
+                    }
+                    panel.UserText = value;
+                    _canvasChanged = true;
+                    try { doc.ScheduleSolution(150); }
+                    catch (Exception ex) { AddGhLog.Warn("ExecuteSetGhComponentValue (Panel) Schedule failed: " + ex.Message); }
+                    result = "Panel 设置成功。";
+                } else if (value == null) {
+                    result = "Error: 修改脚本/表达式电池必须在 value 中提供完整代码或公式文本。";
+                } else if (!string.IsNullOrWhiteSpace(exactMember) && TrySetScriptMemberExact(obj, exactMember, value, out string byName)) {
+                    FinalizeGrasshopperScriptMutation(doc, obj);
+                    result = "已按指定成员写入脚本/表达式（" + byName + "）。";
+                    _canvasChanged = true;
+                } else if (TrySetNativeScriptContentViaReflection(obj, value)) {
+                    FinalizeGrasshopperScriptMutation(doc, obj);
+                    result = "已写入内置脚本内容（反射 m_codeBlocks）。";
+                    _canvasChanged = true;
+                } else if (TrySetGrasshopperScriptOrFormula(obj, value, out string propName)) {
+                    FinalizeGrasshopperScriptMutation(doc, obj);
+                    result = "已写入脚本/表达式内容（" + propName + "）。";
+                    _canvasChanged = true;
+                } else {
+                    string hint = DescribeWritableStringProperties(obj);
+                    result = "Error: 未能自动写入代码/公式（未找到合适的 string 成员或写入被拒绝）。"
+                        + hint
+                        + " 可在 set_gh_component_value 中传 property 指定成员名；或根据 get_gh_components 中的 runtime_type_hint 反馈插件作者扩展。";
+                }
+                result += GetCanvasErrors(doc);
+            }));
+            return result;
+        }
+
+        private static string ExecuteModifyGhPortData(string id, bool isInput, int index, string operation)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+                if (!Guid.TryParse(id, out Guid guid)) { result = "Error: ID 格式错误。"; return; }
+                var obj = doc.FindObject(guid, true);
+                if (obj == null) { result = "Error: 找不到电池。"; return; }
+
+                Grasshopper.Kernel.IGH_Param param = null;
+                if (obj is Grasshopper.Kernel.IGH_Component comp) {
+                    var list = isInput ? comp.Params.Input : comp.Params.Output;
+                    if (index >= 0 && index < list.Count) param = list[index];
+                } else if (obj is Grasshopper.Kernel.IGH_Param p) {
+                    param = p;
+                }
+
+                if (param == null) { result = "Error: 端口越界或不支持。"; return; }
+
+                switch (operation.ToLower())
+                {
+                    case "flatten":
+                        param.DataMapping = Grasshopper.Kernel.GH_DataMapping.Flatten;
+                        break;
+                    case "graft":
+                        param.DataMapping = Grasshopper.Kernel.GH_DataMapping.Graft;
+                        break;
+                    case "simplify":
+                        param.Simplify = !param.Simplify;
+                        break;
+                    case "reverse":
+                        param.Reverse = !param.Reverse;
+                        break;
+                    case "none":
+                        param.DataMapping = Grasshopper.Kernel.GH_DataMapping.None;
+                        break;
+                }
+
+                param.ExpireSolution(true);
+                _canvasChanged = true;
+                try { doc.ScheduleSolution(150); }
+                catch (Exception ex) { AddGhLog.Warn("ExecuteModifyGhPortData Schedule failed: " + ex.Message); }
+                result = "端口数据操作成功。";
+            }));
+            return result;
+        }
+
+        private static string ExecuteRemoveGhConnection(string fromId, int fromIndex, string toId, int toIndex)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+                if (!Guid.TryParse(fromId, out Guid guidFrom) || !Guid.TryParse(toId, out Guid guidTo)) { result = "Error: ID 格式错误。"; return; }
+                var objFrom = doc.FindObject(guidFrom, true);
+                var objTo = doc.FindObject(guidTo, true);
+                if (objFrom == null || objTo == null) { result = "Error: 找不到电池。"; return; }
+                Grasshopper.Kernel.IGH_Param sourceParam = (objFrom is Grasshopper.Kernel.IGH_Component cF) ? (fromIndex < cF.Params.Output.Count ? cF.Params.Output[fromIndex] : null) : (objFrom as Grasshopper.Kernel.IGH_Param);
+                Grasshopper.Kernel.IGH_Param targetParam = (objTo is Grasshopper.Kernel.IGH_Component cT) ? (toIndex < cT.Params.Input.Count ? cT.Params.Input[toIndex] : null) : (objTo as Grasshopper.Kernel.IGH_Param);
+                if (sourceParam == null || targetParam == null) { result = "Error: 端口越界。"; return; }
+                targetParam.RemoveSource(sourceParam);
+                _canvasChanged = true;
+                try { doc.ScheduleSolution(150); }
+                catch (Exception ex) { AddGhLog.Warn("ExecuteRemoveGhConnection Schedule failed: " + ex.Message); }
+                result = "连线已断开。";
+                result += GetCanvasErrors(doc);
+            }));
+            return result;
+        }
+
+        private static Grasshopper.Kernel.IGH_ObjectProxy FindComponentProxy(string name)
+        {
+            List<Grasshopper.Kernel.IGH_ObjectProxy> exactMatches = new List<Grasshopper.Kernel.IGH_ObjectProxy>();
+            foreach (var p in Grasshopper.Instances.ComponentServer.ObjectProxies)
+            {
+                if (p.Obsolete) continue;
+                // 第一优先级：完整名称精确匹配
+                if (p.Desc.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) {
+                    exactMatches.Add(p);
+                }
+            }
+
+            // 如果没找到名称匹配，再尝试昵称匹配
+            if (exactMatches.Count == 0)
+            {
+                foreach (var p in Grasshopper.Instances.ComponentServer.ObjectProxies)
+                {
+                    if (p.Obsolete) continue;
+                    if (p.Desc.NickName.Equals(name, StringComparison.OrdinalIgnoreCase)) {
+                        exactMatches.Add(p);
+                    }
+                }
+            }
+
+            Grasshopper.Kernel.IGH_ObjectProxy proxy = null;
+            if (exactMatches.Count > 0)
+            {
+                // 优先选择 Grasshopper 原生电池：检查描述里的分类和作者
+                foreach (var p in exactMatches)
+                {
+                    string desc = p.Desc.ToString() ?? "";
+                    string category = p.Desc.Category ?? "";
+                    string subCategory = p.Desc.SubCategory ?? "";
+
+                    // 原生 Grasshopper 的常见分类
+                    bool isNative = category.StartsWith("Math") || category.StartsWith("Sets") ||
+                                    category.StartsWith("Vector") || category.StartsWith("Curve") ||
+                                    category.StartsWith("Surface") || category.StartsWith("Mesh") ||
+                                    category.StartsWith("Intersect") || category.StartsWith("Transform") ||
+                                    category.StartsWith("Display") || category.StartsWith("Params") ||
+                                    desc.Contains("McNeel") || desc.Contains("David Rutten");
+
+                    if (isNative)
+                    {
+                        proxy = p;
+                        break;
+                    }
+                }
+                // 如果没找到原生的，就用第一个
+                if (proxy == null) proxy = exactMatches[0];
+            }
+            else
+            {
+                // 模糊匹配
+                foreach (var p in Grasshopper.Instances.ComponentServer.ObjectProxies) {
+                    if (p.Obsolete) continue;
+                    if (p.Desc.Name.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0) { proxy = p; break; }
+                }
+            }
+            return proxy;
+        }
+
+        private static Grasshopper.Kernel.IGH_ObjectProxy FindExactComponentProxyByName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return null;
+            foreach (var p in Grasshopper.Instances.ComponentServer.ObjectProxies)
+            {
+                if (p.Obsolete) continue;
+                if (string.Equals(p.Desc.Name, name, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(p.Desc.NickName, name, StringComparison.OrdinalIgnoreCase))
+                    return p;
+            }
+            return null;
+        }
+
+        private static string ResolveScriptComponentName(string mode)
+        {
+            string m = (mode ?? "").Trim().ToLowerInvariant();
+            if (m == "csharp" || m == "cs" || m == "c#") return "C# Script";
+            if (m == "python" || m == "py") return "Python 3 Script";
+            return null;
+        }
+
+        private static string GetCSharpOutputPortName(int index)
+        {
+            if (index < 0) return "b";
+            const string letters = "abcdefghijklmnopqrstuvwxyz";
+            int shifted = index + 1;
+            if (shifted < letters.Length) return letters[shifted].ToString();
+            return "out" + (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        private static JArray BuildCSharpOutputPortsFromCount(int count)
+        {
+            count = Math.Max(1, Math.Min(26, count));
+            var outputs = new JArray();
+            for (int i = 0; i < count; i++)
+            {
+                outputs.Add(new JObject
+                {
+                    ["name"] = GetCSharpOutputPortName(i),
+                    ["type_hint"] = "Auto-inferred C# output"
+                });
+            }
+            return outputs;
+        }
+
+        private static JArray BuildCSharpOutputPortsFromLabels(JArray outputLabels)
+        {
+            int count = outputLabels == null ? 0 : Math.Min(26, outputLabels.Count);
+            var outputs = new JArray();
+            for (int i = 0; i < count; i++)
+            {
+                var spec = outputLabels != null && i < outputLabels.Count ? outputLabels[i] as JObject : null;
+                string label = spec?["label"]?.ToString();
+                if (string.IsNullOrWhiteSpace(label)) label = spec?["name"]?.ToString();
+                string typeHint = spec?["type_hint"]?.ToString();
+                outputs.Add(new JObject
+                {
+                    ["name"] = string.IsNullOrWhiteSpace(label) ? GetCSharpOutputPortName(i) : label.Trim(),
+                    ["type_hint"] = typeHint ?? ""
+                });
+            }
+            return outputs;
+        }
+
+        private static bool IsValidCSharpIdentifier(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return false;
+            name = name.Trim();
+            if (!(char.IsLetter(name[0]) || name[0] == '_')) return false;
+            for (int i = 1; i < name.Length; i++)
+            {
+                if (!(char.IsLetterOrDigit(name[i]) || name[i] == '_')) return false;
+            }
+
+            var keywords = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "abstract","as","base","bool","break","byte","case","catch","char","checked","class","const",
+                "continue","decimal","default","delegate","do","double","else","enum","event","explicit","extern",
+                "false","finally","fixed","float","for","foreach","goto","if","implicit","in","int","interface",
+                "internal","is","lock","long","namespace","new","null","object","operator","out","override","params",
+                "private","protected","public","readonly","ref","return","sbyte","sealed","short","sizeof","stackalloc",
+                "static","string","struct","switch","this","throw","true","try","typeof","uint","ulong","unchecked",
+                "unsafe","ushort","using","virtual","void","volatile","while"
+            };
+            return !keywords.Contains(name);
+        }
+
+        private static void ApplyPortMetadata(Grasshopper.Kernel.IGH_Param param, JToken specToken, bool forceCSharpOutputName = false, int portIndex = 0, List<string> warnings = null)
+        {
+            if (param == null || specToken == null) return;
+            string name = specToken["name"]?.ToString();
+            string typeHint = specToken["type_hint"]?.ToString();
+            bool appliedRuntimeTypeHint = false;
+            if (!string.IsNullOrWhiteSpace(typeHint))
+                appliedRuntimeTypeHint = TryApplyRuntimeTypeHint(param, typeHint, warnings);
+            if (forceCSharpOutputName)
+            {
+                string forced = GetCSharpOutputPortName(portIndex);
+                if (!string.IsNullOrWhiteSpace(name) && !string.Equals(name.Trim(), forced, StringComparison.Ordinal))
+                    warnings?.Add("C# 输出端口 " + name.Trim() + " 已规范为 " + forced + "；原名称写入 Description。");
+                param.Name = forced;
+                param.NickName = forced;
+                var descParts = new List<string>();
+                if (!string.IsNullOrWhiteSpace(name)) descParts.Add("label: " + name.Trim());
+                if (!string.IsNullOrWhiteSpace(typeHint)) descParts.Add("type: " + typeHint.Trim());
+                if (descParts.Count > 0) param.Description = string.Join("; ", descParts);
+            }
+            else if (!string.IsNullOrWhiteSpace(name))
+            {
+                param.Name = name.Trim();
+                param.NickName = name.Trim();
+                if (!string.IsNullOrWhiteSpace(typeHint))
+                    param.Description = appliedRuntimeTypeHint ? "[type_hint] " + typeHint.Trim() : typeHint.Trim();
+            }
+            else if (!string.IsNullOrWhiteSpace(typeHint))
+            {
+                param.Description = appliedRuntimeTypeHint ? "[type_hint] " + typeHint.Trim() : typeHint.Trim();
+            }
+            param.Attributes?.ExpireLayout();
+        }
+
+        private static string NormalizeCSharpScriptSourceForMutableBlock(string source, List<string> warnings)
+        {
+            if (string.IsNullOrWhiteSpace(source)) return source ?? "";
+            string text = source.Replace("\r\n", "\n").Replace('\r', '\n');
+            int runIdx = text.IndexOf("RunScript", StringComparison.Ordinal);
+            if (runIdx < 0 || text.IndexOf("Script_Instance", StringComparison.Ordinal) < 0)
+                return source;
+
+            int open = text.IndexOf('{', runIdx);
+            if (open < 0) return source;
+
+            int depth = 0;
+            for (int i = open; i < text.Length; i++)
+            {
+                if (text[i] == '{') depth++;
+                else if (text[i] == '}')
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        string body = text.Substring(open + 1, i - open - 1).Trim('\n', '\r');
+                        warnings?.Add("检测到 C# 完整模板，已仅保留 RunScript 方法内部逻辑，默认 using/class/签名模板未替换。");
+                        return body;
+                    }
+                }
+            }
+
+            return source;
+        }
+
+        private static bool TryFindRunScriptBodyBounds(string source, out int bodyStart, out int bodyEnd)
+        {
+            bodyStart = -1;
+            bodyEnd = -1;
+            if (string.IsNullOrEmpty(source)) return false;
+
+            int runIdx = source.IndexOf("RunScript", StringComparison.Ordinal);
+            if (runIdx < 0) return false;
+
+            int open = source.IndexOf('{', runIdx);
+            if (open < 0) return false;
+
+            int depth = 0;
+            for (int i = open; i < source.Length; i++)
+            {
+                char ch = source[i];
+                if (ch == '{') depth++;
+                else if (ch == '}')
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        bodyStart = open + 1;
+                        bodyEnd = i;
+                        return bodyEnd >= bodyStart;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private static string IndentCSharpBodyForTemplate(string body, string indent)
+        {
+            string norm = (body ?? "").Replace("\r\n", "\n").Replace('\r', '\n').Trim('\n', '\r');
+            if (string.IsNullOrEmpty(norm)) return "";
+
+            var lines = norm.Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                if (lines[i].Length > 0) lines[i] = indent + lines[i];
+                else lines[i] = indent;
+            }
+            return string.Join(Environment.NewLine, lines);
+        }
+
+        private static bool TrySetCSharpBodyByReplacingRunScriptInStringMembers(Grasshopper.Kernel.IGH_DocumentObject obj, string body, out string detail)
+        {
+            detail = null;
+            if (obj == null || body == null) return false;
+
+            for (Type t = obj.GetType(); t != null && t != typeof(object); t = t.BaseType)
+            {
+                foreach (var prop in t.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                    .Where(p => p.PropertyType == typeof(string) && p.GetIndexParameters().Length == 0 && p.GetSetMethod(true) != null)
+                    .OrderByDescending(p => GhScriptMemberPreference(p.Name)))
+                {
+                    if (!GhScriptNameLooksLikePayload(prop.Name)) continue;
+                    try
+                    {
+                        string current = prop.GetGetMethod(true)?.Invoke(obj, null) as string;
+                        if (!TryReplaceRunScriptBodyInSource(current, body, out string updated)) continue;
+                        prop.GetSetMethod(true).Invoke(obj, new object[] { updated });
+                        detail = prop.Name + " (prop RunScript body)";
+                        return true;
+                    }
+                    catch (Exception ex) { AddGhLog.Debug("TrySetCSharpBodyByReplacingRunScript prop " + prop.Name + ": " + ex.Message); }
+                }
+
+                foreach (var fld in t.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                    .Where(f => f.FieldType == typeof(string))
+                    .OrderByDescending(f => GhScriptMemberPreference(f.Name)))
+                {
+                    if (!GhScriptNameLooksLikePayload(fld.Name)) continue;
+                    try
+                    {
+                        string current = fld.GetValue(obj) as string;
+                        if (!TryReplaceRunScriptBodyInSource(current, body, out string updated)) continue;
+                        fld.SetValue(obj, updated);
+                        detail = fld.Name + " (field RunScript body)";
+                        return true;
+                    }
+                    catch (Exception ex) { AddGhLog.Debug("TrySetCSharpBodyByReplacingRunScript field " + fld.Name + ": " + ex.Message); }
+                }
+            }
+
+            return false;
+        }
+
+        private static bool TryReplaceRunScriptBodyInSource(string source, string body, out string updated)
+        {
+            updated = null;
+            if (!TryFindRunScriptBodyBounds(source, out int bodyStart, out int bodyEnd)) return false;
+
+            int lineStart = source.LastIndexOf('\n', Math.Max(0, bodyStart - 1));
+            string newline = source.IndexOf("\r\n", StringComparison.Ordinal) >= 0 ? "\r\n" : "\n";
+            string indent = "        ";
+            if (lineStart >= 0)
+            {
+                int i = lineStart + 1;
+                var sb = new StringBuilder();
+                while (i < source.Length && (source[i] == ' ' || source[i] == '\t'))
+                {
+                    sb.Append(source[i]);
+                    i++;
+                }
+                if (sb.Length > 0) indent = sb.ToString();
+            }
+
+            string replacement = newline + IndentCSharpBodyForTemplate(body, indent) + newline + indent.Substring(0, Math.Max(0, indent.Length - 4));
+            updated = source.Substring(0, bodyStart) + replacement + source.Substring(bodyEnd);
+            return true;
+        }
+
+        private static bool TrySetCSharpScriptBodyIntoTemplate(Grasshopper.Kernel.IGH_DocumentObject obj, string source, List<string> warnings)
+        {
+            if (TrySetCSharpScriptBodyPreservingTemplate(obj, source, warnings))
+                return true;
+
+            if (TrySetCSharpBodyByReplacingRunScriptInStringMembers(obj, source, out string detail))
+            {
+                warnings?.Add("C# Script body was written by replacing the existing RunScript body in " + detail + ".");
+                return true;
+            }
+
+            warnings?.Add("C# Script editable code block or full RunScript template was not found; refused unsafe full-template replacement.");
+            return false;
+        }
+
+        private static bool TrySetCSharpScriptBodyPreservingTemplate(Grasshopper.Kernel.IGH_DocumentObject obj, string source, List<string> warnings)
+        {
+            string body = NormalizeCSharpScriptSourceForMutableBlock(source, warnings);
+            Type t = obj?.GetType();
+            if (t == null) return false;
+
+            try
+            {
+                var codeBlocksField = FindInstanceFieldInHierarchy(t, "m_codeBlocks");
+                if (codeBlocksField != null && codeBlocksField.GetValue(obj) is GH_CodeBlocks blocks)
+                {
+                    codeBlocksField.SetValue(obj, GhBuildCodeBlocksReplacingFirstMutable(blocks, body));
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Debug("TrySetCSharpScriptBodyPreservingTemplate m_codeBlocks: " + ex.Message);
+            }
+
+            warnings?.Add("C# Script editable code block was not found; refused full-template replacement.");
+            return false;
+        }
+
+        private static bool TryReadCSharpScriptBodyPreservingTemplate(Grasshopper.Kernel.IGH_DocumentObject obj, out string body, out string detail)
+        {
+            body = "";
+            detail = "";
+            Type t = obj?.GetType();
+            if (t == null) return false;
+
+            try
+            {
+                var codeBlocksField = FindInstanceFieldInHierarchy(t, "m_codeBlocks");
+                if (codeBlocksField != null && codeBlocksField.GetValue(obj) is GH_CodeBlocks blocks)
+                {
+                    for (int i = 0; i < blocks.Count; i++)
+                    {
+                        GH_CodeBlock block = blocks[i];
+                        if (block == null || block.ReadOnly) continue;
+                        body = string.Join(Environment.NewLine, block.Lines ?? Array.Empty<string>());
+                        detail = "m_codeBlocks[" + i.ToString(System.Globalization.CultureInfo.InvariantCulture) + "]";
+                        return true;
+                    }
+                    detail = "m_codeBlocks has no editable block.";
+                }
+            }
+            catch (Exception ex)
+            {
+                detail = ex.Message;
+                AddGhLog.Debug("TryReadCSharpScriptBodyPreservingTemplate m_codeBlocks: " + ex.Message);
+            }
+
+            return false;
+        }
+
+        private static bool TryConfigureScriptPorts(Grasshopper.Kernel.IGH_DocumentObject obj, JArray inputs, JArray outputs, bool csharpMode, List<string> warnings)
+        {
+            if (!(obj is Grasshopper.Kernel.IGH_Component comp))
+            {
+                warnings?.Add((obj?.NickName ?? obj?.Name ?? "脚本电池") + " 不是可配置端口的组件。");
+                return false;
+            }
+
+            if (!(obj is Grasshopper.Kernel.IGH_VariableParameterComponent vpc))
+            {
+                warnings?.Add((obj.NickName ?? obj.Name ?? "脚本电池") + " 不支持动态端口，已保留默认端口。");
+            }
+            else
+            {
+                bool Resize(IList<Grasshopper.Kernel.IGH_Param> list, Grasshopper.Kernel.GH_ParameterSide side, int target)
+                {
+                    while (list.Count < target)
+                    {
+                        var created = vpc.CreateParameter(side, list.Count);
+                        if (created == null) return false;
+                        if (side == Grasshopper.Kernel.GH_ParameterSide.Input) comp.Params.RegisterInputParam(created);
+                        else comp.Params.RegisterOutputParam(created);
+                    }
+                    while (list.Count > target)
+                    {
+                        int last = list.Count - 1;
+                        if (!vpc.CanRemoveParameter(side, last)) return false;
+                        comp.Params.UnregisterParameter(list[last]);
+                    }
+                    return true;
+                }
+
+                int inputTarget = inputs?.Count ?? comp.Params.Input.Count;
+                int outputTarget = outputs?.Count ?? comp.Params.Output.Count;
+                if (!Resize(comp.Params.Input, Grasshopper.Kernel.GH_ParameterSide.Input, inputTarget))
+                    warnings?.Add((obj.NickName ?? obj.Name ?? "脚本电池") + " 输入端口数量未能完全调整。");
+                if (!Resize(comp.Params.Output, Grasshopper.Kernel.GH_ParameterSide.Output, outputTarget))
+                    warnings?.Add((obj.NickName ?? obj.Name ?? "脚本电池") + " 输出端口数量未能完全调整。");
+
+                try { vpc.VariableParameterMaintenance(); } catch (Exception ex) { warnings?.Add("端口维护失败：" + ex.Message); }
+                try { comp.Params.OnParametersChanged(); } catch (Exception ex) { warnings?.Add("端口刷新失败：" + ex.Message); }
+            }
+
+            for (int i = 0; inputs != null && i < inputs.Count && i < comp.Params.Input.Count; i++)
+                ApplyPortMetadata(comp.Params.Input[i], inputs[i], false, i, warnings);
+            for (int i = 0; outputs != null && i < outputs.Count && i < comp.Params.Output.Count; i++)
+                ApplyPortMetadata(comp.Params.Output[i], outputs[i], csharpMode, i, warnings);
+
+            return true;
+        }
+
+        private static bool TryConfigureCSharpScriptPortsAfterDefaultCreate(Grasshopper.Kernel.IGH_DocumentObject obj, JArray inputs, JArray requestedOutputs, List<string> warnings)
+        {
+            if (!(obj is Grasshopper.Kernel.IGH_Component comp))
+            {
+                warnings?.Add((obj?.NickName ?? obj?.Name ?? "C# Script") + " is not a configurable component.");
+                return false;
+            }
+
+            if (!(obj is Grasshopper.Kernel.IGH_VariableParameterComponent vpc))
+            {
+                warnings?.Add((obj.NickName ?? obj.Name ?? "C# Script") + " does not support dynamic ports; default ports were preserved.");
+                return false;
+            }
+
+            bool changed = false;
+
+            bool AddPort(Grasshopper.Kernel.GH_ParameterSide side, out Grasshopper.Kernel.IGH_Param created)
+            {
+                created = null;
+                int index = side == Grasshopper.Kernel.GH_ParameterSide.Input ? comp.Params.Input.Count : comp.Params.Output.Count;
+                created = vpc.CreateParameter(side, index);
+                if (created == null) return false;
+                if (side == Grasshopper.Kernel.GH_ParameterSide.Input) comp.Params.RegisterInputParam(created);
+                else comp.Params.RegisterOutputParam(created);
+                changed = true;
+                return true;
+            }
+
+            if (inputs != null)
+            {
+                while (comp.Params.Input.Count < inputs.Count)
+                {
+                    if (!AddPort(Grasshopper.Kernel.GH_ParameterSide.Input, out _))
+                    {
+                        warnings?.Add("Failed to add one or more C# input ports; existing default inputs were preserved.");
+                        break;
+                    }
+                }
+            }
+
+            var outputTargets = requestedOutputs ?? new JArray();
+            var requestedOutputParams = new List<Grasshopper.Kernel.IGH_Param>();
+            for (int i = 0; i < outputTargets.Count; i++)
+            {
+                string forcedName = GetCSharpOutputPortName(i);
+                var existing = comp.Params.Output.FirstOrDefault(p =>
+                    string.Equals(p.Name, forcedName, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(p.NickName, forcedName, StringComparison.OrdinalIgnoreCase));
+
+                if (existing == null)
+                {
+                    if (!AddPort(Grasshopper.Kernel.GH_ParameterSide.Output, out existing))
+                    {
+                        warnings?.Add("Failed to add C# output port " + forcedName + "; default out/a outputs were preserved.");
+                        continue;
+                    }
+                }
+
+                requestedOutputParams.Add(existing);
+            }
+
+            if (changed)
+            {
+                try { vpc.VariableParameterMaintenance(); } catch (Exception ex) { warnings?.Add("C# port maintenance failed: " + ex.Message); }
+                try { comp.Params.OnParametersChanged(); } catch (Exception ex) { warnings?.Add("C# port refresh failed: " + ex.Message); }
+            }
+
+            for (int i = 0; inputs != null && i < inputs.Count && i < comp.Params.Input.Count; i++)
+                ApplyPortMetadata(comp.Params.Input[i], inputs[i], false, i, warnings);
+
+            for (int i = 0; i < outputTargets.Count && i < requestedOutputParams.Count; i++)
+                ApplyPortMetadata(requestedOutputParams[i], outputTargets[i], true, i, warnings);
+
+            return true;
+        }
+
+        private static bool IsCSharpScriptComponent(Grasshopper.Kernel.IGH_DocumentObject obj)
+        {
+            if (obj == null) return false;
+            string name = obj.Name ?? "";
+            string nick = obj.NickName ?? "";
+            if (name.IndexOf("C#", StringComparison.OrdinalIgnoreCase) >= 0 && name.IndexOf("Script", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            if (nick.IndexOf("C#", StringComparison.OrdinalIgnoreCase) >= 0 && nick.IndexOf("Script", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            if (TryReflectGhScriptLanguage(obj, out GH_ScriptLanguage lang, out _) && lang == GH_ScriptLanguage.CS)
+                return true;
+            return obj.GetType()?.GetField("m_codeBlocks", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) != null;
+        }
+
+        private static string ExecuteEditCSharpScriptComponent(string id, string mode, string body)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: no active Grasshopper canvas."; return; }
+                if (!Guid.TryParse(id, out Guid guid)) { result = "Error: invalid component id."; return; }
+                var obj = doc.FindObject(guid, true);
+                if (obj == null) { result = "Error: component not found."; return; }
+                if (!IsCSharpScriptComponent(obj))
+                {
+                    result = "Error: target is not a Grasshopper C# Script component.";
+                    return;
+                }
+
+                string m = (mode ?? "").Trim();
+                if (m.Equals("read_body", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (TryReadCSharpScriptBodyPreservingTemplate(obj, out string currentBody, out string detail))
+                    {
+                        var payload = new JObject
+                        {
+                            ["status"] = "ok",
+                            ["mode"] = "read_body",
+                            ["id"] = obj.InstanceGuid.ToString(),
+                            ["body"] = currentBody,
+                            ["source"] = detail,
+                            ["warning"] = "This is only the editable RunScript body. Do not add using/class/signature when writing it back."
+                        };
+                        result = payload.ToString(Formatting.None);
+                    }
+                    else
+                    {
+                        string fallback = GhReadScriptSourceViaReflection(obj, 150000, 120000);
+                        try
+                        {
+                            var jo = JObject.Parse(fallback);
+                            var payload = new JObject
+                            {
+                                ["status"] = "ok",
+                                ["mode"] = "read_body",
+                                ["id"] = obj.InstanceGuid.ToString(),
+                                ["body"] = jo["primary_for_edit"]?.ToString() ?? "",
+                                ["source"] = jo["primary_key"]?.ToString() ?? "reflection_fallback",
+                                ["runtime_type_hint"] = jo["runtime_type_hint"]?.ToString() ?? "",
+                                ["warning"] = "Editable code block structure was not recognized; returned reflection-based fallback text."
+                            };
+                            result = payload.ToString(Formatting.None);
+                        }
+                        catch (Exception ex)
+                        {
+                            result = "Error: could not read the editable C# Script body without touching the template. " + ex.Message;
+                        }
+                    }
+                    return;
+                }
+
+                if (!m.Equals("set_body", StringComparison.OrdinalIgnoreCase))
+                {
+                    result = "Error: mode must be read_body or set_body.";
+                    return;
+                }
+                if (body == null)
+                {
+                    result = "Error: set_body requires body.";
+                    return;
+                }
+
+                var warnings = new List<string>();
+                bool wrote = TrySetCSharpScriptBodyIntoTemplate(obj, body, warnings);
+                if (!wrote)
+                {
+                    result = "Error: could not write C# Script body safely. The editable block structure was not recognized.";
+                    if (warnings.Count > 0) result += " " + string.Join(" ", warnings);
+                    return;
+                }
+
+                FinalizeGrasshopperScriptMutation(doc, obj);
+                var payloadSet = new JObject
+                {
+                    ["status"] = "ok",
+                    ["mode"] = "set_body",
+                    ["id"] = obj.InstanceGuid.ToString(),
+                    ["template_preserved"] = true,
+                    ["warnings"] = new JArray(warnings)
+                };
+                string errors = GetCanvasErrors(doc);
+                if (!string.IsNullOrWhiteSpace(errors)) payloadSet["canvas_errors"] = errors;
+                result = payloadSet.ToString(Formatting.None);
+            }));
+            return result;
+        }
+
+        private static string ExecuteCreateCSharpScriptComponent(string aliasId, string label, float x, float y, JArray inputs, JArray outputs, string body, JArray components, JArray connections, string groupName = null)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: no active Grasshopper canvas."; return; }
+
+                aliasId = string.IsNullOrWhiteSpace(aliasId) ? "core" : aliasId.Trim();
+                var outputSpecs = BuildCSharpOutputPortsFromLabels(outputs);
+                var outputNames = new HashSet<string>(Enumerable.Range(0, outputSpecs.Count).Select(GetCSharpOutputPortName), StringComparer.Ordinal);
+                outputNames.Add("a");
+
+                for (int i = 0; inputs != null && i < inputs.Count; i++)
+                {
+                    string inputName = inputs[i]?["name"]?.ToString()?.Trim();
+                    if (!IsValidCSharpIdentifier(inputName))
+                    {
+                        result = "Error: C# input port name must be a valid identifier: " + (inputName ?? "");
+                        return;
+                    }
+                    if (outputNames.Contains(inputName))
+                    {
+                        result = "Error: C# input port name '" + inputName + "' collides with reserved/output variable names. Rename the input.";
+                        return;
+                    }
+                }
+
+                var aliasSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                aliasSet.Add(aliasId);
+
+                var scriptProxy = FindExactComponentProxyByName("C# Script");
+                if (scriptProxy == null)
+                {
+                    result = "Error: cannot find C# Script component. Confirm the Grasshopper script component is loaded.";
+                    return;
+                }
+
+                if (components != null)
+                {
+                    foreach (var c in components)
+                    {
+                        string alias = c["alias_id"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(alias)) { result = "Error: every helper component must provide alias_id."; return; }
+                        if (!aliasSet.Add(alias)) { result = "Error: duplicate alias_id: " + alias; return; }
+
+                        string name = c["name"]?.ToString();
+                        string cguid = c["component_guid"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(name) && string.IsNullOrWhiteSpace(cguid))
+                        {
+                            result = "Error: helper component " + alias + " must provide name or component_guid.";
+                            return;
+                        }
+
+                        var probe = InstantiateDocumentObjectFromLibrary(name ?? "", cguid);
+                        if (probe == null)
+                        {
+                            result = "Error: cannot instantiate helper component " + alias + ".";
+                            return;
+                        }
+                        if (!IsScriptModeAuxiliaryComponentAllowed(probe))
+                        {
+                            result = BuildScriptModeAuxiliaryComponentError(probe, name ?? alias);
+                            return;
+                        }
+                    }
+                }
+
+                var createdObjs = new Dictionary<string, Grasshopper.Kernel.IGH_DocumentObject>(StringComparer.OrdinalIgnoreCase);
+                var aliasMap = new JObject();
+                var warnings = new List<string>();
+
+                var scriptObj = scriptProxy.CreateInstance() as Grasshopper.Kernel.IGH_DocumentObject;
+                if (!(scriptObj is Grasshopper.Kernel.IGH_Component))
+                {
+                    result = "Error: C# Script component cannot be instantiated as a connectable component.";
+                    return;
+                }
+                scriptObj.CreateAttributes();
+                scriptObj.Attributes.Pivot = new System.Drawing.PointF(x, y);
+                doc.AddObject(scriptObj, false);
+
+                ShowThinkingAnimation("正在稳定 C# 电池...");
+                WaitForUiResponsiveDelay(500);
+                ShowThinkingAnimation("正在配置 C# 电池...");
+
+                if (!string.IsNullOrWhiteSpace(label))
+                {
+                    scriptObj.NickName = label.Trim();
+                    scriptObj.Attributes?.ExpireLayout();
+                }
+
+                TryConfigureCSharpScriptPortsAfterDefaultCreate(scriptObj, inputs, outputSpecs, warnings);
+
+                bool wrote = TrySetCSharpScriptBodyIntoTemplate(scriptObj, body ?? "", warnings);
+                if (wrote)
+                {
+                    try { scriptObj.ExpireSolution(false); }
+                    catch (Exception ex) { warnings.Add("C# Script expire failed: " + ex.Message); }
+                }
+                else warnings.Add("C# Script body was not written.");
+
+                createdObjs[aliasId] = scriptObj;
+                aliasMap[aliasId] = scriptObj.InstanceGuid.ToString();
+
+                if (components != null)
+                {
+                    foreach (var c in components)
+                    {
+                        string name = c["name"]?.ToString();
+                        string cguid = c["component_guid"]?.ToString();
+                        string helperLabel = c["label"]?.ToString();
+                        float hx = c["x"]?.ToObject<float>() ?? 0;
+                        float hy = c["y"]?.ToObject<float>() ?? 0;
+                        string val = c["value"]?.ToString();
+                        string graphMapperType = GetGraphMapperTypeRequest(c, val);
+                        double? min = c["min"]?.ToObject<double>();
+                        double? max = c["max"]?.ToObject<double>();
+                        int? decimals = c["decimals"]?.ToObject<int>();
+                        string alias = c["alias_id"]?.ToString();
+
+                        var obj = InstantiateDocumentObjectFromLibrary(name ?? "", cguid);
+                        obj.CreateAttributes();
+                        obj.Attributes.Pivot = new System.Drawing.PointF(hx, hy);
+                        if (!string.IsNullOrEmpty(helperLabel)) obj.NickName = helperLabel;
+                        bool isGraphMapper = IsGraphMapperObject(obj);
+                        if (isGraphMapper && !TrySetGraphMapperType(obj, graphMapperType, out string graphMapperDetail))
+                        {
+                            result = graphMapperDetail;
+                            return;
+                        }
+                        doc.AddObject(obj, false);
+
+                        if (obj is Grasshopper.Kernel.Special.GH_NumberSlider slider)
+                        {
+                            if (min.HasValue) slider.Slider.Minimum = (decimal)min.Value;
+                            if (max.HasValue) slider.Slider.Maximum = (decimal)max.Value;
+                            if (decimals.HasValue) slider.Slider.DecimalPlaces = Math.Max(0, Math.Min(10, decimals.Value));
+                            if (!string.IsNullOrEmpty(val) && decimal.TryParse(val, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out decimal d))
+                                slider.Slider.Value = d;
+                        }
+                        else if (obj is Grasshopper.Kernel.Special.GH_Panel panel && !string.IsNullOrEmpty(val))
+                        {
+                            panel.UserText = val;
+                        }
+                        else if (isGraphMapper)
+                        {
+                        }
+
+                        createdObjs[alias] = obj;
+                        aliasMap[alias] = obj.InstanceGuid.ToString();
+                    }
+                }
+
+                int connected = 0;
+                if (connections != null)
+                {
+                    warnings.Add("C# Script connections were skipped during creation to avoid Grasshopper/Rhino crashes. Use connect_gh_components in a later step after the C# Script component is stable.");
+                }
+
+                if (!string.IsNullOrWhiteSpace(groupName) && createdObjs.Count > 0)
+                {
+                    var group = new Grasshopper.Kernel.Special.GH_Group();
+                    group.NickName = groupName;
+                    group.Colour = System.Drawing.Color.FromArgb(80, 100, 150, 250);
+                    foreach (var obj in createdObjs.Values) group.AddObject(obj.InstanceGuid);
+                    doc.AddObject(group, false);
+                    try { group.ExpireSolution(false); } catch { }
+                }
+
+                _canvasChanged = true;
+                try { doc.ScheduleSolution(150); }
+                catch (Exception ex) { AddGhLog.Warn("ExecuteCreateCSharpScriptComponent Schedule failed: " + ex.Message); }
+
+                var payload = new JObject
+                {
+                    ["status"] = "ok",
+                    ["mode"] = "csharp",
+                    ["created_scripts"] = 1,
+                    ["created_components"] = components?.Count ?? 0,
+                    ["created_connections"] = connected,
+                    ["skipped_connections"] = connections?.Count ?? 0,
+                    ["script_write_ok"] = wrote ? 1 : 0,
+                    ["forced_output_variables"] = new JArray(Enumerable.Range(0, outputSpecs.Count).Select(GetCSharpOutputPortName)),
+                    ["aliases"] = aliasMap,
+                    ["warnings"] = new JArray(warnings)
+                };
+                string errors = GetCanvasErrors(doc);
+                if (!string.IsNullOrWhiteSpace(errors)) payload["canvas_errors"] = errors;
+                result = payload.ToString(Formatting.None);
+            }));
+            return result;
+        }
+
+        private static string ExecuteCreateScriptComponentGraph(string mode, JArray scripts, JArray components, JArray connections, string groupName = null)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+
+                string scriptComponentName = ResolveScriptComponentName(mode);
+                if (string.IsNullOrWhiteSpace(scriptComponentName))
+                {
+                    result = "Error: mode 必须是 csharp 或 python。";
+                    return;
+                }
+
+                if (scriptComponentName == "C# Script")
+                {
+                    result = "Error: C# Script must be created with create_csharp_script_component so ports are configured before only the RunScript body is written.";
+                    return;
+                }
+
+                if (scripts == null || scripts.Count == 0)
+                {
+                    result = "Error: scripts 至少需要一个脚本电池定义。";
+                    return;
+                }
+
+                var aliasSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var scriptProxy = FindExactComponentProxyByName(scriptComponentName);
+                if (scriptProxy == null)
+                {
+                    result = scriptComponentName == "Python 3 Script"
+                        ? "Error: 找不到 Python 3 Script 电池。混合模式只适配 Rhino 8 Python 3 Script，请确认已安装并启用该组件。"
+                        : "Error: 找不到 C# Script 电池。请确认 Grasshopper 脚本组件已加载。";
+                    return;
+                }
+
+                foreach (var s in scripts)
+                {
+                    string alias = s["alias_id"]?.ToString();
+                    if (string.IsNullOrWhiteSpace(alias)) { result = "Error: 每个脚本电池都必须提供 alias_id。"; return; }
+                    if (!aliasSet.Add(alias)) { result = "Error: alias_id 重复：" + alias; return; }
+                    var probe = scriptProxy.CreateInstance() as Grasshopper.Kernel.IGH_DocumentObject;
+                    if (probe == null) { result = "Error: 无法实例化 " + scriptComponentName + "。"; return; }
+                    if (!(probe is Grasshopper.Kernel.IGH_Component)) { result = "Error: " + scriptComponentName + " 不是可连线组件。"; return; }
+                }
+
+                if (components != null)
+                {
+                    foreach (var c in components)
+                    {
+                        string alias = c["alias_id"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(alias)) { result = "Error: 每个辅助电池都必须提供 alias_id。"; return; }
+                        if (!aliasSet.Add(alias)) { result = "Error: alias_id 重复：" + alias; return; }
+                        string name = c["name"]?.ToString();
+                        string cguid = c["component_guid"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(name) && string.IsNullOrWhiteSpace(cguid))
+                        {
+                            result = "Error: 辅助电池 " + alias + " 必须提供 name 或 component_guid。";
+                            return;
+                        }
+                        var probe = InstantiateDocumentObjectFromLibrary(name ?? "", cguid);
+                        if (probe == null)
+                        {
+                            result = "Error: 无法实例化辅助电池 " + alias + "。";
+                            return;
+                        }
+                        if (!IsScriptModeAuxiliaryComponentAllowed(probe))
+                        {
+                            result = BuildScriptModeAuxiliaryComponentError(probe, name ?? alias);
+                            return;
+                        }
+                    }
+                }
+
+                var createdObjs = new Dictionary<string, Grasshopper.Kernel.IGH_DocumentObject>(StringComparer.OrdinalIgnoreCase);
+                var aliasMap = new JObject();
+                var warnings = new List<string>();
+                int scriptWriteOk = 0;
+
+                foreach (var s in scripts)
+                {
+                    string alias = s["alias_id"]?.ToString();
+                    string label = s["label"]?.ToString();
+                    string source = s["source"]?.ToString() ?? "";
+                    float x = s["x"]?.ToObject<float>() ?? 0f;
+                    float y = s["y"]?.ToObject<float>() ?? 0f;
+
+                    var obj = scriptProxy.CreateInstance() as Grasshopper.Kernel.IGH_DocumentObject;
+                    obj.CreateAttributes();
+                    obj.Attributes.Pivot = new System.Drawing.PointF(x, y);
+                    if (!string.IsNullOrWhiteSpace(label)) obj.NickName = label;
+                    doc.AddObject(obj, false);
+
+                    JArray outputSpecs = s["outputs"] as JArray;
+                    if (scriptComponentName == "C# Script")
+                    {
+                        if (outputSpecs != null && outputSpecs.Count > 0)
+                            warnings.Add("C# mode is no longer handled by create_script_component_graph; use create_csharp_script_component.");
+                        int outputCount = s["output_count"]?.ToObject<int?>() ?? 1;
+                        outputSpecs = BuildCSharpOutputPortsFromCount(outputCount);
+                    }
+
+                    TryConfigureScriptPorts(obj, s["inputs"] as JArray, outputSpecs, scriptComponentName == "C# Script", warnings);
+
+                    bool wrote = false;
+                    if (scriptComponentName == "C# Script")
+                    {
+                        wrote = TrySetCSharpScriptBodyIntoTemplate(obj, source, warnings);
+                    }
+                    else
+                    {
+                        wrote = TrySetScriptMemberExact(obj, "Text", source, out _);
+                        if (!wrote) wrote = TrySetGrasshopperScriptOrFormula(obj, source, out _);
+                    }
+
+                    if (wrote)
+                    {
+                        scriptWriteOk++;
+                        FinalizeGrasshopperScriptMutation(doc, obj);
+                    }
+                    else
+                    {
+                        warnings.Add("脚本源码未能写入：" + alias);
+                    }
+
+                    createdObjs[alias] = obj;
+                    aliasMap[alias] = obj.InstanceGuid.ToString();
+                }
+
+                if (components != null)
+                {
+                    foreach (var c in components)
+                    {
+                        string name = c["name"]?.ToString();
+                        string cguid = c["component_guid"]?.ToString();
+                        string label = c["label"]?.ToString();
+                        float x = c["x"]?.ToObject<float>() ?? 0;
+                        float y = c["y"]?.ToObject<float>() ?? 0;
+                        string val = c["value"]?.ToString();
+                        string graphMapperType = GetGraphMapperTypeRequest(c, val);
+                        double? min = c["min"]?.ToObject<double>();
+                        double? max = c["max"]?.ToObject<double>();
+                        int? decimals = c["decimals"]?.ToObject<int>();
+                        string alias = c["alias_id"]?.ToString();
+
+                        var obj = InstantiateDocumentObjectFromLibrary(name ?? "", cguid);
+                        obj.CreateAttributes();
+                        obj.Attributes.Pivot = new System.Drawing.PointF(x, y);
+                        if (!string.IsNullOrEmpty(label)) obj.NickName = label;
+                        bool isGraphMapper = IsGraphMapperObject(obj);
+                        if (isGraphMapper && !TrySetGraphMapperType(obj, graphMapperType, out string graphMapperDetail))
+                        {
+                            result = graphMapperDetail;
+                            return;
+                        }
+                        doc.AddObject(obj, false);
+
+                        if (obj is Grasshopper.Kernel.Special.GH_NumberSlider slider)
+                        {
+                            if (min.HasValue) slider.Slider.Minimum = (decimal)min.Value;
+                            if (max.HasValue) slider.Slider.Maximum = (decimal)max.Value;
+                            if (decimals.HasValue) slider.Slider.DecimalPlaces = Math.Max(0, Math.Min(10, decimals.Value));
+                            if (!string.IsNullOrEmpty(val) && decimal.TryParse(val, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out decimal d))
+                                slider.Slider.Value = d;
+                        }
+                        else if (obj is Grasshopper.Kernel.Special.GH_Panel panel && !string.IsNullOrEmpty(val))
+                        {
+                            panel.UserText = val;
+                        }
+                        else if (isGraphMapper)
+                        {
+                        }
+
+                        createdObjs[alias] = obj;
+                        aliasMap[alias] = obj.InstanceGuid.ToString();
+                    }
+                }
+
+                int connected = 0;
+                if (connections != null)
+                {
+                    foreach (var conn in connections)
+                    {
+                        if (createdObjs.TryGetValue(conn["from_alias"]?.ToString(), out var f) && createdObjs.TryGetValue(conn["to_alias"]?.ToString(), out var t))
+                        {
+                            int fIdx = conn["from_index"]?.ToObject<int>() ?? 0;
+                            int tIdx = conn["to_index"]?.ToObject<int>() ?? 0;
+                            var sP = (f is Grasshopper.Kernel.IGH_Component cF) ? (fIdx >= 0 && fIdx < cF.Params.Output.Count ? cF.Params.Output[fIdx] : null) : (f as Grasshopper.Kernel.IGH_Param);
+                            var tP = (t is Grasshopper.Kernel.IGH_Component cT) ? (tIdx >= 0 && tIdx < cT.Params.Input.Count ? cT.Params.Input[tIdx] : null) : (t as Grasshopper.Kernel.IGH_Param);
+                            if (sP != null && tP != null)
+                            {
+                                tP.AddSource(sP);
+                                connected++;
+                            }
+                            else
+                            {
+                                warnings.Add("连线端口越界：" + conn["from_alias"] + " -> " + conn["to_alias"]);
+                            }
+                        }
+                        else
+                        {
+                            warnings.Add("连线引用了不存在的 alias：" + conn["from_alias"] + " -> " + conn["to_alias"]);
+                        }
+                    }
+                }
+
+                if (!string.IsNullOrWhiteSpace(groupName) && createdObjs.Count > 0)
+                {
+                    var group = new Grasshopper.Kernel.Special.GH_Group();
+                    group.NickName = groupName;
+                    group.Colour = System.Drawing.Color.FromArgb(80, 100, 150, 250);
+                    foreach (var obj in createdObjs.Values) group.AddObject(obj.InstanceGuid);
+                    doc.AddObject(group, false);
+                    group.ExpireSolution(true);
+                }
+
+                _canvasChanged = true;
+                try { doc.ScheduleSolution(150); }
+                catch (Exception ex) { AddGhLog.Warn("ExecuteCreateScriptComponentGraph Schedule failed: " + ex.Message); }
+
+                var payload = new JObject
+                {
+                    ["status"] = "ok",
+                    ["mode"] = scriptComponentName == "C# Script" ? "csharp" : "python",
+                    ["created_scripts"] = scripts.Count,
+                    ["created_components"] = components?.Count ?? 0,
+                    ["created_connections"] = connected,
+                    ["script_write_ok"] = scriptWriteOk,
+                    ["aliases"] = aliasMap,
+                    ["warnings"] = new JArray(warnings)
+                };
+                string errors = GetCanvasErrors(doc);
+                if (!string.IsNullOrWhiteSpace(errors)) payload["canvas_errors"] = errors;
+                result = payload.ToString(Formatting.None);
+            }));
+            return result;
+        }
+
+        private static string ExecuteCreateComponentGraph(JArray components, JArray connections, string groupName = null)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+
+                Dictionary<string, Grasshopper.Kernel.IGH_DocumentObject> createdObjs = new Dictionary<string, Grasshopper.Kernel.IGH_DocumentObject>();
+
+                if (components != null) {
+                    foreach (var c in components) {
+                        string name = c["name"]?.ToString();
+                        string cguid = c["component_guid"]?.ToString();
+                        string label = c["label"]?.ToString();
+                        float x = c["x"]?.ToObject<float>() ?? 0;
+                        float y = c["y"]?.ToObject<float>() ?? 0;
+                        string val = c["value"]?.ToString();
+                        string graphMapperType = GetGraphMapperTypeRequest(c, val);
+                        double? min = c["min"]?.ToObject<double>();
+                        double? max = c["max"]?.ToObject<double>();
+                        int? decimals = c["decimals"]?.ToObject<int>();
+                        string alias = c["alias_id"]?.ToString();
+
+                        if (string.IsNullOrWhiteSpace(name) && string.IsNullOrWhiteSpace(cguid))
+                            continue;
+
+                        var obj = InstantiateDocumentObjectFromLibrary(name ?? "", cguid);
+
+                        if (obj != null) {
+                            obj.CreateAttributes();
+                            obj.Attributes.Pivot = new System.Drawing.PointF(x, y);
+                            if (!string.IsNullOrEmpty(label)) obj.NickName = label;
+                            bool isGraphMapper = IsGraphMapperObject(obj);
+                            if (isGraphMapper && !TrySetGraphMapperType(obj, graphMapperType, out string graphMapperDetail)) {
+                                result = graphMapperDetail;
+                                return;
+                            }
+                            doc.AddObject(obj, false);
+
+                            if (obj is Grasshopper.Kernel.Special.GH_NumberSlider s) {
+                                if (min.HasValue) s.Slider.Minimum = (decimal)min.Value;
+                                if (max.HasValue) s.Slider.Maximum = (decimal)max.Value;
+                                if (decimals.HasValue) s.Slider.DecimalPlaces = Math.Max(0, Math.Min(10, decimals.Value));
+                                if (!string.IsNullOrEmpty(val) && decimal.TryParse(val, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out decimal d))
+                                    s.Slider.Value = d;
+                            }
+                            else if (isGraphMapper) {
+                            }
+                            else if (obj is Grasshopper.Kernel.Special.GH_Panel p && !string.IsNullOrEmpty(val)) {
+                                p.UserText = val;
+                            }
+                            else if (!string.IsNullOrEmpty(val) && TrySetGrasshopperScriptOrFormula(obj, val, out _)) {
+                                obj.ExpireSolution(true);
+                            }
+
+                            if (!string.IsNullOrEmpty(alias)) createdObjs[alias] = obj;
+                        }
+                    }
+                }
+
+                if (connections != null) {
+                    foreach (var conn in connections) {
+                        if (createdObjs.TryGetValue(conn["from_alias"]?.ToString(), out var f) && createdObjs.TryGetValue(conn["to_alias"]?.ToString(), out var t)) {
+                            int fIdx = conn["from_index"]?.ToObject<int>() ?? 0;
+                            int tIdx = conn["to_index"]?.ToObject<int>() ?? 0;
+                            var sP = (f is Grasshopper.Kernel.IGH_Component cF) ? (fIdx < cF.Params.Output.Count ? cF.Params.Output[fIdx] : null) : (f as Grasshopper.Kernel.IGH_Param);
+                            var tP = (t is Grasshopper.Kernel.IGH_Component cT) ? (tIdx < cT.Params.Input.Count ? cT.Params.Input[tIdx] : null) : (t as Grasshopper.Kernel.IGH_Param);
+                            if (sP != null && tP != null) tP.AddSource(sP);
+                        }
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(groupName) && createdObjs.Count > 0)
+                {
+                    var group = new Grasshopper.Kernel.Special.GH_Group();
+                    group.NickName = groupName;
+                    group.Colour = System.Drawing.Color.FromArgb(80, 100, 150, 250);
+                    foreach (var obj in createdObjs.Values) group.AddObject(obj.InstanceGuid);
+                    doc.AddObject(group, false);
+                    group.ExpireSolution(true);
+                }
+
+                _canvasChanged = true;
+                try { doc.ScheduleSolution(150); }
+                catch (Exception ex) { AddGhLog.Warn("ExecuteCreateComponentGraph Schedule failed: " + ex.Message); }
+                result = "图谱构建完成。";
+                result += GetCanvasErrors(doc);
+            }));
+            return result;
+        }
+
+        private static string ExecuteCheckGhErrors()
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+                result = GetCanvasErrors(doc);
+                if (string.IsNullOrEmpty(result)) result = "一切正常。";
+            }));
+            return result;
+        }
+
+        private static string ExecuteRecomputeGhCanvas()
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+                _canvasChanged = true;
+                try { doc.ScheduleSolution(150); }
+                catch (Exception ex) { AddGhLog.Warn("ExecuteRecomputeGhCanvas Schedule failed: " + ex.Message); }
+                try { Grasshopper.Instances.ActiveCanvas?.Refresh(); }
+                catch (Exception ex) { AddGhLog.Debug("ExecuteRecomputeGhCanvas Refresh failed: " + ex.Message); }
+                result = "已触发画布重新求解（含延迟再算）。";
+            }));
+            return result;
+        }
+
+        /// <summary>
+        /// 内置 C#/VB 脚本编辑器使用多块源码（只读模板 + RunScript 等可编辑段）。整块替换成单个 block 会破坏结构导致 Rhino 崩溃。
+        /// </summary>
+        private static GH_CodeBlocks GhBuildCodeBlocksReplacingFirstMutable(GH_CodeBlocks baseline, string text)
+        {
+            string norm = text == null ? "" : text.Replace("\r\n", "\n").Replace('\r', '\n');
+            string[] newLines = norm.Length == 0 ? Array.Empty<string>() : norm.Split('\n');
+
+            if (baseline == null || baseline.Count == 0)
+            {
+                var fb = new GH_CodeBlocks();
+                fb.Add(new GH_CodeBlock(newLines, false));
+                fb.MergeConsecutiveBlocks();
+                return fb;
+            }
+
+            var merged = new GH_CodeBlocks();
+            bool replacedFirstMutable = false;
+
+            for (int i = 0; i < baseline.Count; i++)
+            {
+                GH_CodeBlock b = baseline[i];
+                bool ro = b.ReadOnly;
+                string[] copyLines = (b.Lines ?? Enumerable.Empty<string>()).ToArray();
+
+                if (!ro && !replacedFirstMutable)
+                {
+                    merged.Add(new GH_CodeBlock(newLines, false));
+                    replacedFirstMutable = true;
+                }
+                else
+                    merged.Add(new GH_CodeBlock(copyLines, ro));
+            }
+
+            if (!replacedFirstMutable)
+                merged.Add(new GH_CodeBlock(newLines, false));
+
+            merged.MergeConsecutiveBlocks();
+            return merged;
+        }
+
+        private static GH_ScriptLanguage ParseGhNativeScriptLanguageHint(string hint)
+        {
+            if (string.IsNullOrWhiteSpace(hint) || string.Equals(hint, "auto", StringComparison.OrdinalIgnoreCase))
+                return GH_ScriptLanguage.CS;
+            string h = hint.Trim();
+            if (h.StartsWith("vb", StringComparison.OrdinalIgnoreCase)) return GH_ScriptLanguage.VB;
+            return GH_ScriptLanguage.CS;
+        }
+
+        private static bool TryReflectGhScriptLanguage(Grasshopper.Kernel.IGH_DocumentObject obj, out GH_ScriptLanguage lang, out string fromMember)
+        {
+            fromMember = null;
+            lang = GH_ScriptLanguage.CS;
+            if (obj == null) return false;
+            Type tEnum = typeof(GH_ScriptLanguage);
+            for (Type t = obj.GetType(); t != null && t != typeof(object); t = t.BaseType)
+            {
+                foreach (var p in t.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    if (p.PropertyType != tEnum) continue;
+                    try
+                    {
+                        object v = p.GetValue(obj);
+                        if (v is GH_ScriptLanguage sl && sl != GH_ScriptLanguage.None)
+                        {
+                            lang = sl;
+                            fromMember = p.Name;
+                            return true;
+                        }
+                    }
+                    catch (Exception ex) { AddGhLog.Debug("TryReflectGhScriptLanguage: " + ex.Message); }
+                }
+            }
+            return false;
+        }
+
+        private static GH_ScriptLanguage ResolveGhNativeScriptLanguage(Grasshopper.Kernel.IGH_DocumentObject obj, string hint)
+        {
+            if (TryReflectGhScriptLanguage(obj, out GH_ScriptLanguage refl, out _))
+                return refl;
+
+            if (obj is Grasshopper.Kernel.IGH_ActiveObject act)
+            {
+                string nick = act.NickName ?? "";
+                if (nick.IndexOf("vb", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return GH_ScriptLanguage.VB;
+            }
+
+            return ParseGhNativeScriptLanguageHint(hint);
+        }
+
+        private static bool TryPerformGhScriptEditorOk(GH_ScriptEditor editor)
+        {
+            if (editor == null) return false;
+            try
+            {
+                PropertyInfo pi = typeof(GH_ScriptEditor).GetProperty("OKButton", BindingFlags.Instance | BindingFlags.NonPublic);
+                if (pi?.GetValue(editor) is System.Windows.Forms.Button ok)
+                {
+                    ok.PerformClick();
+                    return true;
+                }
+            }
+            catch (Exception ex) { AddGhLog.Debug("TryPerformGhScriptEditorOk: " + ex.Message); }
+            return false;
+        }
+
+        private static bool IsGhScriptEditorDisposed(GH_ScriptEditor editor)
+        {
+            if (editor == null) return true;
+            try
+            {
+                var pi = editor.GetType().GetProperty("IsDisposed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (pi?.GetValue(editor) is bool disposed) return disposed;
+            }
+            catch (Exception ex) { AddGhLog.Debug("IsGhScriptEditorDisposed: " + ex.Message); }
+            return false;
+        }
+
+        private static bool TrySetGhScriptEditorProperty(GH_ScriptEditor editor, string name, object value)
+        {
+            if (editor == null || string.IsNullOrWhiteSpace(name)) return false;
+            try
+            {
+                var pi = editor.GetType().GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (pi == null || !pi.CanWrite) return false;
+                pi.SetValue(editor, value);
+                return true;
+            }
+            catch (Exception ex) { AddGhLog.Debug("TrySetGhScriptEditorProperty " + name + ": " + ex.Message); }
+            return false;
+        }
+
+        private static bool TryInvokeGhScriptEditorMethod(GH_ScriptEditor editor, string name)
+        {
+            if (editor == null || string.IsNullOrWhiteSpace(name)) return false;
+            try
+            {
+                var mi = editor.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, Type.EmptyTypes, null);
+                if (mi == null) return false;
+                mi.Invoke(editor, null);
+                return true;
+            }
+            catch (Exception ex) { AddGhLog.Debug("TryInvokeGhScriptEditorMethod " + name + ": " + ex.Message); }
+            return false;
+        }
+
+        /// <summary>
+        /// 在脚本编辑器 UI 线程上同步执行（避免 Show 后立刻改控件与点 OK 时序错乱）。
+        /// </summary>
+        private static void GhScriptEditorRunOnUi(GH_ScriptEditor editor, Action work)
+        {
+            if (editor == null || work == null) return;
+            if (IsGhScriptEditorDisposed(editor)) return;
+            void Do() { if (!IsGhScriptEditorDisposed(editor)) work(); }
+
+            try
+            {
+                var invokeRequired = editor.GetType().GetProperty("InvokeRequired", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (invokeRequired?.GetValue(editor) is bool required && required)
+                {
+                    var invoke = editor.GetType().GetMethod("Invoke", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Delegate) }, null);
+                    if (invoke != null)
+                    {
+                        invoke.Invoke(editor, new object[] { (Action)Do });
+                        return;
+                    }
+                }
+            }
+            catch (Exception ex) { AddGhLog.Debug("GhScriptEditorRunOnUi invoke: " + ex.Message); }
+
+            Do();
+        }
+
+        /// <summary> OK 已把脚本写回电池并会自行触发求解；此处仅轻量排队，避免与编辑器内部 NewSolution 重入。 </summary>
+        private static void AfterNativeScriptEditorCommit(GH_Document doc)
+        {
+            _canvasChanged = true;
+            try { doc?.ScheduleSolution(80); } catch (Exception ex) { AddGhLog.Debug("AfterNativeScriptEditorCommit Schedule: " + ex.Message); }
+            try { Grasshopper.Instances.ActiveCanvas?.Refresh(); } catch { }
+        }
+
+        private static string ExecuteGhNativeScriptEditor(string id, string mode, string code, string languageHint)
+        {
+            const int readCap = 150000;
+            string result = "";
+            string mraw = mode?.Trim() ?? "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                try
+                {
+                    var canvas = Grasshopper.Instances.ActiveCanvas;
+                    var doc = canvas?.Document;
+                    if (canvas == null || doc == null) { result = "Error: 没有打开的画布。"; return; }
+
+                    bool isOpen = mraw.Equals("open_focus", StringComparison.OrdinalIgnoreCase);
+                    bool isRead = mraw.Equals("read_source", StringComparison.OrdinalIgnoreCase);
+                    bool isSet = mraw.Equals("set_source_commit", StringComparison.OrdinalIgnoreCase);
+                    if (!isOpen && !isRead && !isSet)
+                    {
+                        result = "Error: mode 必须是 open_focus、read_source 或 set_source_commit。";
+                        return;
+                    }
+
+                    if (!Guid.TryParse(id, out Guid guid)) { result = "Error: ID 格式错误。"; return; }
+                    var obj = doc.FindObject(guid, true);
+                    if (obj == null) { result = "Error: 找不到电池。"; return; }
+
+                    if (isSet && code == null) { result = "Error: set_source_commit 需要 code 参数。"; return; }
+
+                    if (isRead)
+                    {
+                        int perMember = Math.Min(readCap, 120000);
+                        result = GhReadScriptSourceViaReflection(obj, readCap, perMember);
+                        return;
+                    }
+
+                    GH_ScriptEditor existing = GH_ScriptEditor.FindScriptEditor(obj);
+                    GH_ScriptLanguage lang = ResolveGhNativeScriptLanguage(obj, languageHint);
+
+                    GH_ScriptEditor editor = existing;
+                    if (editor == null)
+                    {
+                        try
+                        {
+                            editor = new GH_ScriptEditor(lang, obj);
+                        }
+                        catch (Exception ex)
+                        {
+                            result = "Error: 无法创建原生 GH_ScriptEditor（该宿主可能不是内置 C#/VB Script，例如 GhPython 或 RhinoCode；请改用 set_gh_component_value）：" + ex.Message;
+                            return;
+                        }
+                    }
+
+                    if (isOpen)
+                    {
+                        TrySetGhScriptEditorProperty(editor, "WindowState", System.Windows.Forms.FormWindowState.Normal);
+                        TrySetGhScriptEditorProperty(editor, "StartPosition", System.Windows.Forms.FormStartPosition.CenterParent);
+                        if (!editor.Visible)
+                            editor.Show(Grasshopper.Instances.DocumentEditor);
+                        TryInvokeGhScriptEditorMethod(editor, "BringToFront");
+                        TryInvokeGhScriptEditorMethod(editor, "Activate");
+                        result = "已打开或聚焦原生脚本编辑器。" + GetCanvasErrors(doc);
+                        return;
+                    }
+
+                    // 对于 set_source_commit，先尝试使用反射直接修改电池，避免打开编辑器窗口（这是崩溃的主要原因）
+                    bool directSetSuccess = false;
+                    try
+                    {
+                        directSetSuccess = TrySetNativeScriptContentViaReflection(obj, code);
+                        if (directSetSuccess)
+                        {
+                            obj.ExpireSolution(true);
+                            _canvasChanged = true;
+                            try { doc.ScheduleSolution(150); }
+                            catch (Exception ex) { AddGhLog.Warn("SetNativeScript Schedule failed: " + ex.Message); }
+                            try { Grasshopper.Instances.ActiveCanvas?.Refresh(); }
+                            catch (Exception ex) { AddGhLog.Debug("SetNativeScript Refresh failed: " + ex.Message); }
+                            result = "已直接写入脚本内容（避免了编辑器窗口）。" + GetCanvasErrors(doc);
+                            return;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        AddGhLog.Warn("Direct set native script failed, falling back to editor: " + ex.Message);
+                    }
+
+                    // 如果反射失败，作为备选方案使用编辑器（但要更安全）
+                    if (isSet && !editor.Visible)
+                    {
+                        try
+                        {
+                            TrySetGhScriptEditorProperty(editor, "StartPosition", System.Windows.Forms.FormStartPosition.Manual);
+                            TrySetGhScriptEditorProperty(editor, "ShowInTaskbar", false);
+                            TrySetGhScriptEditorProperty(editor, "Location", new System.Drawing.Point(-10000, -10000));
+                            editor.Show(Grasshopper.Instances.DocumentEditor);
+                            // 给一点时间让窗口初始化
+                            System.Threading.Thread.Sleep(50);
+                        }
+                        catch (Exception ex)
+                        {
+                            AddGhLog.Warn("Failed to show editor offscreen: " + ex.Message);
+                        }
+                    }
+
+                    bool okClicked = false;
+                    try
+                    {
+                        GhScriptEditorRunOnUi(editor, () =>
+                        {
+                            GH_CodeBlocks baseline = editor.GetSourceCode();
+                            GH_CodeBlocks merged = GhBuildCodeBlocksReplacingFirstMutable(baseline, code);
+                            editor.SetSourceCode(merged);
+                            okClicked = TryPerformGhScriptEditorOk(editor);
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        AddGhLog.Warn("Editor OK click failed: " + ex.Message);
+                        okClicked = false;
+                    }
+
+                    // 尝试安全关闭编辑器窗口
+                    try
+                    {
+                        if (editor.Visible && existing == null)
+                        {
+                            TryInvokeGhScriptEditorMethod(editor, "Hide");
+                            editor.Close();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        AddGhLog.Debug("Editor close failed: " + ex.Message);
+                    }
+
+                    if (!okClicked)
+                    {
+                        result = "Error: 无法通过原生编辑器提交脚本（Grasshopper 版本可能受限）。";
+                        return;
+                    }
+
+                    AfterNativeScriptEditorCommit(doc);
+                    result = "已通过原生脚本编辑器写入并提交。" + GetCanvasErrors(doc);
+                }
+                catch (Exception ex)
+                {
+                    result = "Error: gh_native_script_editor — " + ex.Message;
+                    AddGhLog.Warn("ExecuteGhNativeScriptEditor: " + ex.Message);
+                }
+            }));
+
+            return result;
+        }
+
+        private static string ExecuteSetGhComponentStatus(string id, bool? preview, bool? enabled)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+                if (!Guid.TryParse(id, out Guid guid)) { result = "Error: ID 格式错误。"; return; }
+                var obj = doc.FindObject(guid, true);
+                if (obj == null) { result = "Error: 找不到电池。"; return; }
+
+                if (preview.HasValue && obj is Grasshopper.Kernel.IGH_PreviewObject po) po.Hidden = !preview.Value;
+                if (enabled.HasValue && obj is Grasshopper.Kernel.IGH_ActiveObject ao) ao.Locked = !enabled.Value;
+
+                obj.ExpireSolution(true);
+                _canvasChanged = true;
+                try { doc.ScheduleSolution(150); }
+                catch (Exception ex) { AddGhLog.Warn("ExecuteSetGhComponentStatus Schedule failed: " + ex.Message); }
+                result = "状态更新成功。";
+                _canvasChanged = true;
+            }));
+            return result;
+        }
+
+        private static string ExecuteModifyGhComponentPorts(string id, bool isInput, string action, string portName = null, int? index = null)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+                if (!Guid.TryParse(id, out Guid guid)) { result = "Error: ID 格式错误。"; return; }
+                var obj = doc.FindObject(guid, true);
+                if (!(obj is Grasshopper.Kernel.IGH_VariableParameterComponent vpc)) { result = "Error: 该电池不支持动态端口。"; return; }
+
+                var comp = obj as Grasshopper.Kernel.IGH_Component;
+                if (comp == null) { result = "Error: 无法作为组件处理。"; return; }
+
+                if (action == "add") {
+                    if (isInput) {
+                        var newParam = vpc.CreateParameter(Grasshopper.Kernel.GH_ParameterSide.Input, comp.Params.Input.Count);
+                        comp.Params.RegisterInputParam(newParam);
+                    } else {
+                        var newParam = vpc.CreateParameter(Grasshopper.Kernel.GH_ParameterSide.Output, comp.Params.Output.Count);
+                        comp.Params.RegisterOutputParam(newParam);
+                    }
+                } else if (action == "remove") {
+                    var list = isInput ? comp.Params.Input : comp.Params.Output;
+                    if (list.Count > 0) {
+                        int removeIndex = -1;
+                        Grasshopper.Kernel.IGH_Param param = null;
+                        string targetName = string.IsNullOrWhiteSpace(portName) ? null : portName.Trim();
+
+                        if (!string.IsNullOrWhiteSpace(targetName)) {
+                            for (int i = 0; i < list.Count; i++) {
+                                var candidate = list[i];
+                                if (candidate == null) continue;
+
+                                bool match = (!string.IsNullOrWhiteSpace(candidate.Name) && candidate.Name.Trim().Equals(targetName, StringComparison.OrdinalIgnoreCase))
+                                    || (!string.IsNullOrWhiteSpace(candidate.NickName) && candidate.NickName.Trim().Equals(targetName, StringComparison.OrdinalIgnoreCase));
+                                if (match) {
+                                    if (removeIndex >= 0) {
+                                        result = "Error: 端口名称不唯一，请改用 index。";
+                                        return;
+                                    }
+                                    removeIndex = i;
+                                    param = candidate;
+                                }
+                            }
+
+                            if (removeIndex < 0) {
+                                result = "Error: 未找到名称为 '" + targetName + "' 的端口。";
+                                return;
+                            }
+                        } else if (index.HasValue) {
+                            removeIndex = index.Value;
+                            if (removeIndex < 0 || removeIndex >= list.Count) {
+                                result = "Error: 端口索引超出范围。";
+                                return;
+                            }
+                            param = list[removeIndex];
+                        } else {
+                            removeIndex = list.Count - 1;
+                            param = list[removeIndex];
+                        }
+
+                        if (vpc.CanRemoveParameter(isInput ? Grasshopper.Kernel.GH_ParameterSide.Input : Grasshopper.Kernel.GH_ParameterSide.Output, removeIndex)) {
+                            comp.Params.UnregisterParameter(param);
+                        } else { result = "Error: 无法删除该端口。"; return; }
+                    }
+                }
+
+                vpc.VariableParameterMaintenance();
+                comp.Params.OnParametersChanged();
+                obj.ExpireSolution(true);
+                _canvasChanged = true;
+                try { doc.ScheduleSolution(150); }
+                catch (Exception ex) { AddGhLog.Warn("ExecuteModifyGhComponentPorts Schedule failed: " + ex.Message); }
+                result = "端口修改成功。";
+            }));
+            return result;
+        }
+
+        private static string ExecuteManageGhGroups(string action, List<string> ids, string groupId, string name)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+
+                if (action == "create") {
+                    var group = new Grasshopper.Kernel.Special.GH_Group();
+                    group.NickName = name ?? "Group";
+                    group.Colour = System.Drawing.Color.FromArgb(80, 250, 150, 100); // 默认橘色
+                    if (ids != null) {
+                        foreach (var id in ids) if (Guid.TryParse(id, out Guid g)) group.AddObject(g);
+                    }
+                    doc.AddObject(group, false);
+                    group.ExpireSolution(true);
+                    result = "已创建组 '" + group.NickName + "' (ID: " + group.InstanceGuid + ")。";
+                } else if (action == "ungroup") {
+                    if (Guid.TryParse(groupId, out Guid gId)) {
+                        var obj = doc.FindObject(gId, true);
+                        if (obj is Grasshopper.Kernel.Special.GH_Group) {
+                            doc.RemoveObject(obj, false);
+                            result = "已解散组。";
+                        } else result = "Error: 找不到该组。";
+                    }
+                } else if (action == "add_to_group" || action == "remove_from_group") {
+                    if (Guid.TryParse(groupId, out Guid gId)) {
+                        var obj = doc.FindObject(gId, true);
+                        if (obj is Grasshopper.Kernel.Special.GH_Group group) {
+                            if (ids != null) {
+                                foreach (var id in ids) {
+                                    if (Guid.TryParse(id, out Guid g)) {
+                                        if (action == "add_to_group") group.AddObject(g);
+                                        else group.RemoveObject(g);
+                                    }
+                                }
+                            }
+                            group.ExpireSolution(true);
+                            result = "组员已更新。";
+                        } else result = "Error: 找不到该组。";
+                    }
+                }
+                _canvasChanged = true;
+                try { doc.ScheduleSolution(150); }
+                catch (Exception ex) { AddGhLog.Warn("ExecuteManageGhGroups Schedule failed: " + ex.Message); }
+            }));
+            return result;
+        }
+
+        private static string ExecuteSearchComponentLibrary(string keyword)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                List<string> ms = new List<string>();
+                foreach (var p in Grasshopper.Instances.ComponentServer.ObjectProxies) {
+                    if (p.Obsolete) continue;
+                    if (p.Desc.Name.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0) {
+                        ms.Add("- " + p.Desc.Name + " (" + p.Desc.NickName + ")");
+                        if (ms.Count > 15) break;
+                    }
+                }
+                result = ms.Count > 0 ? string.Join("\n", ms) : "未找到匹配电池。";
+            }));
+            return result;
+        }
+
+        private static string ExecuteSearchGhComponentCatalog(string query, int maxResults, string categoryContains = null)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                if (string.IsNullOrWhiteSpace(query)) {
+                    result = "Error: query 不能为空。";
+                    return;
+                }
+                if (maxResults <= 0) maxResults = 30;
+                if (maxResults > 200) maxResults = 200;
+
+                string q = query.Trim();
+                string catFilter = categoryContains?.Trim();
+                var matches = new JArray();
+
+                foreach (var p in Grasshopper.Instances.ComponentServer.ObjectProxies) {
+                    if (p.Obsolete) continue;
+                    string name = p.Desc?.Name ?? "";
+                    string nick = p.Desc?.NickName ?? "";
+                    string cat = p.Desc?.Category ?? "";
+                    string sub = p.Desc?.SubCategory ?? "";
+
+                    if (!string.IsNullOrEmpty(catFilter)) {
+                        bool inCat = (cat.IndexOf(catFilter, StringComparison.OrdinalIgnoreCase) >= 0)
+                            || (sub.IndexOf(catFilter, StringComparison.OrdinalIgnoreCase) >= 0);
+                        if (!inCat) continue;
+                    }
+
+                    bool hit = name.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0
+                        || nick.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0
+                        || cat.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0
+                        || sub.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0;
+
+                    if (!hit) continue;
+
+                    matches.Add(new JObject {
+                        ["name"] = name,
+                        ["nickname"] = nick,
+                        ["guid"] = p.Guid.ToString(),
+                        ["category"] = cat,
+                        ["subcategory"] = sub
+                    });
+
+                    if (matches.Count >= maxResults) break;
+                }
+
+                var wrap = new JObject {
+                    ["count"] = matches.Count,
+                    ["items"] = matches
+                };
+                result = wrap.ToString(Formatting.None);
+            }));
+            return result;
+        }
+
+        private static string GetCanvasErrors(Grasshopper.Kernel.GH_Document doc)
+        {
+            List<string> errs = new List<string>();
+            foreach (var obj in doc.Objects) {
+                if (obj is Grasshopper.Kernel.IGH_ActiveObject ao && (ao.RuntimeMessageLevel == GH_RuntimeMessageLevel.Error || ao.RuntimeMessageLevel == GH_RuntimeMessageLevel.Warning)) {
+                    foreach (string m in ao.RuntimeMessages(GH_RuntimeMessageLevel.Error)) errs.Add("Error(" + obj.Name + "): " + m);
+                    foreach (string m in ao.RuntimeMessages(GH_RuntimeMessageLevel.Warning)) errs.Add("Warning(" + obj.Name + "): " + m);
+                }
+            }
+            return errs.Count > 0 ? "检测到报错:\n" + string.Join("\n", errs) : "";
+        }
+    }
+}
