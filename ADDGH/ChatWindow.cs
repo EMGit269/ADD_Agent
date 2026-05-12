@@ -8,7 +8,6 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
-using System.Windows.Media.Effects;
 using System.Windows.Input;
 using System.Net;
 using System.Net.Http;
@@ -20,6 +19,7 @@ using WpfPath = System.Windows.Shapes.Path;
 using System.Xml.Linq;
 using System.Text.RegularExpressions;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System.Windows.Markup;
@@ -34,10 +34,9 @@ namespace ADDGH
     {
         private static Window _window;
         private const double DefaultWindowWidth = 450;
-        private const double WindowChromeMargin = 20;
-        private const double ResizeHitTestThickness = 8;
-        private const double PaneMinWidth = DefaultWindowWidth - (WindowChromeMargin * 2);
+        private const double PaneMinWidth = DefaultWindowWidth;
         private const double CodeViewColumnWidth = 750;
+        private const double HistorySidebarWidth = 320;
         private static double _widthBeforeCodeView = double.NaN;
         private static StackPanel _chatPanel;
         private static ScrollViewer _chatScroll;
@@ -64,8 +63,6 @@ namespace ADDGH
         private static Border _codeCanvasIssuesHost;
         private static TextBox _txtCanvasIssues;
         private static Border _inputAreaBorder;
-        private static Border _rootChromeBorder;
-        private static TextBlock _codeHeaderTitle;
         private static Button _btnToggleViewMode;
         private static ColumnDefinition _historyCol;
         private static ColumnDefinition _chatCol;
@@ -495,100 +492,28 @@ namespace ADDGH
             _window.Activate();
         }
 
-        private static void AttachWindowResizeHitTest()
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int attributeValue, int attributeSize);
+
+        private static void ApplyDarkSystemTitleBar()
         {
             if (_window == null) return;
-            var source = PresentationSource.FromVisual(_window) as HwndSource;
-            if (source != null) source.AddHook(WindowResizeHook);
-        }
 
-        private static IntPtr WindowResizeHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
-        {
-            const int WM_NCHITTEST = 0x0084;
-            const int HTLEFT = 10;
-            const int HTRIGHT = 11;
-            const int HTTOP = 12;
-            const int HTTOPLEFT = 13;
-            const int HTTOPRIGHT = 14;
-            const int HTBOTTOM = 15;
-            const int HTBOTTOMLEFT = 16;
-            const int HTBOTTOMRIGHT = 17;
-
-            if (msg != WM_NCHITTEST || _window == null || _window.ResizeMode == ResizeMode.NoResize || _window.WindowState != WindowState.Normal)
-                return IntPtr.Zero;
-
-            long lp = lParam.ToInt64();
-            var screenPoint = new Point(unchecked((short)(lp & 0xFFFF)), unchecked((short)((lp >> 16) & 0xFFFF)));
-            Point p = _window.PointFromScreen(screenPoint);
-            double width = _window.ActualWidth;
-            double height = _window.ActualHeight;
-
-            bool left = IsNearResizeEdge(p.X, 0, width) || IsNearResizeEdge(p.X, WindowChromeMargin, width);
-            bool right = IsNearResizeEdge(p.X, width, width) || IsNearResizeEdge(p.X, width - WindowChromeMargin, width);
-            bool top = IsNearResizeEdge(p.Y, 0, height) || IsNearResizeEdge(p.Y, WindowChromeMargin, height);
-            bool bottom = IsNearResizeEdge(p.Y, height, height) || IsNearResizeEdge(p.Y, height - WindowChromeMargin, height);
-
-            int hit = 0;
-            if (left && top) hit = HTTOPLEFT;
-            else if (right && top) hit = HTTOPRIGHT;
-            else if (left && bottom) hit = HTBOTTOMLEFT;
-            else if (right && bottom) hit = HTBOTTOMRIGHT;
-            else if (left) hit = HTLEFT;
-            else if (right) hit = HTRIGHT;
-            else if (top) hit = HTTOP;
-            else if (bottom) hit = HTBOTTOM;
-
-            if (hit == 0) return IntPtr.Zero;
-            handled = true;
-            return new IntPtr(hit);
-        }
-
-        private static bool IsNearResizeEdge(double value, double edge, double extent)
-        {
-            return value >= 0
-                && value <= extent
-                && Math.Abs(value - edge) <= ResizeHitTestThickness;
-        }
-
-        private static void UpdateWindowChromeForState()
-        {
-            if (_rootChromeBorder == null || _window == null) return;
-
-            if (_window.WindowState == WindowState.Maximized)
+            try
             {
-                _rootChromeBorder.Margin = new Thickness(0);
-                _rootChromeBorder.CornerRadius = new CornerRadius(0);
-                _rootChromeBorder.Effect = null;
-                return;
+                IntPtr hwnd = new WindowInteropHelper(_window).Handle;
+                if (hwnd == IntPtr.Zero) return;
+
+                int enabled = 1;
+                int size = Marshal.SizeOf(typeof(int));
+                int result = DwmSetWindowAttribute(hwnd, 20, ref enabled, size);
+                if (result != 0)
+                    DwmSetWindowAttribute(hwnd, 19, ref enabled, size);
             }
-
-            _rootChromeBorder.Margin = new Thickness(WindowChromeMargin);
-            _rootChromeBorder.CornerRadius = new CornerRadius(16);
-            _rootChromeBorder.Effect = new DropShadowEffect
+            catch
             {
-                BlurRadius = 30,
-                ShadowDepth = 10,
-                Opacity = 0.6,
-                Color = Colors.Black
-            };
-        }
-
-        private static void BeginWindowHeaderDrag(MouseButtonEventArgs e)
-        {
-            if (_window == null || e.LeftButton != MouseButtonState.Pressed || e.ClickCount != 1) return;
-
-            if (_window.WindowState == WindowState.Maximized)
-            {
-                Point screenPoint = _window.PointToScreen(e.GetPosition(_window));
-                double restoreWidth = Math.Max(_window.RestoreBounds.Width, _window.MinWidth);
-                _window.WindowState = WindowState.Normal;
-                _window.Left = screenPoint.X - Math.Min(restoreWidth * 0.5, Math.Max(80, e.GetPosition(_window).X));
-                _window.Top = Math.Max(0, screenPoint.Y - 20);
-                UpdateWindowChromeForState();
+                // Older Windows builds can reject dark title bar attributes; the default title bar remains usable.
             }
-
-            try { _window.DragMove(); }
-            catch (InvalidOperationException) { }
         }
 
         private static void UpdateWindowMinWidthForVisiblePanes()
@@ -597,9 +522,7 @@ namespace ADDGH
 
             double minWidth = DefaultWindowWidth;
             if (_isCodeVisible)
-                minWidth = Math.Max(minWidth, (PaneMinWidth * 2) + (WindowChromeMargin * 2));
-            if (_isHistorySidebarVisible)
-                minWidth += 320;
+                minWidth = Math.Max(minWidth, PaneMinWidth * 2);
 
             _window.MinWidth = minWidth;
             if (_window.Width < minWidth)
@@ -625,8 +548,8 @@ namespace ADDGH
         xmlns:x=""http://schemas.microsoft.com/winfx/2006/xaml""
         Title=""Magpie AI Agent"" Height=""850"" Width=""450""
         MinHeight=""520"" MinWidth=""450""
-        ResizeMode=""CanResizeWithGrip""
-        WindowStyle=""None"" AllowsTransparency=""True"" Background=""Transparent""
+        ResizeMode=""CanResize""
+        WindowStyle=""SingleBorderWindow"" Background=""#141414""
         Topmost=""True"" WindowStartupLocation=""CenterScreen"" x:Name=""MagpieWindow"">
     <Window.Resources>
         <Style TargetType=""ScrollBar"">
@@ -802,10 +725,7 @@ namespace ADDGH
     </Window.Resources>
 
 
-    <Border x:Name=""RootChromeBorder"" Background=""#141414"" CornerRadius=""16"" Margin=""20"">
-        <Border.Effect>
-            <DropShadowEffect BlurRadius=""30"" ShadowDepth=""10"" Opacity=""0.6"" Color=""Black""/>
-        </Border.Effect>
+    <Border Background=""#141414"" CornerRadius=""0"" Margin=""0"">
         <Grid> <!-- Root Wrapper -->
             <Grid x:Name=""MainLayout"">
                 <Grid.ColumnDefinitions>
@@ -814,41 +734,24 @@ namespace ADDGH
                     <ColumnDefinition Width=""0"" x:Name=""CodeCol""/>
                 </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
-                    <RowDefinition Height=""50""/>
                     <RowDefinition Height=""Auto""/>
                     <RowDefinition Height=""*""/>
                     <RowDefinition Height=""Auto""/>
                     <RowDefinition Height=""0"" x:Name=""LibraryRow""/>
                 </Grid.RowDefinitions>
 
-                <Border Grid.Row=""0"" Grid.Column=""0"" Grid.ColumnSpan=""3"" Background=""#1E1E1E"" CornerRadius=""16,16,0,0"" x:Name=""HeaderBorder""/>
-                <TextBlock Grid.Row=""0"" Grid.Column=""1"" x:Name=""TxtHeaderTitle"" Text=""✨ Magpie"" Foreground=""#E0E0E0"" FontSize=""16"" FontWeight=""SemiBold"" VerticalAlignment=""Center"" Margin=""20,0,0,0"" Cursor=""Hand"" ToolTip=""双击缩小为悬浮球"" HorizontalAlignment=""Left""/>
-                <TextBlock Grid.Row=""0"" Grid.Column=""2"" x:Name=""CodeHeaderTitle"" Text=""GRAPH LOGIC"" Foreground=""#E0E0E0"" FontSize=""18"" FontWeight=""SemiBold"" VerticalAlignment=""Center"" Margin=""28,0,110,0"" TextTrimming=""CharacterEllipsis"" Visibility=""Collapsed""/>
-                <StackPanel Grid.Row=""0"" Grid.Column=""0"" Grid.ColumnSpan=""3"" Orientation=""Horizontal"" HorizontalAlignment=""Right"" VerticalAlignment=""Center"" Margin=""0,0,18,0"">
-                    <Button x:Name=""BtnMinimize"" Content=""−"" Foreground=""#FFFFFF"" Background=""Transparent"" BorderThickness=""0"" FontSize=""18"" Width=""34"" Height=""30"" Cursor=""Hand"" ToolTip=""最小化""/>
-                    <Button x:Name=""BtnMaxRestore"" Content=""□"" Foreground=""#FFFFFF"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Width=""34"" Height=""30"" Cursor=""Hand"" ToolTip=""最大化/还原""/>
-                    <Button x:Name=""BtnClose"" Foreground=""#FFFFFF"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Width=""34"" Height=""30"" Cursor=""Hand"" ToolTip=""关闭"">
-                        <Button.Template>
-                            <ControlTemplate TargetType=""Button"">
-                                <Border Background=""{TemplateBinding Background}"" CornerRadius=""6"" Padding=""8,5""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border>
-                            </ControlTemplate>
-                        </Button.Template>
-                        <Path Data=""M4,4L8,8M8,4L4,8"" Stroke=""White"" StrokeThickness=""2"" Width=""16"" Height=""16"" Stretch=""Uniform""/>
-                    </Button>
-                </StackPanel>
-
-                <Border Grid.Row=""1"" Grid.Column=""0"" Grid.ColumnSpan=""3"" Background=""#181818"" BorderBrush=""#252525"" BorderThickness=""0,1,0,1""/>
-                <StackPanel Grid.Row=""1"" Grid.Column=""1"" Orientation=""Horizontal"" HorizontalAlignment=""Left"" Margin=""14,5"">
+                <Border Grid.Row=""0"" Grid.Column=""0"" Grid.ColumnSpan=""3"" Background=""#000000"" BorderBrush=""#252525"" BorderThickness=""0,0,0,1""/>
+                <StackPanel Grid.Row=""0"" Grid.Column=""1"" Orientation=""Horizontal"" HorizontalAlignment=""Left"" Margin=""14,6"">
                     <Button x:Name=""BtnToggleCode"" Style=""{StaticResource IconButtonStyle}"" Foreground=""#FFFFFF"" Background=""Transparent"" BorderThickness=""0"" FontSize=""13"" Cursor=""Hand"" ToolTip=""切换代码视图"" Margin=""0,0,8,0""><Path Data=""M9.4,16.6L4.8,12l4.6-4.6L8,6l-6,6l6,6L9.4,16.6z M14.6,16.6l4.6-4.6l-4.6-4.6L16,6l6,6l-6,6L14.6,16.6z"" Fill=""White"" Width=""16"" Height=""16"" Stretch=""Uniform""/></Button>
                     <Button x:Name=""BtnNewChat"" Style=""{StaticResource IconButtonStyle}"" Foreground=""#FFFFFF"" Background=""Transparent"" BorderThickness=""0"" FontSize=""18"" Cursor=""Hand"" ToolTip=""新对话"" Margin=""0,0,8,0""><TextBlock Text=""+"" Foreground=""White"" FontWeight=""Bold""/></Button>
                     <Button x:Name=""BtnToggleHistory"" Style=""{StaticResource IconButtonStyle}"" Foreground=""#FFFFFF"" Background=""Transparent"" BorderThickness=""0"" FontSize=""13"" Cursor=""Hand"" ToolTip=""对话历史"" Margin=""0,0,8,0""><TextBlock Text=""历史"" Foreground=""White"" FontSize=""12"" FontWeight=""SemiBold""/></Button>
                     <Button x:Name=""BtnSettings"" Style=""{StaticResource IconButtonStyle}"" Foreground=""#FFFFFF"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""配置""><Path Data=""M11,2L11,3.07C11.68,3.12,12.34,3.28,12.95,3.54L13.72,2.77L15.15,4.22L14.4,4.98C14.73,5.54,14.95,6.15,15.03,6.79L16.07,6.93L16.07,8.93L15.03,9.07C14.95,9.71,14.73,10.32,14.4,10.88L15.15,11.64L13.72,13.09L12.95,12.32C12.34,12.58,11.68,12.74,11,12.79L11,14L9,14L9,12.79C8.32,12.74,7.66,12.58,7.05,12.32L6.28,13.09L4.85,11.64L5.6,10.88C5.27,10.32,5.05,9.71,4.97,9.07L3.93,8.93L3.93,6.93L4.97,6.79C5.05,6.15,5.27,5.54,5.6,4.98L4.85,4.22L6.28,2.77L7.05,3.54C7.66,3.28,8.32,3.12,9,3.07L9,2L11,2z M10,7C8.9,7,8,7.9,8,9C8,10.1,8.9,11,10,11C11.1,11,12,10.1,12,9C12,7.9,11.1,7,10,7z"" Fill=""White"" Width=""16"" Height=""16"" Stretch=""Uniform""/></Button>
                 </StackPanel>
-                <Button Grid.Row=""1"" Grid.Column=""2"" x:Name=""BtnToggleViewMode"" Content=""JSON"" Foreground=""#B8B8B8"" Background=""Transparent"" BorderThickness=""1"" BorderBrush=""#333"" FontSize=""10"" Padding=""8,4"" Cursor=""Hand"" HorizontalAlignment=""Right"" VerticalAlignment=""Center"" Margin=""0,0,20,0"" Visibility=""Collapsed"">
+                <Button Grid.Row=""0"" Grid.Column=""2"" x:Name=""BtnToggleViewMode"" Content=""JSON"" Foreground=""#B8B8B8"" Background=""Transparent"" BorderThickness=""1"" BorderBrush=""#333"" FontSize=""10"" Padding=""8,4"" Cursor=""Hand"" HorizontalAlignment=""Right"" VerticalAlignment=""Center"" Margin=""0,0,20,0"" Visibility=""Collapsed"">
                     <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""4""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
                 </Button>
 
-                <Border x:Name=""HistorySidebar"" Grid.Row=""0"" Grid.Column=""0"" Grid.RowSpan=""5"" Panel.ZIndex=""9"" HorizontalAlignment=""Stretch"" VerticalAlignment=""Stretch"" Visibility=""Collapsed"" Margin=""0"" Background=""#171717"" BorderBrush=""#2A2A2A"" BorderThickness=""0,1,1,1"" CornerRadius=""16,0,0,16"" ClipToBounds=""True"">
+                <Border x:Name=""HistorySidebar"" Grid.Row=""0"" Grid.Column=""0"" Grid.RowSpan=""4"" Panel.ZIndex=""9"" HorizontalAlignment=""Stretch"" VerticalAlignment=""Stretch"" Visibility=""Collapsed"" Margin=""0"" Background=""#171717"" BorderBrush=""#2A2A2A"" BorderThickness=""0,1,1,1"" CornerRadius=""0"" ClipToBounds=""True"">
                     <Border.Effect>
                         <DropShadowEffect BlurRadius=""24"" ShadowDepth=""4"" Opacity=""0.35"" Color=""Black""/>
                     </Border.Effect>
@@ -870,11 +773,11 @@ namespace ADDGH
                     </Grid>
                 </Border>
 
-                <ScrollViewer Grid.Row=""2"" Grid.Column=""1"" x:Name=""ChatScroll"" Margin=""5,10,5,0"" VerticalScrollBarVisibility=""Auto"" PanningMode=""VerticalOnly"">
+                <ScrollViewer Grid.Row=""1"" Grid.Column=""1"" x:Name=""ChatScroll"" Margin=""5,10,5,0"" VerticalScrollBarVisibility=""Auto"" PanningMode=""VerticalOnly"">
                     <StackPanel x:Name=""ChatPanel"" Margin=""10""/>
                 </ScrollViewer>
 
-                <Border Grid.Row=""3"" Grid.Column=""1"" Background=""#1E1E1E"" CornerRadius=""0,0,16,16"" Padding=""15"" x:Name=""InputAreaBorder"">
+                <Border Grid.Row=""2"" Grid.Column=""1"" Background=""#1E1E1E"" CornerRadius=""0"" Padding=""15,15,20,15"" x:Name=""InputAreaBorder"">
                 <StackPanel>
                     <!-- Warning Bar -->
                     <Border x:Name=""WarningBar"" Visibility=""Collapsed"" Background=""#33CC9900"" BorderBrush=""#66CC9900"" BorderThickness=""1"" CornerRadius=""8"" Padding=""12,8"" Margin=""0,0,0,10"">
@@ -891,7 +794,7 @@ namespace ADDGH
                         <Border Background=""#2A2A2A"" BorderBrush=""#333333"" BorderThickness=""1"" CornerRadius=""8"" Padding=""4"" Margin=""0,0,0,8"">
                             <TextBox x:Name=""TxtInput"" Background=""Transparent"" Foreground=""#FFF"" BorderThickness=""0"" Padding=""14,10,14,10"" FontSize=""14"" AcceptsReturn=""True"" VerticalScrollBarVisibility=""Auto"" TextWrapping=""Wrap"" MinHeight=""36"" MaxHeight=""116"" CaretBrush=""White"" ToolTip=""可在此处输入；Ctrl+V 粘贴文件或截图即可加入附件""/>
                         </Border>
-                        <Grid>
+                        <Grid Margin=""0,0,6,0"">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width=""Auto""/>
                                 <ColumnDefinition Width=""Auto""/>
@@ -1002,7 +905,7 @@ namespace ADDGH
                 </Border>
 
             <!-- 电池库扩展区 -->
-                <Border Grid.Row=""4"" Grid.Column=""1"" Background=""#111111"" BorderBrush=""#333333"" BorderThickness=""0,1,0,0"" x:Name=""LibraryPanel"" CornerRadius=""0,0,16,16"">
+                <Border Grid.Row=""3"" Grid.Column=""1"" Background=""#111111"" BorderBrush=""#333333"" BorderThickness=""0,1,0,0"" x:Name=""LibraryPanel"" CornerRadius=""0"">
                     <Grid Margin=""15"">
                         <Grid.RowDefinitions>
                             <RowDefinition Height=""Auto""/>
@@ -1023,20 +926,20 @@ namespace ADDGH
                     </Grid>
                 </Border>
 
-                <Border Grid.Row=""2"" Grid.Column=""2"" Grid.RowSpan=""2"" x:Name=""CodeViewBorder"" Background=""#141414"" CornerRadius=""0,0,16,0"" BorderBrush=""#2A2A2A"" BorderThickness=""1,0,0,0"">
+                <Border Grid.Row=""1"" Grid.Column=""2"" Grid.RowSpan=""2"" x:Name=""CodeViewBorder"" Background=""#141414"" CornerRadius=""0"" BorderBrush=""#2A2A2A"" BorderThickness=""1,0,0,0"">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height=""*""/>
                             <RowDefinition Height=""Auto""/>
                         </Grid.RowDefinitions>
                         <Border Grid.Row=""0"" Margin=""15,10,15,0"" Background=""Transparent""><RichTextBox x:Name=""RichCodeView"" Background=""Transparent"" Foreground=""#B8B8B8"" BorderThickness=""0"" FontSize=""12"" FontFamily=""Consolas, Monaco, Courier New"" IsReadOnly=""True"" IsDocumentEnabled=""True"" VerticalScrollBarVisibility=""Auto"" HorizontalScrollBarVisibility=""Disabled"" CaretBrush=""#888"" Padding=""0""/></Border>
-                        <Border Grid.Row=""1"" x:Name=""CodeCanvasIssuesHost"" Background=""#1E1E1E"" CornerRadius=""0,0,16,0"" BorderBrush=""#2A2A2A"" BorderThickness=""0,1,0,0"" MinHeight=""120""><DockPanel Margin=""15,10,15,12"" LastChildFill=""True""><TextBlock DockPanel.Dock=""Top"" Text=""画布诊断"" Foreground=""#888"" FontSize=""11"" FontWeight=""SemiBold"" Margin=""0,0,0,8""/><ScrollViewer VerticalScrollBarVisibility=""Auto"" HorizontalScrollBarVisibility=""Disabled""><TextBox x:Name=""TxtCanvasIssues"" IsReadOnly=""True"" TextWrapping=""Wrap"" AcceptsReturn=""True"" Background=""Transparent"" Foreground=""#C8C8C8"" BorderThickness=""0"" FontSize=""12"" Padding=""0"" CaretBrush=""#888""/></ScrollViewer></DockPanel></Border>
+                        <Border Grid.Row=""1"" x:Name=""CodeCanvasIssuesHost"" Background=""#1E1E1E"" CornerRadius=""0"" BorderBrush=""#2A2A2A"" BorderThickness=""0,1,0,0"" MinHeight=""120""><DockPanel Margin=""15,10,15,12"" LastChildFill=""True""><TextBlock DockPanel.Dock=""Top"" Text=""画布诊断"" Foreground=""#888"" FontSize=""11"" FontWeight=""SemiBold"" Margin=""0,0,0,8""/><ScrollViewer VerticalScrollBarVisibility=""Auto"" HorizontalScrollBarVisibility=""Disabled""><TextBox x:Name=""TxtCanvasIssues"" IsReadOnly=""True"" TextWrapping=""Wrap"" AcceptsReturn=""True"" Background=""Transparent"" Foreground=""#C8C8C8"" BorderThickness=""0"" FontSize=""12"" Padding=""0"" CaretBrush=""#888""/></ScrollViewer></DockPanel></Border>
                     </Grid>
                 </Border>
         </Grid> <!-- End MainLayout Grid -->
 
     <!-- 配置悬浮层 -->
-            <Grid x:Name=""SettingsOverlay"" Grid.Column=""0"" Panel.ZIndex=""20"" Margin=""0,60,0,0"" Background=""#A5000000"" Visibility=""Collapsed"">
+            <Grid x:Name=""SettingsOverlay"" Grid.Column=""0"" Panel.ZIndex=""20"" Margin=""0"" Background=""#A5000000"" Visibility=""Collapsed"">
             <Border Background=""#1E1E1E"" CornerRadius=""12"" Width=""380"" Height=""590"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"" Padding=""20"">
                 <StackPanel>
                     <TextBlock Text=""配置 API"" Foreground=""White"" FontSize=""16"" FontWeight=""SemiBold"" Margin=""0,0,0,15""/>
@@ -1135,55 +1038,8 @@ namespace ADDGH
                 ShutdownPlugin();
                 _window = null;
             };
-            _window.SourceInitialized += (s, e) => AttachWindowResizeHitTest();
+            _window.SourceInitialized += (s, e) => ApplyDarkSystemTitleBar();
             InitializeFloatingScrollbars();
-
-            _rootChromeBorder = (Border)_window.FindName("RootChromeBorder");
-
-            var headerBorder = (Border)_window.FindName("HeaderBorder");
-            if (headerBorder != null) headerBorder.MouseLeftButtonDown += (s, e) => BeginWindowHeaderDrag(e);
-
-            var txtHeaderTitle = (TextBlock)_window.FindName("TxtHeaderTitle");
-            if (txtHeaderTitle != null) txtHeaderTitle.MouseLeftButtonDown += (s, e) => { if (e.ClickCount >= 2) MinimizeToBall(); else BeginWindowHeaderDrag(e); };
-
-            var btnMinimize = (Button)_window.FindName("BtnMinimize");
-            if (btnMinimize != null)
-            {
-                btnMinimize.Click += (s, e) => _window.WindowState = WindowState.Minimized;
-            }
-
-            var btnMaxRestore = (Button)_window.FindName("BtnMaxRestore");
-            Action updateMaxRestoreButton = () =>
-            {
-                if (btnMaxRestore != null)
-                    btnMaxRestore.Content = _window.WindowState == WindowState.Maximized ? "❐" : "□";
-                UpdateWindowChromeForState();
-            };
-            if (btnMaxRestore != null)
-            {
-                btnMaxRestore.Click += (s, e) =>
-                {
-                    _window.WindowState = _window.WindowState == WindowState.Maximized
-                        ? WindowState.Normal
-                        : WindowState.Maximized;
-                    updateMaxRestoreButton();
-                };
-                _window.StateChanged += (s, e) => updateMaxRestoreButton();
-                updateMaxRestoreButton();
-            }
-
-            var btnClose = (Button)_window.FindName("BtnClose");
-            if (btnClose != null) {
-                btnClose.Click += (s, e) => {
-                    var sb = new Storyboard();
-                    var anim = new DoubleAnimation(1, 0, TimeSpan.FromSeconds(0.2));
-                    anim.Completed += (s2, e2) => _window.Close();
-                    Storyboard.SetTarget(anim, _window);
-                    Storyboard.SetTargetProperty(anim, new PropertyPath(Window.OpacityProperty));
-                    sb.Children.Add(anim);
-                    sb.Begin();
-                };
-            }
 
             _chatPanel = (StackPanel)_window.FindName("ChatPanel");
             _chatScroll = (ScrollViewer)_window.FindName("ChatScroll");
@@ -1262,11 +1118,16 @@ namespace ADDGH
             _richCodeView = (RichTextBox)_window.FindName("RichCodeView");
             if (_richCodeView != null)
                 _richCodeView.SizeChanged += (s, ev) => SyncFlowDocumentPageWidthToViewport(_richCodeView);
-            _codeHeaderTitle = (TextBlock)_window.FindName("CodeHeaderTitle");
             _btnToggleViewMode = (Button)_window.FindName("BtnToggleViewMode");
             _historyCol = (ColumnDefinition)_window.FindName("HistoryCol");
             _chatCol = (ColumnDefinition)_window.FindName("ChatCol");
             _codeCol = (ColumnDefinition)_window.FindName("CodeCol");
+            _window.SizeChanged += (s, e) =>
+            {
+                if (!_isHistorySidebarVisible) return;
+                ApplyHistorySidebarLayout();
+                UpdateWindowMinWidthForVisiblePanes();
+            };
             var btnToggleCode = (Button)_window.FindName("BtnToggleCode");
 
             _inputAreaBorder = (Border)_window.FindName("InputAreaBorder");
@@ -1282,7 +1143,6 @@ namespace ADDGH
                             _codeCol.MinWidth = PaneMinWidth;
                             _codeCol.Width = new GridLength(2, GridUnitType.Star);
                         }
-                    if (_codeHeaderTitle != null) _codeHeaderTitle.Visibility = Visibility.Visible;
                     if (_btnToggleViewMode != null) _btnToggleViewMode.Visibility = Visibility.Visible;
                     _widthBeforeCodeView = _window.ActualWidth > 0 ? _window.ActualWidth : _window.Width;
                     UpdateWindowMinWidthForVisiblePanes();
@@ -1290,7 +1150,8 @@ namespace ADDGH
                     double maxWorkAreaWidth = SystemParameters.WorkArea.Width;
                     if (_window.Width < desiredWidth)
                         _window.Width = Math.Min(desiredWidth, Math.Max(_window.MinWidth, maxWorkAreaWidth));
-                        if (_inputAreaBorder != null) _inputAreaBorder.CornerRadius = new CornerRadius(0, 0, 0, 16);
+                    if (_isHistorySidebarVisible) ApplyHistorySidebarLayout();
+                    if (_inputAreaBorder != null) _inputAreaBorder.CornerRadius = new CornerRadius(0);
                     StartGrasshopperCodeSurfaceHooks();
                     SyncCodeIssuesStripHeightToInputArea();
                     UpdateCodeView();
@@ -1299,13 +1160,13 @@ namespace ADDGH
                             _codeCol.MinWidth = 0;
                             _codeCol.Width = new GridLength(0);
                         }
-                    if (_codeHeaderTitle != null) _codeHeaderTitle.Visibility = Visibility.Collapsed;
                     if (_btnToggleViewMode != null) _btnToggleViewMode.Visibility = Visibility.Collapsed;
                     UpdateWindowMinWidthForVisiblePanes();
                     if (!double.IsNaN(_widthBeforeCodeView) && _widthBeforeCodeView >= _window.MinWidth)
                         _window.Width = _widthBeforeCodeView;
                     _widthBeforeCodeView = double.NaN;
-                        if (_inputAreaBorder != null) _inputAreaBorder.CornerRadius = new CornerRadius(0, 0, 16, 16);
+                    if (_isHistorySidebarVisible) ApplyHistorySidebarLayout();
+                    if (_inputAreaBorder != null) _inputAreaBorder.CornerRadius = new CornerRadius(0);
                 }
             };
             }
@@ -2681,12 +2542,8 @@ namespace ADDGH
 
             if (visible)
             {
-                if (_historyCol != null) _historyCol.Width = new GridLength(320);
                 _historySidebar.Visibility = Visibility.Visible;
-                _historySidebar.BeginAnimation(FrameworkElement.WidthProperty, null);
-                _historySidebar.Width = double.NaN;
-                _historySidebar.Height = double.NaN;
-                _historySidebar.VerticalAlignment = VerticalAlignment.Stretch;
+                ApplyHistorySidebarLayout();
                 RefreshHistorySidebar();
                 UpdateWindowMinWidthForVisiblePanes();
             }
@@ -2695,7 +2552,44 @@ namespace ADDGH
                 _historySidebar.BeginAnimation(FrameworkElement.WidthProperty, null);
                 _historySidebar.Visibility = Visibility.Collapsed;
                 if (_historyCol != null) _historyCol.Width = new GridLength(0);
+                Grid.SetColumnSpan(_historySidebar, 1);
+                _historySidebar.Width = double.NaN;
                 UpdateWindowMinWidthForVisiblePanes();
+            }
+        }
+
+        private static bool ShouldOverlayHistorySidebar()
+        {
+            double windowWidth = _window != null && _window.ActualWidth > 0
+                ? _window.ActualWidth
+                : (_window != null ? _window.Width : DefaultWindowWidth);
+            double requiredWidth = (_isCodeVisible ? PaneMinWidth * 2 : DefaultWindowWidth) + HistorySidebarWidth;
+            return windowWidth < requiredWidth;
+        }
+
+        private static void ApplyHistorySidebarLayout()
+        {
+            if (_historySidebar == null) return;
+
+            bool overlay = ShouldOverlayHistorySidebar();
+            _historySidebar.BeginAnimation(FrameworkElement.WidthProperty, null);
+            _historySidebar.Height = double.NaN;
+            _historySidebar.VerticalAlignment = VerticalAlignment.Stretch;
+            Grid.SetColumn(_historySidebar, 0);
+
+            if (overlay)
+            {
+                if (_historyCol != null) _historyCol.Width = new GridLength(0);
+                Grid.SetColumnSpan(_historySidebar, 3);
+                _historySidebar.HorizontalAlignment = HorizontalAlignment.Left;
+                _historySidebar.Width = Math.Min(HistorySidebarWidth, Math.Max(0, _window?.ActualWidth ?? HistorySidebarWidth));
+            }
+            else
+            {
+                if (_historyCol != null) _historyCol.Width = new GridLength(HistorySidebarWidth);
+                Grid.SetColumnSpan(_historySidebar, 1);
+                _historySidebar.HorizontalAlignment = HorizontalAlignment.Stretch;
+                _historySidebar.Width = double.NaN;
             }
         }
 
