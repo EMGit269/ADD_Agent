@@ -85,7 +85,13 @@ namespace ADDGH
                     {
                         float x = argsObj["x"]?.ToObject<float>() ?? 0f;
                         float y = argsObj["y"]?.ToObject<float>() ?? 0f;
-                        result.ToolResult = ExecuteAddGhComponent(name ?? "", x, y, label, cguid);
+                        result.ToolResult = ExecuteAddGhComponent(
+                            name ?? "",
+                            x,
+                            y,
+                            label,
+                            cguid,
+                            argsObj["graph_mapper_type"]?.ToString() ?? argsObj["graph_type"]?.ToString());
                         if (!result.ToolResult.StartsWith("Error:")) result.AddComp++;
                     }
                 }
@@ -111,7 +117,8 @@ namespace ADDGH
                         ReadNullableDouble(argsObj, "min"),
                         ReadNullableDouble(argsObj, "max"),
                         ReadNullableInt(argsObj, "decimals"),
-                        argsObj["property"]?.ToString());
+                        argsObj["property"]?.ToString(),
+                        argsObj["graph_mapper_type"]?.ToString() ?? argsObj["graph_type"]?.ToString());
                 }
                 else if (funcName == "remove_gh_connection")
                 {

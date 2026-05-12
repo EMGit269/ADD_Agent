@@ -83,9 +83,13 @@ namespace ADDGH
         private static Border _warningBar;
         private static TextBlock _txtWarning;
         private static Button _btnCloseWarning;
+        private static Button _btnModeDropdown;
         private static Button _btnModeNormal;
         private static Button _btnModeCSharp;
         private static Button _btnModePython;
+        private static MenuItem _menuModeNormal;
+        private static MenuItem _menuModeCSharp;
+        private static MenuItem _menuModePython;
 
         private enum LayoutMode
         {
@@ -226,6 +230,27 @@ namespace ADDGH
 
         private static void UpdateLayoutModeButtons()
         {
+            string ModeLabel(LayoutMode mode)
+            {
+                switch (mode)
+                {
+                    case LayoutMode.CSharpFirst: return "C# 优先";
+                    case LayoutMode.PythonFirst: return "Py 优先";
+                    default: return "常规";
+                }
+            }
+
+            if (_btnModeDropdown != null)
+            {
+                _btnModeDropdown.IsEnabled = !_isGenerating;
+                _btnModeDropdown.Content = ModeLabel(_layoutMode) + " ▾";
+                _btnModeDropdown.Foreground = new SolidColorBrush(Color.FromRgb(160, 160, 160));
+            }
+
+            if (_menuModeNormal != null) _menuModeNormal.Header = (_layoutMode == LayoutMode.Normal ? "✓ " : "   ") + "常规";
+            if (_menuModeCSharp != null) _menuModeCSharp.Header = (_layoutMode == LayoutMode.CSharpFirst ? "✓ " : "   ") + "C# 优先";
+            if (_menuModePython != null) _menuModePython.Header = (_layoutMode == LayoutMode.PythonFirst ? "✓ " : "   ") + "Py 优先";
+
             void Paint(Button button, bool selected)
             {
                 if (button == null) return;
@@ -243,6 +268,7 @@ namespace ADDGH
 
         private static List<object> _messages = new List<object>();
         private static string _cachedCanvasState = null;  // 画布状态缓存
+        private static string _cachedRhinoUnitSignature = null;
         private static bool _canvasChanged = true;  // 画布是否改变标记
 
         private static readonly HttpClient _httpClient = new HttpClient() { Timeout = TimeSpan.FromMinutes(5) };
@@ -842,11 +868,43 @@ namespace ADDGH
                                 </Button.ContextMenu>
                             </Button>
 
-                            <StackPanel Grid.Column=""5"" Orientation=""Horizontal"" HorizontalAlignment=""Left"" VerticalAlignment=""Center"" Margin=""10,0,0,0"">
-                                <Button x:Name=""BtnModeNormal"" Content=""常规"" Width=""42"" Height=""22"" Background=""Transparent"" Foreground=""#A0A0A0"" BorderBrush=""#3A3A3A"" BorderThickness=""1"" FontSize=""11"" Cursor=""Hand"" ToolTip=""常规排布模式""/>
-                                <Button x:Name=""BtnModeCSharp"" Content=""C#"" Width=""32"" Height=""22"" Background=""Transparent"" Foreground=""#A0A0A0"" BorderBrush=""#3A3A3A"" BorderThickness=""1,1,0,1"" FontSize=""11"" Cursor=""Hand"" ToolTip=""C# 优先排布模式""/>
-                                <Button x:Name=""BtnModePython"" Content=""Py"" Width=""32"" Height=""22"" Background=""Transparent"" Foreground=""#A0A0A0"" BorderBrush=""#3A3A3A"" BorderThickness=""1"" FontSize=""11"" Cursor=""Hand"" ToolTip=""Python 优先排布模式""/>
-                            </StackPanel>
+                            <Button x:Name=""BtnModeDropdown"" Grid.Column=""5"" Style=""{StaticResource IconButtonStyle}"" Content=""常规 ▾"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""排布模式"" HorizontalAlignment=""Left"" VerticalAlignment=""Center"" Margin=""10,0,0,0"">
+                                <Button.ContextMenu>
+                                    <ContextMenu Background=""#1E1E1E"" Foreground=""#E0E0E0"" BorderBrush=""#333"" BorderThickness=""1"" Padding=""4"">
+                                        <ContextMenu.Template>
+                                            <ControlTemplate TargetType=""ContextMenu"">
+                                                <Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""4"" Padding=""{TemplateBinding Padding}"">
+                                                    <ItemsPresenter/>
+                                                </Border>
+                                            </ControlTemplate>
+                                        </ContextMenu.Template>
+                                        <ContextMenu.Resources>
+                                            <Style TargetType=""MenuItem"">
+                                                <Setter Property=""Foreground"" Value=""#E0E0E0""/>
+                                                <Setter Property=""Background"" Value=""Transparent""/>
+                                                <Setter Property=""Padding"" Value=""12,8""/>
+                                                <Setter Property=""Template"">
+                                                    <Setter.Value>
+                                                        <ControlTemplate TargetType=""MenuItem"">
+                                                            <Border x:Name=""Bg"" Background=""{TemplateBinding Background}"" CornerRadius=""4"">
+                                                                <ContentPresenter Content=""{TemplateBinding Header}"" Margin=""{TemplateBinding Padding}""/>
+                                                            </Border>
+                                                            <ControlTemplate.Triggers>
+                                                                <Trigger Property=""IsHighlighted"" Value=""True"">
+                                                                    <Setter TargetName=""Bg"" Property=""Background"" Value=""#333333""/>
+                                                                </Trigger>
+                                                            </ControlTemplate.Triggers>
+                                                        </ControlTemplate>
+                                                    </Setter.Value>
+                                                </Setter>
+                                            </Style>
+                                        </ContextMenu.Resources>
+                                        <MenuItem x:Name=""MenuModeNormal"" Header=""常规""/>
+                                        <MenuItem x:Name=""MenuModeCSharp"" Header=""C# 优先""/>
+                                        <MenuItem x:Name=""MenuModePython"" Header=""Py 优先""/>
+                                    </ContextMenu>
+                                </Button.ContextMenu>
+                            </Button>
                             
                             <Grid x:Name=""ContextMeterHost"" Grid.Column=""6"" Width=""17"" Height=""17"" Margin=""0,0,10,0"" VerticalAlignment=""Center"" ToolTip=""上下文使用情况"">
                                 <Ellipse Stroke=""#4A4A4A"" StrokeThickness=""1.3"" Fill=""Transparent""/>
@@ -1011,13 +1069,29 @@ namespace ADDGH
             _chatScroll = (ScrollViewer)_window.FindName("ChatScroll");
             _txtInput = (TextBox)_window.FindName("TxtInput");
             _btnSend = (Button)_window.FindName("BtnSend");
+            _btnModeDropdown = (Button)_window.FindName("BtnModeDropdown");
             _btnModeNormal = (Button)_window.FindName("BtnModeNormal");
             _btnModeCSharp = (Button)_window.FindName("BtnModeCSharp");
             _btnModePython = (Button)_window.FindName("BtnModePython");
+            _menuModeNormal = (MenuItem)_window.FindName("MenuModeNormal");
+            _menuModeCSharp = (MenuItem)_window.FindName("MenuModeCSharp");
+            _menuModePython = (MenuItem)_window.FindName("MenuModePython");
             _layoutMode = ReadLayoutModeSetting();
+            if (_btnModeDropdown != null) {
+                _btnModeDropdown.Click += (s, e) => {
+                    if (_btnModeDropdown.ContextMenu != null) {
+                        _btnModeDropdown.ContextMenu.PlacementTarget = _btnModeDropdown;
+                        _btnModeDropdown.ContextMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.Top;
+                        _btnModeDropdown.ContextMenu.IsOpen = true;
+                    }
+                };
+            }
             if (_btnModeNormal != null) _btnModeNormal.Click += (s, e) => SetLayoutMode(LayoutMode.Normal);
             if (_btnModeCSharp != null) _btnModeCSharp.Click += (s, e) => SetLayoutMode(LayoutMode.CSharpFirst);
             if (_btnModePython != null) _btnModePython.Click += (s, e) => SetLayoutMode(LayoutMode.PythonFirst);
+            if (_menuModeNormal != null) _menuModeNormal.Click += (s, e) => SetLayoutMode(LayoutMode.Normal);
+            if (_menuModeCSharp != null) _menuModeCSharp.Click += (s, e) => SetLayoutMode(LayoutMode.CSharpFirst);
+            if (_menuModePython != null) _menuModePython.Click += (s, e) => SetLayoutMode(LayoutMode.PythonFirst);
             UpdateLayoutModeButtons();
             _historySidebar = (Border)_window.FindName("HistorySidebar");
             _historyListPanel = (StackPanel)_window.FindName("HistoryListPanel");
@@ -3813,6 +3887,7 @@ namespace ADDGH
                                         x = new { type = "number", description = "画布 X 坐标" },
                                         y = new { type = "number", description = "画布 Y 坐标" },
                                         label = new { type = "string", description = "仅限 Slider/Panel 的显示标签。普通电池严禁使用。" },
+                                        graph_mapper_type = new { type = "string", description = "可选：Graph Mapper 曲线类型。Graph Mapper 未指定时默认 Bezier；可填 Bezier、Linear、Parabola、Sine、Gaussian、Power、Square Root 等。" },
                                         summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
                                         summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
                                     },
@@ -3866,6 +3941,7 @@ namespace ADDGH
                                         id = new { type = "string", description = "电池 GUID" },
                                         value = new { type = "string", description = "脚本/表达式/Panel：要写入的完整文本或代码（多行可用 \\n）。Panel 必填；Slider 填数字字符串。" },
                                         property = new { type = "string", description = "可选：精确写入的成员名（属性或字段，大小写不敏感）。Python/GhPython/Python 3 Script 填 **Text**；勿填 Description。其它如 Code、Script、PythonCode 等以 get_gh_components 提示为准；不填则启发式自动选（会优先 Text）。" },
+                                        graph_mapper_type = new { type = "string", description = "可选：当 id 是 Graph Mapper 时设置曲线类型；未指定时默认 Bezier。也可把类型写在 value 中。" },
                                         min = new { type = "number", description = "可选：Slider 最小值" },
                                         max = new { type = "number", description = "可选：Slider 最大值" },
                                         decimals = new { type = "integer", description = "可选：Slider 小数位数（0-10）" },
@@ -3915,6 +3991,7 @@ namespace ADDGH
                                                     x = new { type = "number", description = "画布 X 坐标" },
                                                     y = new { type = "number", description = "画布 Y 坐标" },
                                                     value = new { type = "string", description = "可选：Slider/Panel 初值；**脚本类电池（含 Python 3 Script）的源码**（写入 **Text**，勿当 Description）。" },
+                                                    graph_mapper_type = new { type = "string", description = "可选：Graph Mapper 曲线类型。未指定时默认 Bezier；也可把类型写在 value 中。" },
                                                     min = new { type = "number", description = "可选：如果是 Slider，设置最小值" },
                                                     max = new { type = "number", description = "可选：如果是 Slider，设置最大值" },
                                                     decimals = new { type = "integer", description = "可选：如果是 Slider，设置小数位数" }
@@ -4306,7 +4383,13 @@ namespace ADDGH
                                 else {
                                     float x = argsObj["x"]?.ToObject<float>() ?? 0f;
                                     float y = argsObj["y"]?.ToObject<float>() ?? 0f;
-                                    toolResult = ExecuteAddGhComponent(name ?? "", x, y, label, cguid);
+                                    toolResult = ExecuteAddGhComponent(
+                                        name ?? "",
+                                        x,
+                                        y,
+                                        label,
+                                        cguid,
+                                        argsObj["graph_mapper_type"]?.ToString() ?? argsObj["graph_type"]?.ToString());
                                     if (!toolResult.StartsWith("Error:")) addComp++;
                                 }
                             }
@@ -4327,8 +4410,14 @@ namespace ADDGH
                                 double? min = argsObj["min"] == null || argsObj["min"].Type == JTokenType.Null ? (double?)null : argsObj["min"].ToObject<double>();
                                 double? max = argsObj["max"] == null || argsObj["max"].Type == JTokenType.Null ? (double?)null : argsObj["max"].ToObject<double>();
                                 int? decimals = argsObj["decimals"] == null || argsObj["decimals"].Type == JTokenType.Null ? (int?)null : argsObj["decimals"].ToObject<int>();
-                                toolResult = ExecuteSetGhComponentValue(argsObj["id"]?.ToString(), val, min, max, decimals,
-                                    argsObj["property"]?.ToString());
+                                toolResult = ExecuteSetGhComponentValue(
+                                    argsObj["id"]?.ToString(),
+                                    val,
+                                    min,
+                                    max,
+                                    decimals,
+                                    argsObj["property"]?.ToString(),
+                                    argsObj["graph_mapper_type"]?.ToString() ?? argsObj["graph_type"]?.ToString());
                             }
                             else if (funcName == "remove_gh_connection") {
                                 toolResult = ExecuteRemoveGhConnection(
@@ -4555,9 +4644,49 @@ namespace ADDGH
             return result;
         }
 
+        private static string GetRhinoUnitSignature()
+        {
+            var rhinoDoc = Rhino.RhinoDoc.ActiveDoc;
+            if (rhinoDoc == null) return "no-rhino-doc";
+            return string.Join("|",
+                rhinoDoc.ModelUnitSystem,
+                rhinoDoc.PageUnitSystem,
+                rhinoDoc.ModelAbsoluteTolerance.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                rhinoDoc.ModelRelativeTolerance.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                rhinoDoc.ModelAngleToleranceDegrees.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                rhinoDoc.PageAbsoluteTolerance.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                rhinoDoc.PageRelativeTolerance.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                rhinoDoc.PageAngleToleranceDegrees.ToString("R", System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        private static JObject BuildRhinoUnitsJson()
+        {
+            var rhinoDoc = Rhino.RhinoDoc.ActiveDoc;
+            if (rhinoDoc == null)
+            {
+                return new JObject { ["available"] = false };
+            }
+
+            return new JObject
+            {
+                ["available"] = true,
+                ["model_unit_system"] = rhinoDoc.ModelUnitSystem.ToString(),
+                ["model_unit_system_value"] = (int)rhinoDoc.ModelUnitSystem,
+                ["page_unit_system"] = rhinoDoc.PageUnitSystem.ToString(),
+                ["page_unit_system_value"] = (int)rhinoDoc.PageUnitSystem,
+                ["model_absolute_tolerance"] = rhinoDoc.ModelAbsoluteTolerance,
+                ["model_relative_tolerance"] = rhinoDoc.ModelRelativeTolerance,
+                ["model_angle_tolerance_degrees"] = rhinoDoc.ModelAngleToleranceDegrees,
+                ["page_absolute_tolerance"] = rhinoDoc.PageAbsoluteTolerance,
+                ["page_relative_tolerance"] = rhinoDoc.PageRelativeTolerance,
+                ["page_angle_tolerance_degrees"] = rhinoDoc.PageAngleToleranceDegrees
+            };
+        }
+
         private static string ExecuteGetGhComponents()
         {
-            if (!_canvasChanged && _cachedCanvasState != null) {
+            string currentUnitSignature = GetRhinoUnitSignature();
+            if (!_canvasChanged && _cachedCanvasState != null && string.Equals(_cachedRhinoUnitSignature, currentUnitSignature, StringComparison.Ordinal)) {
                 return _cachedCanvasState;
             }
 
@@ -4569,6 +4698,7 @@ namespace ADDGH
 
                 var graph = new JObject();
                 graph["timestamp"] = DateTime.Now.ToString("HH:mm:ss");
+                graph["rhino_units"] = BuildRhinoUnitsJson();
                 
                 var globalErrors = new JArray();
                 var components = new JArray();
@@ -4692,6 +4822,7 @@ namespace ADDGH
                 
                 result = graph.ToString(Formatting.None); // 使用压缩格式节省 Token
                 _cachedCanvasState = result;
+                _cachedRhinoUnitSignature = currentUnitSignature;
                 _canvasChanged = false;
                 UpdateCodeView();
             }));
@@ -4706,6 +4837,7 @@ namespace ADDGH
             j["nickname"] = obj.NickName;
             j["id"]       = obj.InstanceGuid.ToString();
             j["pivot"]    = new JObject { { "x", Math.Round(obj.Attributes.Pivot.X) }, { "y", Math.Round(obj.Attributes.Pivot.Y) } };
+            if (IsGraphMapperObject(obj)) j["graph_mapper_type"] = CurrentGraphMapperTypeName(obj) ?? "";
             if (obj is IGH_ActiveObject ao && ao.RuntimeMessageLevel != GH_RuntimeMessageLevel.Blank)
             {
                 var msgs = new JArray();
@@ -4801,7 +4933,12 @@ namespace ADDGH
                     foreach (var mid in g.Objects()) members.Add(mid.ToString());
                     groups.Add(new JObject { ["id"] = g.InstanceGuid.ToString(), ["name"] = g.NickName, ["members"] = members });
                 }
-                result = new JObject { ["components"] = arr, ["groups"] = groups }.ToString(Formatting.None);
+                result = new JObject
+                {
+                    ["rhino_units"] = BuildRhinoUnitsJson(),
+                    ["components"] = arr,
+                    ["groups"] = groups
+                }.ToString(Formatting.None);
             }));
             return result;
         }
@@ -5101,6 +5238,108 @@ namespace ADDGH
             return proxy?.CreateInstance() as Grasshopper.Kernel.IGH_DocumentObject;
         }
 
+        private const string DefaultGraphMapperType = "Bezier";
+
+        private static bool IsGraphMapperObject(Grasshopper.Kernel.IGH_DocumentObject obj)
+        {
+            return obj is Grasshopper.Kernel.Special.GH_GraphMapper;
+        }
+
+        private static string FirstNonEmpty(params string[] values)
+        {
+            if (values == null) return null;
+            foreach (string value in values)
+            {
+                if (!string.IsNullOrWhiteSpace(value)) return value.Trim();
+            }
+            return null;
+        }
+
+        private static string GetGraphMapperTypeRequest(JToken token, string valueFallback = null)
+        {
+            if (token == null) return FirstNonEmpty(valueFallback, DefaultGraphMapperType);
+            return FirstNonEmpty(
+                token["graph_mapper_type"]?.ToString(),
+                token["graph_type"]?.ToString(),
+                token["mapper_type"]?.ToString(),
+                valueFallback,
+                DefaultGraphMapperType);
+        }
+
+        private static string CurrentGraphMapperTypeName(Grasshopper.Kernel.IGH_DocumentObject obj)
+        {
+            var mapper = obj as Grasshopper.Kernel.Special.GH_GraphMapper;
+            return mapper?.Graph?.Name;
+        }
+
+        private static Grasshopper.Kernel.GH_GraphProxy FindGraphMapperProxy(string keyword)
+        {
+            var proxies = Grasshopper.Instances.ComponentServer?.GraphProxies;
+            if (proxies == null) return null;
+
+            string wanted = (keyword ?? DefaultGraphMapperType).Trim();
+            if (wanted.Length == 0) wanted = DefaultGraphMapperType;
+
+            var list = proxies.ToList();
+            var exact = list.FirstOrDefault(p => string.Equals(p.Name, wanted, StringComparison.OrdinalIgnoreCase));
+            if (exact != null) return exact;
+
+            exact = list.FirstOrDefault(p => string.Equals(p.Type?.Name, wanted, StringComparison.OrdinalIgnoreCase));
+            if (exact != null) return exact;
+
+            return list.FirstOrDefault(p =>
+                (!string.IsNullOrWhiteSpace(p.Name) && p.Name.IndexOf(wanted, StringComparison.OrdinalIgnoreCase) >= 0) ||
+                (!string.IsNullOrWhiteSpace(p.Description) && p.Description.IndexOf(wanted, StringComparison.OrdinalIgnoreCase) >= 0) ||
+                (!string.IsNullOrWhiteSpace(p.Type?.Name) && p.Type.Name.IndexOf(wanted, StringComparison.OrdinalIgnoreCase) >= 0));
+        }
+
+        private static string DescribeGraphMapperTypes(int maxNames = 20)
+        {
+            var proxies = Grasshopper.Instances.ComponentServer?.GraphProxies;
+            if (proxies == null || proxies.Count == 0) return "";
+            return " 可用类型：" + string.Join(", ", proxies.Select(p => p.Name).Where(n => !string.IsNullOrWhiteSpace(n)).Take(maxNames));
+        }
+
+        private static bool TrySetGraphMapperType(Grasshopper.Kernel.IGH_DocumentObject obj, string graphType, out string detail)
+        {
+            detail = "";
+            var mapper = obj as Grasshopper.Kernel.Special.GH_GraphMapper;
+            if (mapper == null)
+            {
+                detail = "Error: 该电池不是 Graph Mapper。";
+                return false;
+            }
+
+            string requested = FirstNonEmpty(graphType, DefaultGraphMapperType);
+            var proxy = FindGraphMapperProxy(requested);
+            if (proxy == null)
+            {
+                detail = "Error: 找不到 Graph Mapper 类型 '" + requested + "'。" + DescribeGraphMapperTypes();
+                return false;
+            }
+
+            var graph = Grasshopper.Instances.ComponentServer.EmitGraph(proxy.GUID);
+            if (graph == null)
+            {
+                detail = "Error: 无法创建 Graph Mapper 类型 '" + proxy.Name + "'。";
+                return false;
+            }
+
+            try { graph.PrepareForUse(); } catch { }
+
+            if (mapper.Container == null)
+                mapper.Container = new Grasshopper.Kernel.Graphs.GH_GraphContainer(graph, 0.0, 1.0, 0.0, 1.0);
+            else
+                mapper.Container.Graph = graph;
+
+            try { mapper.Container.PrepareForUse(); } catch { }
+            mapper.ExpireSolution(true);
+            try { mapper.Attributes?.ExpireLayout(); } catch { }
+
+            detail = "Graph Mapper 类型=" + proxy.Name;
+            return true;
+        }
+
         private static bool IsScriptModeAuxiliaryComponentAllowed(Grasshopper.Kernel.IGH_DocumentObject obj)
         {
             if (_layoutMode == LayoutMode.Normal) return true;
@@ -5117,7 +5356,7 @@ namespace ADDGH
                 + displayName + " 属于 " + category + "，已拒绝创建。核心建模逻辑请写入 C#/Python 脚本电池。";
         }
 
-        private static string ExecuteAddGhComponent(string name, float x, float y, string label = null, string componentGuid = null)
+        private static string ExecuteAddGhComponent(string name, float x, float y, string label = null, string componentGuid = null, string graphMapperType = null)
         {
             string result = "";
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
@@ -5145,12 +5384,20 @@ namespace ADDGH
                 if (!string.IsNullOrEmpty(label)) obj.NickName = label;
                 obj.Attributes.ExpireLayout();
 
+                string graphMapperDetail = null;
+                if (IsGraphMapperObject(obj) && !TrySetGraphMapperType(obj, FirstNonEmpty(graphMapperType, DefaultGraphMapperType), out graphMapperDetail))
+                {
+                    result = graphMapperDetail;
+                    return;
+                }
+
                 doc.AddObject(obj, false);
                 _canvasChanged = true;
                 try { doc.ScheduleSolution(150); } 
                 catch (Exception ex) { AddGhLog.Warn("ExecuteAddGhComponent Schedule failed: " + ex.Message); }
                 string displayName = !string.IsNullOrWhiteSpace(name) ? name : (obj.Name ?? "组件");
                 result = "已添加 " + displayName + " (ID: " + obj.InstanceGuid + ").";
+                if (!string.IsNullOrWhiteSpace(graphMapperDetail)) result += " " + graphMapperDetail + "。";
             }));
             return result;
         }
@@ -5710,7 +5957,7 @@ namespace ADDGH
             return names.Count == 0 ? "" : " 可写 string 成员：" + string.Join(", ", names);
         }
 
-        private static string ExecuteSetGhComponentValue(string id, string value, double? min, double? max, int? decimals, string exactMember = null)
+        private static string ExecuteSetGhComponentValue(string id, string value, double? min, double? max, int? decimals, string exactMember = null, string graphMapperType = null)
         {
             string result = "";
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
@@ -5727,7 +5974,23 @@ namespace ADDGH
                     return;
                 }
 
-                if (obj is Grasshopper.Kernel.Special.GH_NumberSlider slider) {
+                if (IsGraphMapperObject(obj)) {
+                    string requestedGraphType = FirstNonEmpty(
+                        graphMapperType,
+                        string.Equals(exactMember, "graph_mapper_type", StringComparison.OrdinalIgnoreCase) ? value : null,
+                        string.Equals(exactMember, "graph_type", StringComparison.OrdinalIgnoreCase) ? value : null,
+                        value,
+                        DefaultGraphMapperType);
+                    if (!TrySetGraphMapperType(obj, requestedGraphType, out string graphMapperDetail))
+                    {
+                        result = graphMapperDetail;
+                        return;
+                    }
+                    _canvasChanged = true;
+                    try { doc.ScheduleSolution(150); }
+                    catch (Exception ex) { AddGhLog.Warn("ExecuteSetGhComponentValue (Graph Mapper) Schedule failed: " + ex.Message); }
+                    result = graphMapperDetail + "。";
+                } else if (obj is Grasshopper.Kernel.Special.GH_NumberSlider slider) {
                     List<string> changes = new List<string>();
                     
                     if (value != null) {
@@ -6608,6 +6871,7 @@ namespace ADDGH
                         float hx = c["x"]?.ToObject<float>() ?? 0;
                         float hy = c["y"]?.ToObject<float>() ?? 0;
                         string val = c["value"]?.ToString();
+                        string graphMapperType = GetGraphMapperTypeRequest(c, val);
                         double? min = c["min"]?.ToObject<double>();
                         double? max = c["max"]?.ToObject<double>();
                         int? decimals = c["decimals"]?.ToObject<int>();
@@ -6617,6 +6881,12 @@ namespace ADDGH
                         obj.CreateAttributes();
                         obj.Attributes.Pivot = new System.Drawing.PointF(hx, hy);
                         if (!string.IsNullOrEmpty(helperLabel)) obj.NickName = helperLabel;
+                        bool isGraphMapper = IsGraphMapperObject(obj);
+                        if (isGraphMapper && !TrySetGraphMapperType(obj, graphMapperType, out string graphMapperDetail))
+                        {
+                            result = graphMapperDetail;
+                            return;
+                        }
                         doc.AddObject(obj, false);
 
                         if (obj is Grasshopper.Kernel.Special.GH_NumberSlider slider)
@@ -6630,6 +6900,9 @@ namespace ADDGH
                         else if (obj is Grasshopper.Kernel.Special.GH_Panel panel && !string.IsNullOrEmpty(val))
                         {
                             panel.UserText = val;
+                        }
+                        else if (isGraphMapper)
+                        {
                         }
 
                         createdObjs[alias] = obj;
@@ -6816,6 +7089,7 @@ namespace ADDGH
                         float x = c["x"]?.ToObject<float>() ?? 0;
                         float y = c["y"]?.ToObject<float>() ?? 0;
                         string val = c["value"]?.ToString();
+                        string graphMapperType = GetGraphMapperTypeRequest(c, val);
                         double? min = c["min"]?.ToObject<double>();
                         double? max = c["max"]?.ToObject<double>();
                         int? decimals = c["decimals"]?.ToObject<int>();
@@ -6825,6 +7099,12 @@ namespace ADDGH
                         obj.CreateAttributes();
                         obj.Attributes.Pivot = new System.Drawing.PointF(x, y);
                         if (!string.IsNullOrEmpty(label)) obj.NickName = label;
+                        bool isGraphMapper = IsGraphMapperObject(obj);
+                        if (isGraphMapper && !TrySetGraphMapperType(obj, graphMapperType, out string graphMapperDetail))
+                        {
+                            result = graphMapperDetail;
+                            return;
+                        }
                         doc.AddObject(obj, false);
 
                         if (obj is Grasshopper.Kernel.Special.GH_NumberSlider slider)
@@ -6838,6 +7118,9 @@ namespace ADDGH
                         else if (obj is Grasshopper.Kernel.Special.GH_Panel panel && !string.IsNullOrEmpty(val))
                         {
                             panel.UserText = val;
+                        }
+                        else if (isGraphMapper)
+                        {
                         }
 
                         createdObjs[alias] = obj;
@@ -6922,6 +7205,7 @@ namespace ADDGH
                         float x = c["x"]?.ToObject<float>() ?? 0;
                         float y = c["y"]?.ToObject<float>() ?? 0;
                         string val = c["value"]?.ToString();
+                        string graphMapperType = GetGraphMapperTypeRequest(c, val);
                         double? min = c["min"]?.ToObject<double>();
                         double? max = c["max"]?.ToObject<double>();
                         int? decimals = c["decimals"]?.ToObject<int>();
@@ -6936,6 +7220,11 @@ namespace ADDGH
                             obj.CreateAttributes();
                             obj.Attributes.Pivot = new System.Drawing.PointF(x, y);
                             if (!string.IsNullOrEmpty(label)) obj.NickName = label;
+                            bool isGraphMapper = IsGraphMapperObject(obj);
+                            if (isGraphMapper && !TrySetGraphMapperType(obj, graphMapperType, out string graphMapperDetail)) {
+                                result = graphMapperDetail;
+                                return;
+                            }
                             doc.AddObject(obj, false);
 
                             if (obj is Grasshopper.Kernel.Special.GH_NumberSlider s) {
@@ -6944,6 +7233,8 @@ namespace ADDGH
                                 if (decimals.HasValue) s.Slider.DecimalPlaces = Math.Max(0, Math.Min(10, decimals.Value));
                                 if (!string.IsNullOrEmpty(val) && decimal.TryParse(val, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out decimal d))
                                     s.Slider.Value = d;
+                            }
+                            else if (isGraphMapper) {
                             }
                             else if (obj is Grasshopper.Kernel.Special.GH_Panel p && !string.IsNullOrEmpty(val)) {
                                 p.UserText = val;
@@ -7125,18 +7416,71 @@ namespace ADDGH
             return false;
         }
 
+        private static bool IsGhScriptEditorDisposed(GH_ScriptEditor editor)
+        {
+            if (editor == null) return true;
+            try
+            {
+                var pi = editor.GetType().GetProperty("IsDisposed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (pi?.GetValue(editor) is bool disposed) return disposed;
+            }
+            catch (Exception ex) { AddGhLog.Debug("IsGhScriptEditorDisposed: " + ex.Message); }
+            return false;
+        }
+
+        private static bool TrySetGhScriptEditorProperty(GH_ScriptEditor editor, string name, object value)
+        {
+            if (editor == null || string.IsNullOrWhiteSpace(name)) return false;
+            try
+            {
+                var pi = editor.GetType().GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (pi == null || !pi.CanWrite) return false;
+                pi.SetValue(editor, value);
+                return true;
+            }
+            catch (Exception ex) { AddGhLog.Debug("TrySetGhScriptEditorProperty " + name + ": " + ex.Message); }
+            return false;
+        }
+
+        private static bool TryInvokeGhScriptEditorMethod(GH_ScriptEditor editor, string name)
+        {
+            if (editor == null || string.IsNullOrWhiteSpace(name)) return false;
+            try
+            {
+                var mi = editor.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, Type.EmptyTypes, null);
+                if (mi == null) return false;
+                mi.Invoke(editor, null);
+                return true;
+            }
+            catch (Exception ex) { AddGhLog.Debug("TryInvokeGhScriptEditorMethod " + name + ": " + ex.Message); }
+            return false;
+        }
+
         /// <summary>
         /// 在脚本编辑器 UI 线程上同步执行（避免 Show 后立刻改控件与点 OK 时序错乱）。
         /// </summary>
         private static void GhScriptEditorRunOnUi(GH_ScriptEditor editor, Action work)
         {
             if (editor == null || work == null) return;
-            if (editor.IsDisposed) return;
-            void Do() { if (!editor.IsDisposed) work(); }
-            if (editor.InvokeRequired)
-                editor.Invoke((Action)Do);
-            else
-                Do();
+            if (IsGhScriptEditorDisposed(editor)) return;
+            void Do() { if (!IsGhScriptEditorDisposed(editor)) work(); }
+
+            try
+            {
+                var invokeRequired = editor.GetType().GetProperty("InvokeRequired", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (invokeRequired?.GetValue(editor) is bool required && required)
+                {
+                    var invoke = editor.GetType().GetMethod("Invoke", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Delegate) }, null);
+                    if (invoke != null)
+                    {
+                        invoke.Invoke(editor, new object[] { (Action)Do });
+                        return;
+                    }
+                }
+            }
+            catch (Exception ex) { AddGhLog.Debug("GhScriptEditorRunOnUi invoke: " + ex.Message); }
+
+            Do();
         }
 
         /// <summary> OK 已把脚本写回电池并会自行触发求解；此处仅轻量排队，避免与编辑器内部 NewSolution 重入。 </summary>
@@ -7201,12 +7545,12 @@ namespace ADDGH
 
                     if (isOpen)
                     {
-                        editor.WindowState = System.Windows.Forms.FormWindowState.Normal;
-                        editor.StartPosition = System.Windows.Forms.FormStartPosition.CenterParent;
+                        TrySetGhScriptEditorProperty(editor, "WindowState", System.Windows.Forms.FormWindowState.Normal);
+                        TrySetGhScriptEditorProperty(editor, "StartPosition", System.Windows.Forms.FormStartPosition.CenterParent);
                         if (!editor.Visible)
-                            editor.Show(canvas);
-                        editor.BringToFront();
-                        editor.Activate();
+                            editor.Show(Grasshopper.Instances.DocumentEditor);
+                        TryInvokeGhScriptEditorMethod(editor, "BringToFront");
+                        TryInvokeGhScriptEditorMethod(editor, "Activate");
                         result = "已打开或聚焦原生脚本编辑器。" + GetCanvasErrors(doc);
                         return;
                     }
@@ -7238,10 +7582,10 @@ namespace ADDGH
                     {
                         try
                         {
-                            editor.StartPosition = System.Windows.Forms.FormStartPosition.Manual;
-                            editor.ShowInTaskbar = false;
-                            editor.Location = new System.Drawing.Point(-10000, -10000);
-                            editor.Show(canvas);
+                            TrySetGhScriptEditorProperty(editor, "StartPosition", System.Windows.Forms.FormStartPosition.Manual);
+                            TrySetGhScriptEditorProperty(editor, "ShowInTaskbar", false);
+                            TrySetGhScriptEditorProperty(editor, "Location", new System.Drawing.Point(-10000, -10000));
+                            editor.Show(Grasshopper.Instances.DocumentEditor);
                             // 给一点时间让窗口初始化
                             System.Threading.Thread.Sleep(50);
                         }
@@ -7273,7 +7617,7 @@ namespace ADDGH
                     {
                         if (editor.Visible && existing == null)
                         {
-                            editor.Hide();
+                            TryInvokeGhScriptEditorMethod(editor, "Hide");
                             editor.Close();
                         }
                     }
@@ -7850,6 +8194,11 @@ namespace ADDGH
             return true;
         }
 
+        private static string TrimMessageForDisplay(string text)
+        {
+            return (text ?? "").TrimEnd(' ', '\t', '\r', '\n', '\u00A0');
+        }
+
         private static RichTextBox BuildMarkdownPanel(string text, bool alignRight = false, bool subdued = false)
         {
             Color bodyColor = subdued ? Color.FromRgb(205, 205, 205) : Color.FromRgb(235, 235, 235);
@@ -7878,6 +8227,7 @@ namespace ADDGH
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
                 IsDocumentEnabled = true
             };
+            text = TrimMessageForDisplay(text);
             if (string.IsNullOrEmpty(text)) return viewer;
 
             var lines = text.Replace("\r\n", "\n").Split('\n');
