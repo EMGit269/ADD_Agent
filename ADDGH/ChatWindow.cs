@@ -188,6 +188,23 @@ namespace ADDGH
                 : BuildSystemPrompt();
         }
 
+        private static List<object> BuildInitialSystemMessages()
+        {
+            string basePrompt = BuildSystemPrompt();
+            string skills = _layoutMode == LayoutMode.Normal ? GetSkillsSummary() : "";
+            var list = new List<object>();
+
+            if (string.IsNullOrWhiteSpace(skills) || DeploymentOptions.MergeSkillsIntoSameSystemPromptAsLibraryIndex)
+            {
+                list.Add(new { role = "system", content = basePrompt + skills });
+                return list;
+            }
+
+            list.Add(new { role = "system", content = basePrompt });
+            list.Add(new { role = "system", content = skills.TrimStart() });
+            return list;
+        }
+
         private static LayoutMode ReadLayoutModeSetting()
         {
             try
@@ -211,11 +228,10 @@ namespace ADDGH
         private static void ReplaceCurrentSystemPrompt()
         {
             if (_messages == null) return;
-            var sys = new { role = "system", content = BuildInitialSystemContent() };
-            if (_messages.Count > 0 && string.Equals(ChatMessageHelpers.TryGetRole(_messages[0]), "system", StringComparison.OrdinalIgnoreCase))
-                _messages[0] = sys;
-            else
-                _messages.Insert(0, sys);
+            int leading = ChatMessageHelpers.CountLeadingSystemMessages(_messages);
+            for (int i = leading - 1; i >= 0; i--)
+                _messages.RemoveAt(i);
+            _messages.InsertRange(0, BuildInitialSystemMessages());
             RefreshContextMeter();
         }
 
@@ -1290,7 +1306,7 @@ namespace ADDGH
             btnNewChat.Click += (s, e) => {
                 _activeHistoryId = null;
                 _messages.Clear();
-                _messages.Add(new { role = "system", content = BuildInitialSystemContent() });
+                _messages.AddRange(BuildInitialSystemMessages());
                     if (_chatPanel != null) _chatPanel.Children.Clear();
                     _cachedCanvasState = null;
                     _canvasChanged = true;
@@ -1797,6 +1813,63 @@ namespace ADDGH
             if (cp != null) cp.Margin = new Thickness(0);
         }
 
+        private static string BuildSimpleRollingSummaryBlock(IList<object> messages, int fromInclusive, int toExclusive, int maxChars)
+        {
+            if (messages == null || fromInclusive >= toExclusive) return "";
+
+            var lines = new List<string>();
+            for (int i = fromInclusive; i < toExclusive && i < messages.Count; i++)
+            {
+                string role = ChatMessageHelpers.TryGetRole(messages[i]) ?? "?";
+                string content = ChatMessageHelpers.TryGetPlainTextContent(messages[i]) ?? "";
+                content = content.Replace("\r", " ").Replace("\n", " ").Trim();
+                if (content.Length > 220) content = content.Substring(0, 220) + "...";
+                if (content.Length == 0) continue;
+                lines.Add(role.ToUpperInvariant() + ": " + content);
+            }
+
+            string text = string.Join("\n", lines);
+            if (text.Length > maxChars)
+                text = text.Substring(0, maxChars) + "\n[...truncated]";
+            return text;
+        }
+
+        private static bool TryApplyRollingSummaryInPlace()
+        {
+            if (_messages == null || _messages.Count == 0) return false;
+
+            ChatMessageHelpers.GetTierBoundaries(_messages, out int tier0End, out int tier2Start, out bool hasTier1Summary);
+            if (!ChatMessageHelpers.TryFindSummaryCutExclusive(_messages, tier2Start, DeploymentOptions.ContextVerbatimTailCount, out int cutExclusive))
+                return false;
+
+            string existingSummary = "";
+            if (hasTier1Summary && tier0End < _messages.Count &&
+                ChatMessageHelpers.IsRollingSummaryTier1Message(_messages[tier0End], out string body))
+                existingSummary = body ?? "";
+
+            int maxSummaryChars = Math.Max(1200, DeploymentOptions.Tier1SoftBudgetTokens * 3);
+            string newBlock = BuildSimpleRollingSummaryBlock(_messages, tier2Start, cutExclusive, Math.Max(600, maxSummaryChars / 2));
+            if (string.IsNullOrWhiteSpace(existingSummary) && string.IsNullOrWhiteSpace(newBlock))
+                return false;
+
+            string merged = string.IsNullOrWhiteSpace(existingSummary)
+                ? newBlock
+                : (string.IsNullOrWhiteSpace(newBlock) ? existingSummary : existingSummary + "\n" + newBlock);
+            if (merged.Length > maxSummaryChars)
+                merged = merged.Substring(0, maxSummaryChars) + "\n[...truncated]";
+
+            for (int i = cutExclusive - 1; i >= tier2Start; i--)
+                _messages.RemoveAt(i);
+
+            var summaryMsg = new { role = "assistant", content = DeploymentOptions.RollingSummaryHeader + merged };
+            if (hasTier1Summary && tier0End < _messages.Count)
+                _messages[tier0End] = summaryMsg;
+            else
+                _messages.Insert(tier0End, summaryMsg);
+
+            return true;
+        }
+
         private static void ApplyMechanicalContextCompressionIfNeeded()
         {
             try
@@ -1805,6 +1878,14 @@ namespace ADDGH
                 int projected = ChatMessageHelpers.EstimateProjectedMessageListTokens(_messages);
                 int trigger = (int)Math.Round(DeploymentOptions.ContextBudgetTokens * DeploymentOptions.ContextCompressTriggerRatio);
                 if (projected < trigger) return;
+
+                TryApplyRollingSummaryInPlace();
+                projected = ChatMessageHelpers.EstimateProjectedMessageListTokens(_messages);
+                if (projected < trigger)
+                {
+                    ChatMessageHelpers.TrimMessageHistory(_messages, DeploymentOptions.MaxPersistedChatMessages);
+                    return;
+                }
                 ChatMessageHelpers.ApplyMechanicalContextReductionInPlace(_messages);
                 ChatMessageHelpers.TrimMessageHistory(_messages, DeploymentOptions.MaxPersistedChatMessages);
             }
@@ -1894,7 +1975,7 @@ namespace ADDGH
             _txtInput.Text = "";
 
             if (_messages.Count == 0) {
-                _messages.Add(new { role = "system", content = BuildInitialSystemContent() });
+                _messages.AddRange(BuildInitialSystemMessages());
             }
 
             if (attachmentsToSend.Count > 0) {
@@ -2384,7 +2465,7 @@ namespace ADDGH
             try
             {
                 _activeHistoryId = conv.Id;
-                _messages = new List<object> { new { role = "system", content = BuildInitialSystemContent() } };
+                _messages = new List<object>(BuildInitialSystemMessages());
                 foreach (var token in conv.Messages ?? new JArray())
                 {
                     if (token is JObject jo) _messages.Add(jo.DeepClone());
@@ -2416,7 +2497,7 @@ namespace ADDGH
                 if (_messages != null)
                 {
                     _messages.Clear();
-                    _messages.Add(new { role = "system", content = BuildInitialSystemContent() });
+                    _messages.AddRange(BuildInitialSystemMessages());
                     if (_chatPanel != null) _chatPanel.Children.Clear();
                     AppendSystemMessage("当前对话已删除，已切换到新会话。");
                     RefreshContextMeter();
@@ -4781,7 +4862,8 @@ namespace ADDGH
                 if (doc == null) { result = "Error: 没有打开的画布。"; return; }
 
                 var graph = new JObject();
-                graph["timestamp"] = DateTime.Now.ToString("HH:mm:ss");
+                if (DeploymentOptions.IncludeCanvasExportTimestamp)
+                    graph["timestamp"] = DateTime.Now.ToString("HH:mm:ss");
                 graph["rhino_units"] = BuildRhinoUnitsJson();
                 
                 var globalErrors = new JArray();
@@ -5538,7 +5620,8 @@ namespace ADDGH
                     }
 
                     var graph = new JObject();
-                    graph["timestamp"] = DateTime.Now.ToString("HH:mm:ss");
+                    if (DeploymentOptions.IncludeCanvasExportTimestamp)
+                        graph["timestamp"] = DateTime.Now.ToString("HH:mm:ss");
                     graph["object_count"] = doc.ObjectCount;
 
                     var components = new JArray();
@@ -9256,7 +9339,7 @@ namespace ADDGH
             _txtInput.Text = "";
 
             if (_messages.Count == 0) {
-                _messages.Add(new { role = "system", content = BuildInitialSystemContent() });
+                _messages.AddRange(BuildInitialSystemMessages());
             }
 
             _messages.Add(new { role = "user", content = actualPrompt });
