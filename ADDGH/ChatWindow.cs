@@ -972,7 +972,10 @@ namespace ADDGH
                     </Grid>
                 </Border>
 
-                        <Border Background=""#E62B2B2B"" BorderBrush=""#18FFFFFF"" BorderThickness=""1"" CornerRadius=""24"" Padding=""18,14,18,14"" MinHeight=""118"">
+                        <Border Background=""#2B2B2B"" BorderBrush=""#32FFFFFF"" BorderThickness=""1"" CornerRadius=""24"" Padding=""18,14,18,14"" MinHeight=""118"" ClipToBounds=""True"">
+                            <Border.Effect>
+                                <DropShadowEffect BlurRadius=""28"" ShadowDepth=""0"" Opacity=""0.38"" Color=""Black""/>
+                            </Border.Effect>
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height=""Auto""/>
