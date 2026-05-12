@@ -53,29 +53,19 @@ namespace ADDGH
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
                 var container = new StackPanel {
                     Margin = new Thickness(0, 0, 0, 20),
-                    HorizontalAlignment = isUser ? HorizontalAlignment.Right : HorizontalAlignment.Left
+                    HorizontalAlignment = isUser ? HorizontalAlignment.Stretch : HorizontalAlignment.Left
                 };
-
-                if (showHeader && isUser)
-                {
-                    var header = new TextBlock {
-                        Text = "YOU",
-                        Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 150)),
-                        FontSize = 11,
-                        FontWeight = FontWeights.Bold,
-                        Margin = new Thickness(0, 0, 0, 6),
-                        HorizontalAlignment = HorizontalAlignment.Right
-                    };
-                    container.Children.Add(header);
-                }
 
                 var bubble = new Border {
-                    Padding = new Thickness(0, 5, 0, 10),
-                    MaxWidth = 380,
-                    HorizontalAlignment = isUser ? HorizontalAlignment.Right : HorizontalAlignment.Left
+                    Padding = isUser ? new Thickness(14, 8, 14, 8) : new Thickness(0, 5, 0, 10),
+                    HorizontalAlignment = isUser ? HorizontalAlignment.Stretch : HorizontalAlignment.Left,
+                    Background = isUser ? new SolidColorBrush(Color.FromRgb(30, 30, 30)) : Brushes.Transparent,
+                    BorderBrush = isUser ? new SolidColorBrush(Color.FromRgb(52, 52, 52)) : Brushes.Transparent,
+                    BorderThickness = isUser ? new Thickness(1) : new Thickness(0),
+                    CornerRadius = isUser ? new CornerRadius(9) : new CornerRadius(0)
                 };
 
-                bubble.Child = BuildMarkdownPanel(text, isUser);
+                bubble.Child = BuildMarkdownPanel(text, false);
                 container.Children.Add(bubble);
                 if (_thinkingBubble != null) {
                     _chatPanel.Children.Remove(_thinkingBubble);
@@ -96,32 +86,25 @@ namespace ADDGH
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
                 var container = new StackPanel {
                     Margin = new Thickness(0, 0, 0, 20),
-                    HorizontalAlignment = HorizontalAlignment.Right
+                    HorizontalAlignment = HorizontalAlignment.Stretch
                 };
 
-                container.Children.Add(new TextBlock
-                {
-                    Text = "YOU",
-                    Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 150)),
-                    FontSize = 11,
-                    FontWeight = FontWeights.Bold,
-                    Margin = new Thickness(0, 0, 0, 6),
-                    HorizontalAlignment = HorizontalAlignment.Right
-                });
-
-                var bubbleContent = new StackPanel { HorizontalAlignment = HorizontalAlignment.Right, MaxWidth = 380 };
+                var bubbleContent = new StackPanel { HorizontalAlignment = HorizontalAlignment.Stretch };
                 if (!string.IsNullOrWhiteSpace(text))
                 {
                     var bubble = new Border {
-                        Padding = new Thickness(0, 5, 0, 10),
-                        MaxWidth = 380,
-                        HorizontalAlignment = HorizontalAlignment.Right
+                        Padding = new Thickness(14, 8, 14, 8),
+                        HorizontalAlignment = HorizontalAlignment.Stretch,
+                        Background = new SolidColorBrush(Color.FromRgb(30, 30, 30)),
+                        BorderBrush = new SolidColorBrush(Color.FromRgb(52, 52, 52)),
+                        BorderThickness = new Thickness(1),
+                        CornerRadius = new CornerRadius(9)
                     };
-                    bubble.Child = BuildMarkdownPanel(text, true);
+                    bubble.Child = BuildMarkdownPanel(text, false);
                     bubbleContent.Children.Add(bubble);
                 }
 
-                var cards = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right, MaxWidth = 380 };
+                var cards = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 8, 0, 0) };
                 foreach (var attachment in attachments)
                 {
                     cards.Children.Add(CreateAttachmentCard(attachment, false));

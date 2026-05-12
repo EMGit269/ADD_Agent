@@ -34,12 +34,17 @@ namespace ADDGH
     {
         private static Window _window;
         private const double DefaultWindowWidth = 450;
-        private const double PaneMinWidth = DefaultWindowWidth;
+        private const double ChatPaneMinWidth = 410;
+        private const double CodePaneMinWidth = 450;
         private const double CodeViewColumnWidth = 750;
         private const double HistorySidebarWidth = 320;
+        private const double ChatContentMaxWidth = 900;
+        private const double ChatScrollbarGutter = 18;
         private static double _widthBeforeCodeView = double.NaN;
         private static StackPanel _chatPanel;
         private static ScrollViewer _chatScroll;
+        private static FrameworkElement _chatToolbar;
+        private static Border _toolbarDivider;
         private static TextBox _txtInput;
         private static Button _btnSend;
         private static Grid _contextMeterHost;
@@ -74,6 +79,7 @@ namespace ADDGH
         private static bool _isJsonMode = true;
         private static bool _isLibraryVisible = false;
         private static RowDefinition _libraryRow;
+        private static FrameworkElement _libraryPanel;
         private static StackPanel _libraryContent;
         private static TextBlock _txtLibCount;
         private static RowDefinition _skillRow;
@@ -522,11 +528,110 @@ namespace ADDGH
 
             double minWidth = DefaultWindowWidth;
             if (_isCodeVisible)
-                minWidth = Math.Max(minWidth, PaneMinWidth * 2);
+                minWidth = Math.Max(minWidth, ChatPaneMinWidth + CodePaneMinWidth + 40);
 
             _window.MinWidth = minWidth;
             if (_window.Width < minWidth)
                 _window.Width = minWidth;
+        }
+
+        private static void UpdateChatContentWidth()
+        {
+            double windowWidth = _window != null && _window.ActualWidth > 0 ? _window.ActualWidth : DefaultWindowWidth;
+            double historyWidth = _isHistorySidebarVisible && !ShouldOverlayHistorySidebar() ? HistorySidebarWidth : 0;
+            double layoutWidth = Math.Max(ChatPaneMinWidth, windowWidth - historyWidth);
+            double availableWidth = _isCodeVisible
+                ? Math.Max(ChatPaneMinWidth, layoutWidth / 3.0)
+                : layoutWidth;
+            double contentWidth = Math.Max(0, Math.Min(ChatContentMaxWidth, availableWidth - ChatScrollbarGutter));
+
+            SetElementWidthSmooth(_chatScroll, contentWidth);
+            SetElementWidthSmooth(_inputAreaBorder, contentWidth);
+            SetElementWidthSmooth(_libraryPanel, contentWidth);
+            UpdateToolbarDividerVisibility();
+        }
+
+        private static void ScheduleChatContentWidthUpdate()
+        {
+            if (_window == null) return;
+            _window.Dispatcher.BeginInvoke((Action)UpdateChatContentWidth, System.Windows.Threading.DispatcherPriority.Loaded);
+        }
+
+        private static void SetElementWidthSmooth(FrameworkElement element, double width)
+        {
+            if (element == null) return;
+            if (double.IsNaN(element.Width) || element.ActualWidth <= 0 || Math.Abs(element.ActualWidth - width) < 2)
+            {
+                element.BeginAnimation(FrameworkElement.WidthProperty, null);
+                element.Width = width;
+                return;
+            }
+
+            var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+            var animation = new DoubleAnimation(element.ActualWidth, width, TimeSpan.FromMilliseconds(140))
+            {
+                EasingFunction = ease
+            };
+            element.BeginAnimation(FrameworkElement.WidthProperty, animation, HandoffBehavior.SnapshotAndReplace);
+        }
+
+        private static void UpdateToolbarDividerVisibility()
+        {
+            if (_toolbarDivider == null) return;
+            _toolbarDivider.Visibility = (_isHistorySidebarVisible || _isCodeVisible) ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private static void EnsureSlideTransform(FrameworkElement element)
+        {
+            if (element == null) return;
+            if (!(element.RenderTransform is TranslateTransform))
+                element.RenderTransform = new TranslateTransform();
+        }
+
+        private static void AnimatePanelIn(FrameworkElement element, double fromX)
+        {
+            if (element == null) return;
+            EnsureSlideTransform(element);
+            var transform = (TranslateTransform)element.RenderTransform;
+            transform.BeginAnimation(TranslateTransform.XProperty, null);
+            element.BeginAnimation(UIElement.OpacityProperty, null);
+            transform.X = fromX;
+            element.Opacity = 0;
+            element.Visibility = Visibility.Visible;
+
+            var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+            var slide = new DoubleAnimation(fromX, 0, TimeSpan.FromMilliseconds(180)) { EasingFunction = ease };
+            var fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(140)) { EasingFunction = ease };
+            transform.BeginAnimation(TranslateTransform.XProperty, slide);
+            element.BeginAnimation(UIElement.OpacityProperty, fade);
+        }
+
+        private static void AnimatePanelOut(FrameworkElement element, double toX, Action completed)
+        {
+            if (element == null)
+            {
+                completed?.Invoke();
+                return;
+            }
+
+            EnsureSlideTransform(element);
+            var transform = (TranslateTransform)element.RenderTransform;
+            transform.BeginAnimation(TranslateTransform.XProperty, null);
+            element.BeginAnimation(UIElement.OpacityProperty, null);
+
+            var ease = new CubicEase { EasingMode = EasingMode.EaseIn };
+            var slide = new DoubleAnimation(transform.X, toX, TimeSpan.FromMilliseconds(140)) { EasingFunction = ease };
+            var fade = new DoubleAnimation(element.Opacity, 0, TimeSpan.FromMilliseconds(120)) { EasingFunction = ease };
+            fade.Completed += (s, e) =>
+            {
+                transform.BeginAnimation(TranslateTransform.XProperty, null);
+                element.BeginAnimation(UIElement.OpacityProperty, null);
+                transform.X = 0;
+                element.Opacity = 1;
+                completed?.Invoke();
+            };
+            transform.BeginAnimation(TranslateTransform.XProperty, slide);
+            element.BeginAnimation(UIElement.OpacityProperty, fade);
         }
 
         public static void Show()
@@ -621,6 +726,37 @@ namespace ADDGH
                             <ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/>
                         </Border>
 
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType=""Button"" x:Key=""ToolbarIconButtonStyle"">
+            <Setter Property=""Width"" Value=""34""/>
+            <Setter Property=""Height"" Value=""32""/>
+            <Setter Property=""Background"" Value=""Transparent""/>
+            <Setter Property=""Foreground"" Value=""#D7D9DD""/>
+            <Setter Property=""BorderBrush"" Value=""Transparent""/>
+            <Setter Property=""BorderThickness"" Value=""0""/>
+            <Setter Property=""Padding"" Value=""0""/>
+            <Setter Property=""Cursor"" Value=""Hand""/>
+            <Setter Property=""Template"">
+                <Setter.Value>
+                    <ControlTemplate TargetType=""Button"">
+                        <Border x:Name=""Bd"" Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""8"" SnapsToDevicePixels=""True"">
+                            <ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property=""IsMouseOver"" Value=""True"">
+                                <Setter TargetName=""Bd"" Property=""Background"" Value=""#1A1D22""/>
+                            </Trigger>
+                            <Trigger Property=""IsPressed"" Value=""True"">
+                                <Setter TargetName=""Bd"" Property=""Background"" Value=""#252A31""/>
+                                <Setter Property=""Foreground"" Value=""#FFFFFF""/>
+                            </Trigger>
+                            <Trigger Property=""IsEnabled"" Value=""False"">
+                                <Setter Property=""Opacity"" Value=""0.42""/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -740,18 +876,47 @@ namespace ADDGH
                     <RowDefinition Height=""0"" x:Name=""LibraryRow""/>
                 </Grid.RowDefinitions>
 
-                <Border Grid.Row=""0"" Grid.Column=""0"" Grid.ColumnSpan=""3"" Background=""#000000"" BorderBrush=""#252525"" BorderThickness=""0,0,0,1""/>
-                <StackPanel Grid.Row=""0"" Grid.Column=""1"" Orientation=""Horizontal"" HorizontalAlignment=""Left"" Margin=""14,6"">
-                    <Button x:Name=""BtnToggleCode"" Style=""{StaticResource IconButtonStyle}"" Foreground=""#FFFFFF"" Background=""Transparent"" BorderThickness=""0"" FontSize=""13"" Cursor=""Hand"" ToolTip=""切换代码视图"" Margin=""0,0,8,0""><Path Data=""M9.4,16.6L4.8,12l4.6-4.6L8,6l-6,6l6,6L9.4,16.6z M14.6,16.6l4.6-4.6l-4.6-4.6L16,6l6,6l-6,6L14.6,16.6z"" Fill=""White"" Width=""16"" Height=""16"" Stretch=""Uniform""/></Button>
-                    <Button x:Name=""BtnNewChat"" Style=""{StaticResource IconButtonStyle}"" Foreground=""#FFFFFF"" Background=""Transparent"" BorderThickness=""0"" FontSize=""18"" Cursor=""Hand"" ToolTip=""新对话"" Margin=""0,0,8,0""><TextBlock Text=""+"" Foreground=""White"" FontWeight=""Bold""/></Button>
-                    <Button x:Name=""BtnToggleHistory"" Style=""{StaticResource IconButtonStyle}"" Foreground=""#FFFFFF"" Background=""Transparent"" BorderThickness=""0"" FontSize=""13"" Cursor=""Hand"" ToolTip=""对话历史"" Margin=""0,0,8,0""><TextBlock Text=""历史"" Foreground=""White"" FontSize=""12"" FontWeight=""SemiBold""/></Button>
-                    <Button x:Name=""BtnSettings"" Style=""{StaticResource IconButtonStyle}"" Foreground=""#FFFFFF"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""配置""><Path Data=""M11,2L11,3.07C11.68,3.12,12.34,3.28,12.95,3.54L13.72,2.77L15.15,4.22L14.4,4.98C14.73,5.54,14.95,6.15,15.03,6.79L16.07,6.93L16.07,8.93L15.03,9.07C14.95,9.71,14.73,10.32,14.4,10.88L15.15,11.64L13.72,13.09L12.95,12.32C12.34,12.58,11.68,12.74,11,12.79L11,14L9,14L9,12.79C8.32,12.74,7.66,12.58,7.05,12.32L6.28,13.09L4.85,11.64L5.6,10.88C5.27,10.32,5.05,9.71,4.97,9.07L3.93,8.93L3.93,6.93L4.97,6.79C5.05,6.15,5.27,5.54,5.6,4.98L4.85,4.22L6.28,2.77L7.05,3.54C7.66,3.28,8.32,3.12,9,3.07L9,2L11,2z M10,7C8.9,7,8,7.9,8,9C8,10.1,8.9,11,10,11C11.1,11,12,10.1,12,9C12,7.9,11.1,7,10,7z"" Fill=""White"" Width=""16"" Height=""16"" Stretch=""Uniform""/></Button>
-                </StackPanel>
-                <Button Grid.Row=""0"" Grid.Column=""2"" x:Name=""BtnToggleViewMode"" Content=""JSON"" Foreground=""#B8B8B8"" Background=""Transparent"" BorderThickness=""1"" BorderBrush=""#333"" FontSize=""10"" Padding=""8,4"" Cursor=""Hand"" HorizontalAlignment=""Right"" VerticalAlignment=""Center"" Margin=""0,0,20,0"" Visibility=""Collapsed"">
-                    <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""4""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
-                </Button>
+                <Grid Grid.Row=""0"" Grid.Column=""0"" Grid.ColumnSpan=""3"" x:Name=""ChatToolbar"" Panel.ZIndex=""12"" Margin=""12,5,12,5"">
+                    <Button x:Name=""BtnToggleHistory"" Style=""{StaticResource ToolbarIconButtonStyle}"" HorizontalAlignment=""Left"" ToolTip=""对话历史"">
+                        <Viewbox Width=""17"" Height=""17"">
+                            <Grid Width=""20"" Height=""20"">
+                                <Path Data=""M4.5,4.5 L15.5,4.5 Q17,4.5 17,6 L17,14 Q17,15.5 15.5,15.5 L7.5,15.5 L4,18 L4,6 Q4,4.5 5.5,4.5"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""1.7"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" StrokeLineJoin=""Round"" Fill=""Transparent""/>
+                                <Path Data=""M8,8.5 L13,8.5 M8,11.5 L12,11.5"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""1.7"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round""/>
+                            </Grid>
+                        </Viewbox>
+                    </Button>
+                    <StackPanel Orientation=""Horizontal"" HorizontalAlignment=""Right"">
+                        <Button x:Name=""BtnToggleViewMode"" Content=""JSON"" Foreground=""#B8B8B8"" Background=""Transparent"" BorderThickness=""0"" BorderBrush=""Transparent"" FontSize=""10"" Padding=""8,4"" Cursor=""Hand"" VerticalAlignment=""Center"" Margin=""0,0,8,0"" Visibility=""Collapsed"">
+                            <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" CornerRadius=""6""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
+                        </Button>
+                        <Button x:Name=""BtnToggleCode"" Style=""{StaticResource ToolbarIconButtonStyle}"" ToolTip=""切换代码视图"" Margin=""0,0,4,0"">
+                            <Viewbox Width=""17"" Height=""17"">
+                                <Grid Width=""20"" Height=""20"">
+                                    <Path Data=""M3.5,6.5 L8,10 L3.5,13.5"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""1.8"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" StrokeLineJoin=""Round"" Fill=""Transparent""/>
+                                    <Path Data=""M16.5,6.5 L12,10 L16.5,13.5"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""1.8"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" StrokeLineJoin=""Round"" Fill=""Transparent""/>
+                                </Grid>
+                            </Viewbox>
+                        </Button>
+                        <Button x:Name=""BtnNewChat"" Style=""{StaticResource ToolbarIconButtonStyle}"" ToolTip=""新对话"" Margin=""0,0,4,0"">
+                            <Viewbox Width=""17"" Height=""17"">
+                                <Grid Width=""20"" Height=""20"">
+                                    <Path Data=""M10,4 L10,16 M4,10 L16,10"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""2"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round""/>
+                                </Grid>
+                            </Viewbox>
+                        </Button>
+                        <Button x:Name=""BtnSettings"" Style=""{StaticResource ToolbarIconButtonStyle}"" ToolTip=""配置"">
+                            <Viewbox Width=""17"" Height=""17"">
+                                <Grid Width=""20"" Height=""20"">
+                                    <Path Data=""M10,3.5 L11.4,3.5 L11.9,5.4 C12.5,5.6 13.1,5.9 13.6,6.2 L15.4,5.4 L16.1,6.6 L14.8,8 C15,8.6 15.1,9.3 15.1,10 C15.1,10.7 15,11.4 14.8,12 L16.1,13.4 L15.4,14.6 L13.6,13.8 C13.1,14.1 12.5,14.4 11.9,14.6 L11.4,16.5 L8.6,16.5 L8.1,14.6 C7.5,14.4 6.9,14.1 6.4,13.8 L4.6,14.6 L3.9,13.4 L5.2,12 C5,11.4 4.9,10.7 4.9,10 C4.9,9.3 5,8.6 5.2,8 L3.9,6.6 L4.6,5.4 L6.4,6.2 C6.9,5.9 7.5,5.6 8.1,5.4 L8.6,3.5 L10,3.5 Z"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""1.45"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" StrokeLineJoin=""Round"" Fill=""Transparent""/>
+                                    <Ellipse Width=""4.6"" Height=""4.6"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""1.45"" Fill=""Transparent"" HorizontalAlignment=""Center"" VerticalAlignment=""Center""/>
+                                </Grid>
+                            </Viewbox>
+                        </Button>
+                    </StackPanel>
+                </Grid>
+                <Border Grid.Row=""0"" Grid.Column=""0"" Grid.ColumnSpan=""3"" x:Name=""ToolbarDivider"" Panel.ZIndex=""11"" Height=""1"" VerticalAlignment=""Bottom"" Background=""#1FFFFFFF"" Visibility=""Collapsed""/>
 
-                <Border x:Name=""HistorySidebar"" Grid.Row=""0"" Grid.Column=""0"" Grid.RowSpan=""4"" Panel.ZIndex=""9"" HorizontalAlignment=""Stretch"" VerticalAlignment=""Stretch"" Visibility=""Collapsed"" Margin=""0"" Background=""#171717"" BorderBrush=""#2A2A2A"" BorderThickness=""0,1,1,1"" CornerRadius=""0"" ClipToBounds=""True"">
+                <Border x:Name=""HistorySidebar"" Grid.Row=""1"" Grid.Column=""0"" Grid.RowSpan=""3"" Panel.ZIndex=""9"" HorizontalAlignment=""Stretch"" VerticalAlignment=""Stretch"" Visibility=""Collapsed"" Margin=""0"" Background=""#171717"" BorderBrush=""#2A2A2A"" BorderThickness=""0,0,1,1"" CornerRadius=""0"" ClipToBounds=""True"">
                     <Border.Effect>
                         <DropShadowEffect BlurRadius=""24"" ShadowDepth=""4"" Opacity=""0.35"" Color=""Black""/>
                     </Border.Effect>
@@ -773,11 +938,11 @@ namespace ADDGH
                     </Grid>
                 </Border>
 
-                <ScrollViewer Grid.Row=""1"" Grid.Column=""1"" x:Name=""ChatScroll"" Margin=""5,10,5,0"" VerticalScrollBarVisibility=""Auto"" PanningMode=""VerticalOnly"">
-                    <StackPanel x:Name=""ChatPanel"" Margin=""10""/>
+                <ScrollViewer Grid.Row=""1"" Grid.Column=""1"" x:Name=""ChatScroll"" HorizontalAlignment=""Center"" Margin=""0,10,0,0"" VerticalScrollBarVisibility=""Auto"" PanningMode=""VerticalOnly"">
+                    <StackPanel x:Name=""ChatPanel"" Margin=""18,10,18,0""/>
                 </ScrollViewer>
 
-                <Border Grid.Row=""2"" Grid.Column=""1"" Background=""#1E1E1E"" CornerRadius=""0"" Padding=""15,15,20,15"" x:Name=""InputAreaBorder"">
+                <Border Grid.Row=""2"" Grid.Column=""1"" Background=""Transparent"" CornerRadius=""0"" Padding=""18,12,18,16"" x:Name=""InputAreaBorder"" HorizontalAlignment=""Center"">
                 <StackPanel>
                     <!-- Warning Bar -->
                     <Border x:Name=""WarningBar"" Visibility=""Collapsed"" Background=""#33CC9900"" BorderBrush=""#66CC9900"" BorderThickness=""1"" CornerRadius=""8"" Padding=""12,8"" Margin=""0,0,0,10"">
@@ -790,11 +955,18 @@ namespace ADDGH
                     </Grid>
                 </Border>
 
-                        <WrapPanel x:Name=""AttachmentPreviewPanel"" Margin=""0,0,0,8"" Visibility=""Collapsed""/>
-                        <Border Background=""#2A2A2A"" BorderBrush=""#333333"" BorderThickness=""1"" CornerRadius=""8"" Padding=""4"" Margin=""0,0,0,8"">
-                            <TextBox x:Name=""TxtInput"" Background=""Transparent"" Foreground=""#FFF"" BorderThickness=""0"" Padding=""14,10,14,10"" FontSize=""14"" AcceptsReturn=""True"" VerticalScrollBarVisibility=""Auto"" TextWrapping=""Wrap"" MinHeight=""36"" MaxHeight=""116"" CaretBrush=""White"" ToolTip=""可在此处输入；Ctrl+V 粘贴文件或截图即可加入附件""/>
+                        <Border Background=""#E62B2B2B"" BorderBrush=""#18FFFFFF"" BorderThickness=""1"" CornerRadius=""24"" Padding=""18,14,18,14"" MinHeight=""118"">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height=""Auto""/>
+                                    <RowDefinition Height=""*""/>
+                                    <RowDefinition Height=""Auto""/>
+                                </Grid.RowDefinitions>
+                        <WrapPanel Grid.Row=""0"" x:Name=""AttachmentPreviewPanel"" Margin=""0,0,0,8"" Visibility=""Collapsed""/>
+                        <Border Grid.Row=""1"" Background=""Transparent"" BorderThickness=""0"" Padding=""0"" Margin=""0"">
+                            <TextBox x:Name=""TxtInput"" Background=""Transparent"" Foreground=""#F3F3F3"" BorderThickness=""0"" Padding=""0,0,0,8"" FontSize=""14"" AcceptsReturn=""True"" VerticalScrollBarVisibility=""Auto"" TextWrapping=""Wrap"" MinHeight=""44"" MaxHeight=""128"" CaretBrush=""White"" ToolTip=""可在此处输入；Ctrl+V 粘贴文件或截图即可加入附件""/>
                         </Border>
-                        <Grid Margin=""0,0,6,0"">
+                        <Grid Grid.Row=""2"" Margin=""0,8,0,0"">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width=""Auto""/>
                                 <ColumnDefinition Width=""Auto""/>
@@ -901,11 +1073,13 @@ namespace ADDGH
                                 </Button.Template>
                             </Button>
                         </Grid>
+                            </Grid>
+                        </Border>
                     </StackPanel>
                 </Border>
 
             <!-- 电池库扩展区 -->
-                <Border Grid.Row=""3"" Grid.Column=""1"" Background=""#111111"" BorderBrush=""#333333"" BorderThickness=""0,1,0,0"" x:Name=""LibraryPanel"" CornerRadius=""0"">
+                <Border Grid.Row=""3"" Grid.Column=""1"" Background=""#111111"" BorderBrush=""#333333"" BorderThickness=""0,1,0,0"" x:Name=""LibraryPanel"" CornerRadius=""0"" HorizontalAlignment=""Center"">
                     <Grid Margin=""15"">
                         <Grid.RowDefinitions>
                             <RowDefinition Height=""Auto""/>
@@ -1043,6 +1217,8 @@ namespace ADDGH
 
             _chatPanel = (StackPanel)_window.FindName("ChatPanel");
             _chatScroll = (ScrollViewer)_window.FindName("ChatScroll");
+            _chatToolbar = (FrameworkElement)_window.FindName("ChatToolbar");
+            _toolbarDivider = (Border)_window.FindName("ToolbarDivider");
             _txtInput = (TextBox)_window.FindName("TxtInput");
             _btnSend = (Button)_window.FindName("BtnSend");
             _btnModeDropdown = (Button)_window.FindName("BtnModeDropdown");
@@ -1073,7 +1249,7 @@ namespace ADDGH
             _historyListPanel = (StackPanel)_window.FindName("HistoryListPanel");
             _historyCountText = (TextBlock)_window.FindName("TxtHistoryCount");
             _btnToggleHistory = (Button)_window.FindName("BtnToggleHistory");
-            if (_btnToggleHistory != null)
+            if (false && _btnToggleHistory != null)
             {
                 _btnToggleHistory.Width = 34;
                 _btnToggleHistory.Height = 30;
@@ -1124,6 +1300,7 @@ namespace ADDGH
             _codeCol = (ColumnDefinition)_window.FindName("CodeCol");
             _window.SizeChanged += (s, e) =>
             {
+                UpdateChatContentWidth();
                 if (!_isHistorySidebarVisible) return;
                 ApplyHistorySidebarLayout();
                 UpdateWindowMinWidthForVisiblePanes();
@@ -1138,12 +1315,13 @@ namespace ADDGH
             btnToggleCode.Click += (s, e) => {
                 _isCodeVisible = !_isCodeVisible;
                 if (_isCodeVisible) {
-                        if (_chatCol != null) _chatCol.MinWidth = PaneMinWidth;
+                        if (_chatCol != null) _chatCol.MinWidth = ChatPaneMinWidth;
                         if (_codeCol != null) {
-                            _codeCol.MinWidth = PaneMinWidth;
+                            _codeCol.MinWidth = CodePaneMinWidth;
                             _codeCol.Width = new GridLength(2, GridUnitType.Star);
                         }
                     if (_btnToggleViewMode != null) _btnToggleViewMode.Visibility = Visibility.Visible;
+                    UpdateToolbarDividerVisibility();
                     _widthBeforeCodeView = _window.ActualWidth > 0 ? _window.ActualWidth : _window.Width;
                     UpdateWindowMinWidthForVisiblePanes();
                     double desiredWidth = DefaultWindowWidth + CodeViewColumnWidth;
@@ -1151,28 +1329,43 @@ namespace ADDGH
                     if (_window.Width < desiredWidth)
                         _window.Width = Math.Min(desiredWidth, Math.Max(_window.MinWidth, maxWorkAreaWidth));
                     if (_isHistorySidebarVisible) ApplyHistorySidebarLayout();
+                    UpdateChatContentWidth();
+                    ScheduleChatContentWidthUpdate();
+                    AnimatePanelIn(_codeViewBorder, 24);
                     if (_inputAreaBorder != null) _inputAreaBorder.CornerRadius = new CornerRadius(0);
                     StartGrasshopperCodeSurfaceHooks();
                     SyncCodeIssuesStripHeightToInputArea();
                     UpdateCodeView();
                 } else {
+                    if (_btnToggleViewMode != null) _btnToggleViewMode.Visibility = Visibility.Collapsed;
+                    UpdateToolbarDividerVisibility();
+                    AnimatePanelOut(_codeViewBorder, 24, () =>
+                    {
+                        if (_chatCol != null) {
+                            _chatCol.MinWidth = ChatPaneMinWidth;
+                            _chatCol.Width = new GridLength(1, GridUnitType.Star);
+                        }
                         if (_codeCol != null) {
                             _codeCol.MinWidth = 0;
                             _codeCol.Width = new GridLength(0);
                         }
-                    if (_btnToggleViewMode != null) _btnToggleViewMode.Visibility = Visibility.Collapsed;
-                    UpdateWindowMinWidthForVisiblePanes();
-                    if (!double.IsNaN(_widthBeforeCodeView) && _widthBeforeCodeView >= _window.MinWidth)
-                        _window.Width = _widthBeforeCodeView;
-                    _widthBeforeCodeView = double.NaN;
-                    if (_isHistorySidebarVisible) ApplyHistorySidebarLayout();
-                    if (_inputAreaBorder != null) _inputAreaBorder.CornerRadius = new CornerRadius(0);
+                        UpdateWindowMinWidthForVisiblePanes();
+                        if (!double.IsNaN(_widthBeforeCodeView) && _widthBeforeCodeView >= _window.MinWidth)
+                            _window.Width = _widthBeforeCodeView;
+                        _widthBeforeCodeView = double.NaN;
+                        if (_isHistorySidebarVisible) ApplyHistorySidebarLayout();
+                        UpdateChatContentWidth();
+                        ScheduleChatContentWidthUpdate();
+                        if (_inputAreaBorder != null) _inputAreaBorder.CornerRadius = new CornerRadius(0);
+                        UpdateToolbarDividerVisibility();
+                    });
                 }
             };
             }
 
             _window.Loaded += (s, ev) =>
             {
+                UpdateChatContentWidth();
                 StartGrasshopperCodeSurfaceHooks();
                 SyncCodeIssuesStripHeightToInputArea();
             };
@@ -1328,6 +1521,7 @@ namespace ADDGH
 
             // 电池库逻辑
             _libraryRow = (RowDefinition)_window.FindName("LibraryRow");
+            _libraryPanel = (FrameworkElement)_window.FindName("LibraryPanel");
             _libraryContent = (StackPanel)_window.FindName("LibraryContent");
             _txtLibCount = (TextBlock)_window.FindName("TxtLibCount");
             var btnToggleLibrary = (Button)_window.FindName("BtnToggleLibrary");
@@ -2539,6 +2733,7 @@ namespace ADDGH
         {
             if (_historySidebar == null) return;
             _isHistorySidebarVisible = visible;
+            UpdateToolbarDividerVisibility();
 
             if (visible)
             {
@@ -2546,15 +2741,20 @@ namespace ADDGH
                 ApplyHistorySidebarLayout();
                 RefreshHistorySidebar();
                 UpdateWindowMinWidthForVisiblePanes();
+                AnimatePanelIn(_historySidebar, -18);
             }
             else
             {
-                _historySidebar.BeginAnimation(FrameworkElement.WidthProperty, null);
-                _historySidebar.Visibility = Visibility.Collapsed;
-                if (_historyCol != null) _historyCol.Width = new GridLength(0);
-                Grid.SetColumnSpan(_historySidebar, 1);
-                _historySidebar.Width = double.NaN;
-                UpdateWindowMinWidthForVisiblePanes();
+                AnimatePanelOut(_historySidebar, -18, () =>
+                {
+                    _historySidebar.Visibility = Visibility.Collapsed;
+                    if (_historyCol != null) _historyCol.Width = new GridLength(0);
+                    Grid.SetColumnSpan(_historySidebar, 1);
+                    _historySidebar.Width = double.NaN;
+                    UpdateWindowMinWidthForVisiblePanes();
+                    UpdateChatContentWidth();
+                    UpdateToolbarDividerVisibility();
+                });
             }
         }
 
@@ -2563,7 +2763,7 @@ namespace ADDGH
             double windowWidth = _window != null && _window.ActualWidth > 0
                 ? _window.ActualWidth
                 : (_window != null ? _window.Width : DefaultWindowWidth);
-            double requiredWidth = (_isCodeVisible ? PaneMinWidth * 2 : DefaultWindowWidth) + HistorySidebarWidth;
+            double requiredWidth = (_isCodeVisible ? ChatPaneMinWidth + CodePaneMinWidth : DefaultWindowWidth) + HistorySidebarWidth;
             return windowWidth < requiredWidth;
         }
 
@@ -2572,7 +2772,6 @@ namespace ADDGH
             if (_historySidebar == null) return;
 
             bool overlay = ShouldOverlayHistorySidebar();
-            _historySidebar.BeginAnimation(FrameworkElement.WidthProperty, null);
             _historySidebar.Height = double.NaN;
             _historySidebar.VerticalAlignment = VerticalAlignment.Stretch;
             Grid.SetColumn(_historySidebar, 0);
