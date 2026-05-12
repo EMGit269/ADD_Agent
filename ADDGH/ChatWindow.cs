@@ -4183,6 +4183,63 @@ namespace ADDGH
                         new {
                             type = "function",
                             function = new {
+                                name = "query_gh_components",
+                                description = "按 id、组件名、报错状态、脚本组件、是否有连线、端口名等条件搜索当前 Grasshopper 画布，并仅返回命中的组件片段；可选附带一阶或二阶邻居摘要，适合先搜索再局部展开，不必每次读取整张画布 JSON。",
+                                parameters = new {
+                                    type = "object",
+                                    properties = new {
+                                        id = new { type = "string", description = "可选：组件 GUID，精确匹配。" },
+                                        name_contains = new { type = "string", description = "可选：组件 Name 或 NickName 包含的关键字。" },
+                                        has_errors = new { type = "boolean", description = "可选：是否只看有 Error/Warning 的组件。" },
+                                        is_script = new { type = "boolean", description = "可选：是否只看脚本/表达式类组件。" },
+                                        has_connections = new { type = "boolean", description = "可选：是否只看存在输入来源或输出接收者的组件。" },
+                                        port_name_contains = new { type = "string", description = "可选：端口 Name/NickName 包含的关键字。" },
+                                        max_results = new { type = "integer", description = "可选：最多返回多少个命中，默认 8，上限 50。" },
+                                        neighbor_depth = new { type = "integer", description = "可选：返回命中组件邻居摘要的层数，0/1/2，默认 1。" },
+                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
+                                    },
+                                    required = new[] { "summary" }
+                                }
+                            }
+                        },
+                        new {
+                            type = "function",
+                            function = new {
+                                name = "get_component_context",
+                                description = "按组件 id 读取该组件及其邻居的完整局部上下文。默认不展开脚本体，只返回结构、端口、连线、运行时消息；需要脚本正文时再单独调用 read_component_script。",
+                                parameters = new {
+                                    type = "object",
+                                    properties = new {
+                                        id = new { type = "string", description = "组件 GUID。" },
+                                        depth = new { type = "integer", description = "可选：邻居层数，默认 1。" },
+                                        include_script_bodies = new { type = "boolean", description = "可选：是否在局部上下文中直接附带 script_bodies；默认 false。" },
+                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
+                                    },
+                                    required = new[] { "id", "summary" }
+                                }
+                            }
+                        },
+                        new {
+                            type = "function",
+                            function = new {
+                                name = "read_component_script",
+                                description = "单独读取某个脚本/表达式类组件可反射到的脚本正文。适合在 query_gh_components 或 get_component_context 定位到目标后，再递进展开脚本体。",
+                                parameters = new {
+                                    type = "object",
+                                    properties = new {
+                                        id = new { type = "string", description = "组件 GUID。" },
+                                        summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                        summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
+                                    },
+                                    required = new[] { "id", "summary" }
+                                }
+                            }
+                        },
+                        new {
+                            type = "function",
+                            function = new {
                                 name = "create_gh_skill",
                                 description = "将当前画布内容或特定逻辑总结为一个可复用的技能(Skill)并保存。文件开头必须包含 YAML Frontmatter 格式的 name 和 description。",
                                 parameters = new {
@@ -4484,6 +4541,33 @@ namespace ADDGH
                                 int maxR = argsObj["max_results"]?.ToObject<int?>() ?? 30;
                                 string catc = argsObj["category_contains"]?.ToString();
                                 toolResult = ExecuteSearchGhComponentCatalog(argsObj["query"]?.ToString(), maxR, catc);
+                            }
+                            else if (funcName == "query_gh_components") {
+                                bool? hasErrors = argsObj["has_errors"] == null || argsObj["has_errors"].Type == JTokenType.Null
+                                    ? (bool?)null : argsObj["has_errors"].ToObject<bool>();
+                                bool? isScript = argsObj["is_script"] == null || argsObj["is_script"].Type == JTokenType.Null
+                                    ? (bool?)null : argsObj["is_script"].ToObject<bool>();
+                                bool? hasConnections = argsObj["has_connections"] == null || argsObj["has_connections"].Type == JTokenType.Null
+                                    ? (bool?)null : argsObj["has_connections"].ToObject<bool>();
+                                toolResult = ExecuteQueryGhComponents(
+                                    argsObj["id"]?.ToString(),
+                                    argsObj["name_contains"]?.ToString(),
+                                    hasErrors,
+                                    isScript,
+                                    hasConnections,
+                                    argsObj["port_name_contains"]?.ToString(),
+                                    argsObj["max_results"]?.ToObject<int?>() ?? 8,
+                                    argsObj["neighbor_depth"]?.ToObject<int?>() ?? 1);
+                            }
+                            else if (funcName == "get_component_context") {
+                                bool includeScriptBodies = argsObj["include_script_bodies"]?.ToObject<bool?>() ?? false;
+                                toolResult = ExecuteGetComponentContext(
+                                    argsObj["id"]?.ToString(),
+                                    argsObj["depth"]?.ToObject<int?>() ?? 1,
+                                    includeScriptBodies);
+                            }
+                            else if (funcName == "read_component_script") {
+                                toolResult = ExecuteReadComponentScript(argsObj["id"]?.ToString());
                             }
                             else if (funcName == "set_gh_component_status") {
                                 bool? preview = argsObj["preview"] == null || argsObj["preview"].Type == JTokenType.Null
@@ -4832,6 +4916,11 @@ namespace ADDGH
         // ── 共享序列化 helper（不改变任何字段结构）──────────────────────────
         private static JObject BuildComponentJson(Grasshopper.Kernel.IGH_DocumentObject obj)
         {
+            return BuildComponentJson(obj, true);
+        }
+
+        private static JObject BuildComponentJson(Grasshopper.Kernel.IGH_DocumentObject obj, bool includeScriptBodies)
+        {
             var j = new JObject();
             j["name"]     = obj.Name;
             j["nickname"] = obj.NickName;
@@ -4897,11 +4986,296 @@ namespace ADDGH
                 }
                 j["sources"] = srcs;
             }
-            AppendScriptBodiesToComponentJson(j, obj);
+            if (includeScriptBodies)
+                AppendScriptBodiesToComponentJson(j, obj);
             return j;
         }
 
         // ── 摘要：仅 id/name/pivot + 首条报错，不含端口 ──────────────────────
+        private static void GetComponentIssueCounts(Grasshopper.Kernel.IGH_DocumentObject obj, out int errorCount, out int warningCount, out string firstIssue)
+        {
+            errorCount = 0;
+            warningCount = 0;
+            firstIssue = null;
+            if (!(obj is IGH_ActiveObject ao) || ao.RuntimeMessageLevel == GH_RuntimeMessageLevel.Blank) return;
+
+            var errs = ao.RuntimeMessages(GH_RuntimeMessageLevel.Error);
+            var warns = ao.RuntimeMessages(GH_RuntimeMessageLevel.Warning);
+            errorCount = errs?.Count ?? 0;
+            warningCount = warns?.Count ?? 0;
+
+            if (errorCount > 0) firstIssue = errs[0];
+            else if (warningCount > 0) firstIssue = warns[0];
+        }
+
+        private static bool ComponentHasConnections(Grasshopper.Kernel.IGH_DocumentObject obj)
+        {
+            if (obj is Grasshopper.Kernel.IGH_Component comp)
+            {
+                foreach (var p in comp.Params.Input) if (p.SourceCount > 0) return true;
+                foreach (var p in comp.Params.Output) if (p.Recipients.Count > 0) return true;
+                return false;
+            }
+            if (obj is Grasshopper.Kernel.IGH_Param param)
+                return param.SourceCount > 0 || param.Recipients.Count > 0;
+            return false;
+        }
+
+        private static bool ComponentHasPortName(Grasshopper.Kernel.IGH_DocumentObject obj, string portNameContains)
+        {
+            string needle = (portNameContains ?? "").Trim();
+            if (needle.Length == 0) return true;
+
+            bool HasName(string a, string b)
+            {
+                return (!string.IsNullOrEmpty(a) && a.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0)
+                    || (!string.IsNullOrEmpty(b) && b.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0);
+            }
+
+            if (obj is Grasshopper.Kernel.IGH_Component comp)
+            {
+                foreach (var p in comp.Params.Input)
+                    if (HasName(p.Name, p.NickName)) return true;
+                foreach (var p in comp.Params.Output)
+                    if (HasName(p.Name, p.NickName)) return true;
+                return false;
+            }
+
+            if (obj is Grasshopper.Kernel.IGH_Param param)
+                return HasName(param.Name, param.NickName);
+
+            return false;
+        }
+
+        private static bool ComponentLooksLikeScript(Grasshopper.Kernel.IGH_DocumentObject obj)
+        {
+            if (obj == null) return false;
+            if (IsCSharpScriptComponent(obj)) return true;
+
+            string[] probes =
+            {
+                obj.Name ?? "",
+                obj.NickName ?? "",
+                obj.GetType()?.Name ?? ""
+            };
+            foreach (string probe in probes)
+            {
+                if (probe.IndexOf("script", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                if (probe.IndexOf("python", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                if (probe.IndexOf("ghpython", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                if (probe.IndexOf("evaluate", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                if (probe.IndexOf("expression", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                if (probe.IndexOf("c#", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                if (probe.IndexOf("vb", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            }
+
+            try { return GhEnumerateScriptPayloadStrings(obj).Count > 0; }
+            catch { return false; }
+        }
+
+        private static JObject BuildComponentQuerySummary(Grasshopper.Kernel.IGH_DocumentObject obj)
+        {
+            GetComponentIssueCounts(obj, out int errorCount, out int warningCount, out string firstIssue);
+            var jo = new JObject
+            {
+                ["id"] = obj.InstanceGuid.ToString(),
+                ["name"] = obj.Name,
+                ["nickname"] = obj.NickName,
+                ["pivot"] = new JObject { { "x", Math.Round(obj.Attributes.Pivot.X) }, { "y", Math.Round(obj.Attributes.Pivot.Y) } },
+                ["is_script"] = ComponentLooksLikeScript(obj),
+                ["has_connections"] = ComponentHasConnections(obj)
+            };
+
+            if (obj is Grasshopper.Kernel.IGH_Component comp)
+            {
+                jo["kind"] = "component";
+                jo["input_count"] = comp.Params.Input.Count;
+                jo["output_count"] = comp.Params.Output.Count;
+            }
+            else if (obj is Grasshopper.Kernel.IGH_Param param)
+            {
+                jo["kind"] = "param";
+                jo["type"] = param.TypeName;
+                jo["source_count"] = param.SourceCount;
+                jo["recipient_count"] = param.Recipients.Count;
+            }
+            else
+            {
+                jo["kind"] = "object";
+            }
+
+            if (errorCount > 0) jo["error_count"] = errorCount;
+            if (warningCount > 0) jo["warning_count"] = warningCount;
+            if (!string.IsNullOrWhiteSpace(firstIssue)) jo["first_issue"] = firstIssue;
+            return jo;
+        }
+
+        private static List<Grasshopper.Kernel.IGH_DocumentObject> CollectComponentContextObjects(
+            GH_Document doc,
+            Grasshopper.Kernel.IGH_DocumentObject target,
+            int depth)
+        {
+            var orderedIds = new List<Guid>();
+            var visited = new HashSet<Guid>();
+
+            void Traverse(Grasshopper.Kernel.IGH_DocumentObject obj, int remaining)
+            {
+                if (obj == null || remaining <= 0) return;
+                if (obj is Grasshopper.Kernel.IGH_Component comp)
+                {
+                    foreach (var p in comp.Params.Input)
+                    {
+                        foreach (var s in p.Sources)
+                        {
+                            var nb = s.Attributes?.GetTopLevel?.DocObject;
+                            if (nb == null || !visited.Add(nb.InstanceGuid)) continue;
+                            orderedIds.Add(nb.InstanceGuid);
+                            Traverse(nb, remaining - 1);
+                        }
+                    }
+                    foreach (var p in comp.Params.Output)
+                    {
+                        foreach (var r in p.Recipients)
+                        {
+                            var nb = r.Attributes?.GetTopLevel?.DocObject;
+                            if (nb == null || !visited.Add(nb.InstanceGuid)) continue;
+                            orderedIds.Add(nb.InstanceGuid);
+                            Traverse(nb, remaining - 1);
+                        }
+                    }
+                }
+                else if (obj is Grasshopper.Kernel.IGH_Param param)
+                {
+                    foreach (var s in param.Sources)
+                    {
+                        var nb = s.Attributes?.GetTopLevel?.DocObject;
+                        if (nb == null || !visited.Add(nb.InstanceGuid)) continue;
+                        orderedIds.Add(nb.InstanceGuid);
+                        Traverse(nb, remaining - 1);
+                    }
+                    foreach (var r in param.Recipients)
+                    {
+                        var nb = r.Attributes?.GetTopLevel?.DocObject;
+                        if (nb == null || !visited.Add(nb.InstanceGuid)) continue;
+                        orderedIds.Add(nb.InstanceGuid);
+                        Traverse(nb, remaining - 1);
+                    }
+                }
+            }
+
+            visited.Add(target.InstanceGuid);
+            orderedIds.Add(target.InstanceGuid);
+            Traverse(target, Math.Max(0, depth));
+
+            var result = new List<Grasshopper.Kernel.IGH_DocumentObject>();
+            foreach (var guid in orderedIds)
+            {
+                var obj = doc.FindObject(guid, true);
+                if (obj != null) result.Add(obj);
+            }
+            return result;
+        }
+
+        private static string ExecuteQueryGhComponents(
+            string id = null,
+            string nameContains = null,
+            bool? hasErrors = null,
+            bool? isScript = null,
+            bool? hasConnections = null,
+            string portNameContains = null,
+            int maxResults = 8,
+            int neighborDepth = 1)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+
+                string idNeedle = (id ?? "").Trim();
+                string nameNeedle = (nameContains ?? "").Trim();
+                string portNeedle = (portNameContains ?? "").Trim();
+                maxResults = Math.Max(1, Math.Min(50, maxResults));
+                neighborDepth = Math.Max(0, Math.Min(2, neighborDepth));
+
+                var matched = new List<Grasshopper.Kernel.IGH_DocumentObject>();
+                foreach (var obj in doc.Objects)
+                {
+                    if (obj is Grasshopper.Kernel.Special.GH_Group) continue;
+
+                    if (idNeedle.Length > 0 && !obj.InstanceGuid.ToString().Equals(idNeedle, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    if (nameNeedle.Length > 0)
+                    {
+                        bool nameMatch =
+                            (!string.IsNullOrEmpty(obj.Name) && obj.Name.IndexOf(nameNeedle, StringComparison.OrdinalIgnoreCase) >= 0) ||
+                            (!string.IsNullOrEmpty(obj.NickName) && obj.NickName.IndexOf(nameNeedle, StringComparison.OrdinalIgnoreCase) >= 0);
+                        if (!nameMatch) continue;
+                    }
+
+                    if (hasErrors.HasValue)
+                    {
+                        GetComponentIssueCounts(obj, out int errorCount, out int warningCount, out _);
+                        bool objHasErrors = errorCount > 0 || warningCount > 0;
+                        if (objHasErrors != hasErrors.Value) continue;
+                    }
+
+                    if (isScript.HasValue && ComponentLooksLikeScript(obj) != isScript.Value)
+                        continue;
+
+                    if (hasConnections.HasValue && ComponentHasConnections(obj) != hasConnections.Value)
+                        continue;
+
+                    if (portNeedle.Length > 0 && !ComponentHasPortName(obj, portNeedle))
+                        continue;
+
+                    matched.Add(obj);
+                }
+
+                var hits = new JArray();
+                foreach (var obj in matched.Take(maxResults))
+                {
+                    var hit = new JObject
+                    {
+                        ["summary"] = BuildComponentQuerySummary(obj),
+                        ["component"] = BuildComponentJson(obj, false)
+                    };
+
+                    if (neighborDepth > 0)
+                    {
+                        var neighbors = new JArray();
+                        foreach (var ctxObj in CollectComponentContextObjects(doc, obj, neighborDepth))
+                        {
+                            if (ctxObj.InstanceGuid == obj.InstanceGuid) continue;
+                            neighbors.Add(BuildComponentQuerySummary(ctxObj));
+                        }
+                        hit["neighbors"] = neighbors;
+                    }
+
+                    hits.Add(hit);
+                }
+
+                result = new JObject
+                {
+                    ["query"] = new JObject
+                    {
+                        ["id"] = idNeedle,
+                        ["name_contains"] = nameNeedle,
+                        ["has_errors"] = hasErrors.HasValue ? JToken.FromObject(hasErrors.Value) : JValue.CreateNull(),
+                        ["is_script"] = isScript.HasValue ? JToken.FromObject(isScript.Value) : JValue.CreateNull(),
+                        ["has_connections"] = hasConnections.HasValue ? JToken.FromObject(hasConnections.Value) : JValue.CreateNull(),
+                        ["port_name_contains"] = portNeedle,
+                        ["neighbor_depth"] = neighborDepth
+                    },
+                    ["total_hits"] = matched.Count,
+                    ["returned_hits"] = hits.Count,
+                    ["hits"] = hits
+                }.ToString(Formatting.None);
+            }));
+            return result;
+        }
+
         private static string ExecuteGetCanvasSummary()
         {
             string result = "";
@@ -4944,7 +5318,7 @@ namespace ADDGH
         }
 
         // ── 上下文：目标 + 前后各 depth 层邻居（完整详情）───────────────────
-        private static string ExecuteGetComponentContext(string id, int depth = 1)
+        private static string ExecuteGetComponentContext(string id, int depth = 1, bool includeScriptBodies = false)
         {
             string result = "";
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
@@ -4955,24 +5329,26 @@ namespace ADDGH
                 var target = doc.FindObject(guid, true);
                 if (target == null) { result = "Error: 找不到该电池。"; return; }
 
-                var visited = new HashSet<Guid> { guid };
-                void Traverse(Grasshopper.Kernel.IGH_DocumentObject o, int rem)
-                {
-                    if (rem <= 0) return;
-                    if (o is Grasshopper.Kernel.IGH_Component c) {
-                        foreach (var p in c.Params.Input)  foreach (var s in p.Sources)    { var nb = s.Attributes.GetTopLevel.DocObject; if (visited.Add(nb.InstanceGuid)) Traverse(nb, rem - 1); }
-                        foreach (var p in c.Params.Output) foreach (var r in p.Recipients) { var nb = r.Attributes.GetTopLevel.DocObject; if (visited.Add(nb.InstanceGuid)) Traverse(nb, rem - 1); }
-                    }
-                    else if (o is Grasshopper.Kernel.IGH_Param pm) {
-                        foreach (var s in pm.Sources)    { var nb = s.Attributes.GetTopLevel.DocObject; if (visited.Add(nb.InstanceGuid)) Traverse(nb, rem - 1); }
-                        foreach (var r in pm.Recipients) { var nb = r.Attributes.GetTopLevel.DocObject; if (visited.Add(nb.InstanceGuid)) Traverse(nb, rem - 1); }
-                    }
-                }
-                Traverse(target, depth);
-
                 var arr = new JArray();
-                foreach (var vid in visited) { var o = doc.FindObject(vid, true); if (o != null) arr.Add(BuildComponentJson(o)); }
+                foreach (var obj in CollectComponentContextObjects(doc, target, depth))
+                    arr.Add(BuildComponentJson(obj, includeScriptBodies));
                 result = new JObject { ["context_components"] = arr }.ToString(Formatting.None);
+            }));
+            return result;
+        }
+
+        private static string ExecuteReadComponentScript(string id)
+        {
+            const int readCap = 150000;
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+                if (!Guid.TryParse(id, out Guid guid)) { result = "Error: ID 格式错误。"; return; }
+                var obj = doc.FindObject(guid, true);
+                if (obj == null) { result = "Error: 找不到该电池。"; return; }
+                result = GhReadScriptSourceViaReflection(obj, readCap, Math.Min(readCap, 120000));
             }));
             return result;
         }

@@ -199,6 +199,29 @@ namespace ADDGH
                     string categoryContains = argsObj["category_contains"]?.ToString();
                     result.ToolResult = ExecuteSearchGhComponentCatalog(argsObj["query"]?.ToString(), maxResults, categoryContains);
                 }
+                else if (funcName == "query_gh_components")
+                {
+                    result.ToolResult = ExecuteQueryGhComponents(
+                        argsObj["id"]?.ToString(),
+                        argsObj["name_contains"]?.ToString(),
+                        ReadNullableBool(argsObj, "has_errors"),
+                        ReadNullableBool(argsObj, "is_script"),
+                        ReadNullableBool(argsObj, "has_connections"),
+                        argsObj["port_name_contains"]?.ToString(),
+                        argsObj["max_results"]?.ToObject<int?>() ?? 8,
+                        argsObj["neighbor_depth"]?.ToObject<int?>() ?? 1);
+                }
+                else if (funcName == "get_component_context")
+                {
+                    result.ToolResult = ExecuteGetComponentContext(
+                        argsObj["id"]?.ToString(),
+                        argsObj["depth"]?.ToObject<int?>() ?? 1,
+                        ReadNullableBool(argsObj, "include_script_bodies") ?? false);
+                }
+                else if (funcName == "read_component_script")
+                {
+                    result.ToolResult = ExecuteReadComponentScript(argsObj["id"]?.ToString());
+                }
                 else if (funcName == "set_gh_component_status")
                 {
                     result.ToolResult = ExecuteSetGhComponentStatus(
