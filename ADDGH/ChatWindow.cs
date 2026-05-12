@@ -42,6 +42,7 @@ namespace ADDGH
         private static Grid _settingsOverlay;
         private static TextBox _txtApiKey;
         private static ComboBox _comboProvider;
+        private static ComboBox _comboVisionProvider;
         private static TextBox _txtApiBaseUrl;
         private static TextBox _txtModel;
         private static bool _isLoadingProviderSettings = false;
@@ -967,12 +968,15 @@ namespace ADDGH
 
     <!-- 配置悬浮层 -->
             <Grid x:Name=""SettingsOverlay"" Grid.Column=""0"" Panel.ZIndex=""20"" Margin=""0,60,0,0"" Background=""#A5000000"" Visibility=""Collapsed"">
-            <Border Background=""#1E1E1E"" CornerRadius=""12"" Width=""380"" Height=""550"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"" Padding=""20"">
+            <Border Background=""#1E1E1E"" CornerRadius=""12"" Width=""380"" Height=""590"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"" Padding=""20"">
                 <StackPanel>
                     <TextBlock Text=""配置 API"" Foreground=""White"" FontSize=""16"" FontWeight=""SemiBold"" Margin=""0,0,0,15""/>
                     
                     <TextBlock Text=""提供商 (Provider)"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
                     <ComboBox x:Name=""ComboProvider"" Height=""36"" Margin=""0,0,0,10"" Style=""{StaticResource DarkComboBoxStyle}""/>
+
+                    <TextBlock Text=""图片理解模型"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                    <ComboBox x:Name=""ComboVisionProvider"" Height=""36"" Margin=""0,0,0,10"" Style=""{StaticResource DarkComboBoxStyle}""/>
 
                     <TextBlock Text=""API Base URL"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
                     <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
@@ -1204,6 +1208,7 @@ namespace ADDGH
             _settingsOverlay = (Grid)_window.FindName("SettingsOverlay");
             _txtApiKey = (TextBox)_window.FindName("TxtApiKey");
             _comboProvider = (ComboBox)_window.FindName("ComboProvider");
+            _comboVisionProvider = (ComboBox)_window.FindName("ComboVisionProvider");
             _txtApiBaseUrl = (TextBox)_window.FindName("TxtApiBaseUrl");
             _txtModel = (TextBox)_window.FindName("TxtModel");
             _attachmentPreviewPanel = (WrapPanel)_window.FindName("AttachmentPreviewPanel");
@@ -1221,6 +1226,7 @@ namespace ADDGH
             btnSettings.Click += (s, e) => {
                     string providerId = GetCurrentProviderId();
                     SelectProviderComboItem(providerId);
+                    SelectVisionProviderComboItem(GetCurrentVisionProviderId());
                     LoadProviderSettingsToUI(providerId);
                     if (txtLibraryPath != null) txtLibraryPath.Text = Grasshopper.Instances.Settings.GetValue("Library_Path", "");
                     SetSettingsOverlayVisible(true);
@@ -1244,6 +1250,7 @@ namespace ADDGH
             if (btnSaveSettings != null) {
                 btnSaveSettings.Click += (s, e) => {
                     SaveSelectedProviderSettings();
+                    SaveSelectedVisionProviderSetting();
                     if (txtLibraryPath != null) Grasshopper.Instances.Settings.SetValue("Library_Path", txtLibraryPath.Text);
                     SetSettingsOverlayVisible(false);
                 };
@@ -2124,6 +2131,7 @@ namespace ADDGH
             string input = _txtInput.Text.Trim();
             var attachmentsToSend = _pendingAttachments.ToList();
             if (string.IsNullOrEmpty(input) && attachmentsToSend.Count == 0) return;
+            bool hasImageAttachments = attachmentsToSend.Any(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64));
 
             _isGenerating = true;
             ApplySendButtonGeneratingState();
@@ -2134,8 +2142,11 @@ namespace ADDGH
             }
 
             if (attachmentsToSend.Count > 0) {
-                var contentArr = BuildUserMessageContent(input, attachmentsToSend);
-                _messages.Add(new { role = "user", content = contentArr });
+                if (!hasImageAttachments)
+                {
+                    var contentArr = BuildUserMessageContent(input, attachmentsToSend);
+                    _messages.Add(new { role = "user", content = contentArr });
+                }
                 AppendUserMessageWithAttachments(input, attachmentsToSend);
             } else {
                 _messages.Add(new { role = "user", content = input });
@@ -2154,10 +2165,21 @@ namespace ADDGH
 
             try { _cts?.Dispose(); } catch (Exception ex) { AddGhLog.Warn("Dispose prior CTS: " + ex.Message); }
             _cts = new System.Threading.CancellationTokenSource();
-            string apiKey = GetProviderRuntimeSettings().ApiKey;
 
             try {
-            ShowThinkingAnimation();
+                ShowThinkingAnimation();
+                if (hasImageAttachments)
+                {
+                    string visionAnalysis = await PreprocessImageAttachmentsAsync(input, attachmentsToSend, _cts.Token);
+                    if (string.IsNullOrWhiteSpace(visionAnalysis))
+                        return;
+
+                    _messages.Add(new { role = "user", content = BuildVisionExecutionUserText(input, attachmentsToSend, visionAnalysis) });
+                    EnforceChatHistoryLimit();
+                    SyncActiveHistoryConversation();
+                }
+
+                string apiKey = GetProviderRuntimeSettings().ApiKey;
                 await CallLLMAPI(apiKey, 0, _cts.Token);
             } catch (OperationCanceledException) {
                 AppendSystemMessage("已停止生成。");
@@ -2309,6 +2331,11 @@ namespace ADDGH
             return Grasshopper.Instances.Settings.GetValue("AI_CurrentProvider", "deepseek");
         }
 
+        private static string GetCurrentVisionProviderId()
+        {
+            return Grasshopper.Instances.Settings.GetValue("AI_VisionProvider", "qwen");
+        }
+
         private static string GetProviderSettingKey(string providerId, string name)
         {
             return $"AI_{providerId}_{name}";
@@ -2362,7 +2389,14 @@ namespace ADDGH
 
         private static ProviderRuntimeSettings GetProviderRuntimeSettings()
         {
-            string providerId = GetCurrentProviderId();
+            return GetProviderRuntimeSettings(GetCurrentProviderId());
+        }
+
+        private static ProviderRuntimeSettings GetProviderRuntimeSettings(string providerId)
+        {
+            if (string.IsNullOrWhiteSpace(providerId))
+                providerId = GetCurrentProviderId();
+
             var config = GetProviderConfig(providerId);
             string legacyBaseUrl = providerId == "deepseek" ? Grasshopper.Instances.Settings.GetValue("AI_API_BaseUrl", config.DefaultBaseUrl) : config.DefaultBaseUrl;
             string legacyModel = providerId == "deepseek" ? Grasshopper.Instances.Settings.GetValue("AI_ModelName", config.DefaultModel) : config.DefaultModel;
@@ -2378,12 +2412,20 @@ namespace ADDGH
 
         private static void PopulateProviderCombo()
         {
-            if (_comboProvider == null) return;
+            var providers = GetProviderConfigs();
 
-            _comboProvider.Items.Clear();
-            foreach (var provider in GetProviderConfigs())
+            if (_comboProvider != null)
             {
-                _comboProvider.Items.Add(new ComboBoxItem { Content = provider.DisplayName, Tag = provider.ProviderId });
+                _comboProvider.Items.Clear();
+                foreach (var provider in providers)
+                    _comboProvider.Items.Add(new ComboBoxItem { Content = provider.DisplayName, Tag = provider.ProviderId });
+            }
+
+            if (_comboVisionProvider != null)
+            {
+                _comboVisionProvider.Items.Clear();
+                foreach (var provider in providers)
+                    _comboVisionProvider.Items.Add(new ComboBoxItem { Content = provider.DisplayName, Tag = provider.ProviderId });
             }
         }
 
@@ -2407,6 +2449,37 @@ namespace ADDGH
             }
 
             if (_comboProvider.Items.Count > 0) _comboProvider.SelectedIndex = 0;
+        }
+
+        private static string GetSelectedVisionProviderId()
+        {
+            if (_comboVisionProvider?.SelectedItem is ComboBoxItem item && item.Tag != null) return item.Tag.ToString();
+            return GetCurrentVisionProviderId();
+        }
+
+        private static void SelectVisionProviderComboItem(string providerId)
+        {
+            if (_comboVisionProvider == null) return;
+
+            foreach (var item in _comboVisionProvider.Items.OfType<ComboBoxItem>())
+            {
+                if ((item.Tag?.ToString() ?? "").Equals(providerId, StringComparison.OrdinalIgnoreCase))
+                {
+                    _comboVisionProvider.SelectedItem = item;
+                    return;
+                }
+            }
+
+            foreach (var item in _comboVisionProvider.Items.OfType<ComboBoxItem>())
+            {
+                if ((item.Tag?.ToString() ?? "").Equals("qwen", StringComparison.OrdinalIgnoreCase))
+                {
+                    _comboVisionProvider.SelectedItem = item;
+                    return;
+                }
+            }
+
+            if (_comboVisionProvider.Items.Count > 0) _comboVisionProvider.SelectedIndex = 0;
         }
 
         private static void LoadProviderSettingsToUI(string providerId)
@@ -2441,6 +2514,11 @@ namespace ADDGH
             // Keep legacy URL/model keys populated so older builds can still read defaults for DeepSeek.
             if (_txtApiBaseUrl != null) Grasshopper.Instances.Settings.SetValue("AI_API_BaseUrl", _txtApiBaseUrl.Text);
             if (_txtModel != null) Grasshopper.Instances.Settings.SetValue("AI_ModelName", _txtModel.Text);
+        }
+
+        private static void SaveSelectedVisionProviderSetting()
+        {
+            Grasshopper.Instances.Settings.SetValue("AI_VisionProvider", GetSelectedVisionProviderId());
         }
 
         private static void SetSettingsOverlayVisible(bool visible)
@@ -2951,6 +3029,116 @@ namespace ADDGH
                 ApplyBrowserLikeHeaders(request, url, requestBody?["stream"]?.ToObject<bool>() ?? false);
             request.Content = new StringContent(JsonConvert.SerializeObject(requestBody), Encoding.UTF8, "application/json");
             return await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        }
+
+        private static async Task<string> ReadResponseTextAsync(HttpResponseMessage response, System.Threading.CancellationToken ct)
+        {
+            using (var stream = await response.Content.ReadAsStreamAsync())
+            using (var reader = new System.IO.StreamReader(stream))
+            {
+                var task = reader.ReadToEndAsync();
+                while (!task.IsCompleted)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    await Task.Delay(50, ct);
+                }
+                return task.Result;
+            }
+        }
+
+        private static async Task<string> PreprocessImageAttachmentsAsync(string input, List<AttachmentItem> attachments, System.Threading.CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            var providerSettings = GetProviderRuntimeSettings(GetCurrentVisionProviderId());
+
+            if (string.IsNullOrWhiteSpace(providerSettings.ApiKey))
+            {
+                string diag = BuildProviderDiagnostic(providerSettings, "图片理解失败：请先配置 " + providerSettings.Config.DisplayName + " 的 API Key。");
+                AddGhLog.Warn("Vision preprocess: " + diag.Replace("\r", " ").Replace("\n", " | "));
+                AppendQuietDiagnosticCard("图片理解", diag);
+                return null;
+            }
+
+            if (attachments == null || !attachments.Any(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64)))
+            {
+                AppendQuietDiagnosticCard("图片理解", "未找到可发送给视觉模型的图片附件。");
+                return null;
+            }
+
+            JObject requestBody = BuildVisionPreprocessRequestBody(providerSettings, input, attachments);
+            HttpResponseMessage response = null;
+            string usedEndpoint = null;
+            string lastEndpointError = null;
+            DateTime startTime = DateTime.Now;
+
+            try
+            {
+                ShowThinkingAnimation("图片理解中...");
+                foreach (var endpoint in BuildEndpointCandidates(providerSettings.BaseUrl))
+                {
+                    ct.ThrowIfCancellationRequested();
+                    usedEndpoint = endpoint.Url;
+                    AddGhLog.Info("Trying vision endpoint: " + endpoint.Url + ", model=" + providerSettings.ModelName);
+
+                    response = await SendProviderRequestAsync(providerSettings, requestBody, endpoint.Url, ct);
+                    if (response.IsSuccessStatusCode)
+                        break;
+
+                    string errPreview = "";
+                    try { errPreview = await response.Content.ReadAsStringAsync(); }
+                    catch (Exception readEx) { errPreview = "无法读取错误响应体：" + readEx.Message; }
+
+                    lastEndpointError = "HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase + "\n" + ClampDiagDetail(errPreview, 900);
+                    AddGhLog.Warn("Vision endpoint failed: " + endpoint.Url + " | " + lastEndpointError.Replace("\r", " ").Replace("\n", " | "));
+
+                    if (!ShouldTryNextEndpoint(response.StatusCode))
+                    {
+                        AppendQuietDiagnosticCard("图片理解",
+                            BuildProviderDiagnostic(providerSettings, "图片理解失败：视觉模型服务返回 HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase, errPreview, endpoint.Url));
+                        return null;
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                AppendQuietDiagnosticCard("图片理解",
+                    BuildProviderDiagnostic(providerSettings, "图片理解失败：请求未能发送到视觉模型服务，" + ex.GetType().Name, FormatExceptionChain(ex), usedEndpoint));
+                return null;
+            }
+
+            if (response == null || !response.IsSuccessStatusCode)
+            {
+                AppendQuietDiagnosticCard("图片理解",
+                    BuildProviderDiagnostic(providerSettings, "图片理解失败：视觉模型服务没有返回成功响应。", lastEndpointError, usedEndpoint));
+                return null;
+            }
+
+            string responseJson = await ReadResponseTextAsync(response, ct);
+            if (!TryParseAssistantMessageFromResponse(responseJson, out JObject messageNode, out string parseError))
+            {
+                AppendQuietDiagnosticCard("图片理解",
+                    BuildProviderDiagnostic(providerSettings, "图片理解失败：视觉模型响应不是可解析的聊天响应，" + parseError, responseJson, usedEndpoint));
+                return null;
+            }
+
+            string analysis = messageNode["content"]?.ToString();
+            if (string.IsNullOrWhiteSpace(analysis))
+                analysis = messageNode["reasoning_content"]?.ToString();
+
+            if (string.IsNullOrWhiteSpace(analysis))
+            {
+                AppendQuietDiagnosticCard("图片理解",
+                    BuildProviderDiagnostic(providerSettings, "图片理解失败：视觉模型返回成功，但没有输出图片分析。", responseJson, usedEndpoint));
+                return null;
+            }
+
+            double durationSeconds = (DateTime.Now - startTime).TotalSeconds;
+            AppendCollapsibleBubble(analysis.Trim(), "图片理解 " + Math.Round(durationSeconds, 1) + "s", "🖼");
+            return analysis.Trim();
         }
 
         private static string BuildProviderDiagnostic(ProviderRuntimeSettings providerSettings, string headline, string detail = null, string usedUrl = null)
@@ -3665,6 +3853,103 @@ namespace ADDGH
             }
 
             return contentArr;
+        }
+
+        private static void AppendNonImageAttachmentText(StringBuilder textBuilder, IEnumerable<AttachmentItem> attachments)
+        {
+            if (textBuilder == null || attachments == null) return;
+
+            foreach (var attachment in attachments.Where(a => a.Kind != AttachmentKind.Image))
+            {
+                textBuilder.AppendLine();
+                textBuilder.AppendLine($"【附件内容：{attachment.FileName}】");
+                if (!string.IsNullOrWhiteSpace(attachment.ExtractedText))
+                    textBuilder.AppendLine(attachment.ExtractedText);
+                else if (!string.IsNullOrWhiteSpace(attachment.Error))
+                    textBuilder.AppendLine("附件读取失败：" + attachment.Error);
+                else
+                    textBuilder.AppendLine("未提取到文本内容。");
+            }
+        }
+
+        private static string BuildVisionExecutionUserText(string input, List<AttachmentItem> attachments, string visionAnalysis)
+        {
+            var sb = new StringBuilder();
+            if (!string.IsNullOrWhiteSpace(input))
+            {
+                sb.AppendLine("用户原始请求：");
+                sb.AppendLine(input.Trim());
+                sb.AppendLine();
+            }
+            else
+            {
+                sb.AppendLine("用户发送了图片附件，但没有额外文字说明。");
+                sb.AppendLine();
+            }
+
+            AppendNonImageAttachmentText(sb, attachments);
+            if (attachments != null && attachments.Any(a => a.Kind != AttachmentKind.Image))
+                sb.AppendLine();
+
+            sb.AppendLine("以下图片理解来自视觉预处理模型，执行模型没有直接看到原图。请基于该分析和用户原始请求继续规划并执行 Grasshopper 操作。");
+            sb.AppendLine();
+            sb.AppendLine(visionAnalysis?.Trim() ?? "");
+            return sb.ToString().Trim();
+        }
+
+        private static JObject BuildVisionPreprocessRequestBody(ProviderRuntimeSettings providerSettings, string input, List<AttachmentItem> attachments)
+        {
+            var content = new JArray();
+            var textBuilder = new StringBuilder();
+            textBuilder.AppendLine("请只分析用户上传的图片和文字，不要调用工具，也不要执行任何 Grasshopper 操作。");
+            textBuilder.AppendLine("输出应包含：图片概述、关键对象/可读文字、用户可能意图、与 Grasshopper 建模相关的信息、约束/不确定性、给执行模型的简短任务摘要。");
+            textBuilder.AppendLine("如果无法确定，请明确写出不确定点，不要编造。");
+
+            if (!string.IsNullOrWhiteSpace(input))
+            {
+                textBuilder.AppendLine();
+                textBuilder.AppendLine("用户原始请求：");
+                textBuilder.AppendLine(input.Trim());
+            }
+
+            AppendNonImageAttachmentText(textBuilder, attachments);
+            content.Add(new JObject
+            {
+                ["type"] = "text",
+                ["text"] = textBuilder.ToString().Trim()
+            });
+
+            foreach (var attachment in attachments.Where(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64)))
+            {
+                content.Add(new JObject
+                {
+                    ["type"] = "image_url",
+                    ["image_url"] = new JObject
+                    {
+                        ["url"] = $"data:{attachment.MimeType};base64,{attachment.Base64}"
+                    }
+                });
+            }
+
+            return new JObject
+            {
+                ["model"] = providerSettings.ModelName,
+                ["messages"] = new JArray
+                {
+                    new JObject
+                    {
+                        ["role"] = "system",
+                        ["content"] = "你是图像理解预处理器。你的任务是把图片内容和用户意图转写成准确、简洁、可执行的中文分析，供另一个低成本 LLM 继续操作。不要调用工具，不要输出无关说明。"
+                    },
+                    new JObject
+                    {
+                        ["role"] = "user",
+                        ["content"] = content
+                    }
+                },
+                ["stream"] = false,
+                ["temperature"] = 0.1
+            };
         }
 
         /// <summary> 构建工具摘要条（灰色小条），不含插入逻辑。 </summary>
