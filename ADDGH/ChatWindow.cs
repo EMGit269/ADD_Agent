@@ -523,6 +523,22 @@ namespace ADDGH
             }
         }
 
+        private static ImageSource CreateTransparentWindowIcon()
+        {
+            byte[] pixels = new byte[4];
+            BitmapSource icon = BitmapSource.Create(
+                1,
+                1,
+                96,
+                96,
+                PixelFormats.Pbgra32,
+                null,
+                pixels,
+                4);
+            icon.Freeze();
+            return icon;
+        }
+
         private static void UpdateWindowMinWidthForVisiblePanes()
         {
             if (_window == null) return;
@@ -665,7 +681,7 @@ namespace ADDGH
             string xaml = @"
 <Window xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation""
         xmlns:x=""http://schemas.microsoft.com/winfx/2006/xaml""
-        Title=""Magpie AI Agent"" Height=""850"" Width=""450""
+        Title="""" Height=""850"" Width=""450""
         MinHeight=""520"" MinWidth=""450""
         ResizeMode=""CanResize""
         WindowStyle=""SingleBorderWindow"" Background=""#141414""
@@ -1215,6 +1231,8 @@ namespace ADDGH
             try
             {
                 _window = (Window)XamlReader.Parse(xaml);
+                _window.Title = string.Empty;
+                _window.Icon = CreateTransparentWindowIcon();
             }
             catch (Exception ex)
             {
