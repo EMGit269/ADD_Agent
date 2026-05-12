@@ -22,6 +22,7 @@ using System.Reflection;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System.Windows.Markup;
+using System.Windows.Interop;
 using Grasshopper.Kernel;
 using Grasshopper.GUI.Canvas;
 using Grasshopper.GUI.Script;
@@ -31,6 +32,9 @@ namespace ADDGH
     public static partial class ChatWindow
     {
         private static Window _window;
+        private const double DefaultWindowWidth = 450;
+        private const double CodeViewColumnWidth = 750;
+        private static double _widthBeforeCodeView = double.NaN;
         private static StackPanel _chatPanel;
         private static ScrollViewer _chatScroll;
         private static TextBox _txtInput;
@@ -468,12 +472,74 @@ namespace ADDGH
             }
         }
 
+        private static void ActivateMainWindow()
+        {
+            if (_window == null) return;
+
+            if (_ballWindow != null && _ballWindow.IsVisible)
+                _ballWindow.Hide();
+
+            if (_window.WindowState == WindowState.Minimized)
+                _window.WindowState = WindowState.Normal;
+
+            _window.Show();
+            _window.Activate();
+        }
+
+        private static void AttachWindowResizeHitTest()
+        {
+            if (_window == null) return;
+            var source = PresentationSource.FromVisual(_window) as HwndSource;
+            if (source != null) source.AddHook(WindowResizeHook);
+        }
+
+        private static IntPtr WindowResizeHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            const int WM_NCHITTEST = 0x0084;
+            const int HTLEFT = 10;
+            const int HTRIGHT = 11;
+            const int HTTOP = 12;
+            const int HTTOPLEFT = 13;
+            const int HTTOPRIGHT = 14;
+            const int HTBOTTOM = 15;
+            const int HTBOTTOMLEFT = 16;
+            const int HTBOTTOMRIGHT = 17;
+
+            if (msg != WM_NCHITTEST || _window == null || _window.ResizeMode == ResizeMode.NoResize || _window.WindowState != WindowState.Normal)
+                return IntPtr.Zero;
+
+            long lp = lParam.ToInt64();
+            var screenPoint = new Point(unchecked((short)(lp & 0xFFFF)), unchecked((short)((lp >> 16) & 0xFFFF)));
+            Point p = _window.PointFromScreen(screenPoint);
+            double width = _window.ActualWidth;
+            double height = _window.ActualHeight;
+            const double edge = 8;
+
+            bool left = p.X >= 0 && p.X < edge;
+            bool right = p.X <= width && p.X > width - edge;
+            bool top = p.Y >= 0 && p.Y < edge;
+            bool bottom = p.Y <= height && p.Y > height - edge;
+
+            int hit = 0;
+            if (left && top) hit = HTTOPLEFT;
+            else if (right && top) hit = HTTOPRIGHT;
+            else if (left && bottom) hit = HTBOTTOMLEFT;
+            else if (right && bottom) hit = HTBOTTOMRIGHT;
+            else if (left) hit = HTLEFT;
+            else if (right) hit = HTRIGHT;
+            else if (top) hit = HTTOP;
+            else if (bottom) hit = HTBOTTOM;
+
+            if (hit == 0) return IntPtr.Zero;
+            handled = true;
+            return new IntPtr(hit);
+        }
+
         public static void Show()
         {
             if (_window != null)
             {
-                _window.Show();
-                _window.Activate();
+                ActivateMainWindow();
                 StartGrasshopperCodeSurfaceHooks();
                 Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
                 {
@@ -487,9 +553,8 @@ namespace ADDGH
 <Window xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation""
         xmlns:x=""http://schemas.microsoft.com/winfx/2006/xaml""
         Title=""Magpie AI Agent"" Height=""850"" Width=""450""
-        MinHeight=""850"" MinWidth=""450""
-        MaxHeight=""850"" MaxWidth=""1200""
-        ResizeMode=""NoResize""
+        MinHeight=""520"" MinWidth=""450""
+        ResizeMode=""CanResizeWithGrip""
         WindowStyle=""None"" AllowsTransparency=""True"" Background=""Transparent""
         Topmost=""True"" WindowStartupLocation=""CenterScreen"" x:Name=""MagpieWindow"">
     <Window.Resources>
@@ -1063,9 +1128,15 @@ namespace ADDGH
 
             _window.Closed += (s, e) =>
             {
+                if (_ballWindow != null)
+                {
+                    _ballWindow.Close();
+                    _ballWindow = null;
+                }
                 ShutdownPlugin();
                 _window = null;
             };
+            _window.SourceInitialized += (s, e) => AttachWindowResizeHitTest();
             InitializeFloatingScrollbars();
             
             var headerBorder = (Border)_window.FindName("HeaderBorder");
@@ -1178,8 +1249,12 @@ namespace ADDGH
             btnToggleCode.Click += (s, e) => {
                 _isCodeVisible = !_isCodeVisible;
                 if (_isCodeVisible) {
-                        if (_codeCol != null) _codeCol.Width = new GridLength(750);
-                    _window.Width = 1200;
+                        if (_codeCol != null) _codeCol.Width = new GridLength(CodeViewColumnWidth);
+                    _widthBeforeCodeView = _window.ActualWidth > 0 ? _window.ActualWidth : _window.Width;
+                    double desiredWidth = DefaultWindowWidth + CodeViewColumnWidth;
+                    double maxWorkAreaWidth = SystemParameters.WorkArea.Width;
+                    if (_window.Width < desiredWidth)
+                        _window.Width = Math.Min(desiredWidth, Math.Max(_window.MinWidth, maxWorkAreaWidth));
                         if (headerBorder != null) headerBorder.CornerRadius = new CornerRadius(16, 0, 0, 0);
                         if (_inputAreaBorder != null) _inputAreaBorder.CornerRadius = new CornerRadius(0, 0, 0, 16);
                     StartGrasshopperCodeSurfaceHooks();
@@ -1187,7 +1262,9 @@ namespace ADDGH
                     UpdateCodeView();
                 } else {
                         if (_codeCol != null) _codeCol.Width = new GridLength(0);
-                    _window.Width = 450;
+                    if (!double.IsNaN(_widthBeforeCodeView) && _widthBeforeCodeView >= _window.MinWidth)
+                        _window.Width = _widthBeforeCodeView;
+                    _widthBeforeCodeView = double.NaN;
                         if (headerBorder != null) headerBorder.CornerRadius = new CornerRadius(16, 16, 0, 0);
                         if (_inputAreaBorder != null) _inputAreaBorder.CornerRadius = new CornerRadius(0, 0, 16, 16);
                 }
@@ -8772,9 +8849,7 @@ namespace ADDGH
             border.MouseLeftButtonDown += (s, e) => {
                 if (e.LeftButton == MouseButtonState.Pressed) {
                     if (e.ClickCount >= 2) {
-                        _ballWindow.Hide();
-                        _window.Show();
-                        _window.Activate();
+                        ActivateMainWindow();
                     } else {
                         _ballWindow.DragMove();
                     }
