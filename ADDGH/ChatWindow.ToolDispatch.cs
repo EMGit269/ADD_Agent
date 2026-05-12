@@ -137,9 +137,11 @@ namespace ADDGH
                 }
                 else if (funcName == "create_csharp_script_component")
                 {
+                    string csharpName = argsObj["name"]?.ToString();
+                    if (string.IsNullOrWhiteSpace(csharpName)) csharpName = argsObj["label"]?.ToString();
                     result.ToolResult = ExecuteCreateCSharpScriptComponent(
                         argsObj["alias_id"]?.ToString(),
-                        argsObj["label"]?.ToString(),
+                        csharpName,
                         argsObj["x"]?.ToObject<float>() ?? 0f,
                         argsObj["y"]?.ToObject<float>() ?? 0f,
                         argsObj["inputs"] as JArray,
@@ -152,7 +154,6 @@ namespace ADDGH
                     {
                         result.AddComp += 1;
                         if (argsObj["components"] is JArray helperItems) result.AddComp += helperItems.Count;
-                        if (argsObj["connections"] is JArray connectionItems) result.AddConn += connectionItems.Count;
                     }
                 }
                 else if (funcName == "edit_csharp_script_component")
@@ -203,7 +204,9 @@ namespace ADDGH
                     result.ToolResult = ExecuteModifyGhComponentPorts(
                         argsObj["id"]?.ToString(),
                         argsObj["is_input"]?.ToObject<bool>() ?? false,
-                        argsObj["action"]?.ToString());
+                        argsObj["action"]?.ToString(),
+                        argsObj["port_name"]?.ToString(),
+                        argsObj["index"]?.ToObject<int?>());
                 }
                 else if (funcName == "modify_gh_port_data")
                 {

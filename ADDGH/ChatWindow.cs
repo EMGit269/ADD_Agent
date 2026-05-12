@@ -136,8 +136,8 @@ namespace ADDGH
 1. In C# priority mode, new core modeling logic must use create_csharp_script_component, not create_script_component_graph.
 2. Existing C# Script body edits must use edit_csharp_script_component, not gh_native_script_editor or set_gh_component_value.
 3. The body field must contain only the RunScript method body. Do not include using statements, class declarations, the RunScript signature, or the default C# Script template.
-4. The create tool configures C# input ports first, then creates output ports named b, c, d... in order, then writes the body into the editable logic block.
-5. Output specs are business labels only. Actual C# output variables start at b, c, d...; assign to those variables in the body. Do not assign to a in generated C# bodies because some GH C# Script builds keep a as a UI/default port but omit ref object a from the generated signature after dynamic port edits.
+4. The create tool first places a default C# Script component, waits for it to initialize, then applies the requested name, ports, and body.
+5. Default C# outputs such as out/a are preserved. Output specs are business labels only; requested extra output variables start at b, c, d...; assign to those variables in the body. Do not assign to a in generated C# bodies because it is a default UI port.
 6. Do not create unnecessary outputs. Prefer one or a few structured outputs; split into multiple script components only when the logic is genuinely clearer.
 7. Do not declare local variables whose names collide with output variables currently in use, such as a, b, c.
 8. Non-script helper components in this mode are limited to Params and Display categories for input, output, preview, and debugging.";
@@ -3600,18 +3600,19 @@ namespace ADDGH
                 function = new
                 {
                     name = "create_csharp_script_component",
-                    description = "Dedicated C# Script layout tool. Creates one C# Script component, configures input ports, forces output ports to b,c,d... (not a), writes only the RunScript method body into the default C# Script editable logic block, and creates optional Params/Display helper components. It intentionally skips connections during creation to avoid Grasshopper/Rhino crashes; connect components later after the script component is stable. Use this instead of create_script_component_graph for C# priority modeling.",
+                    description = "Dedicated C# Script layout tool. It first creates a default C# Script component, waits briefly for Grasshopper/Rhino 8 to finish initializing it, then applies the requested component name, input ports, extra output ports, and RunScript body. Default C# outputs such as out/a are preserved; requested business outputs are added as b,c,d... and those are the variables to assign. It intentionally skips connections during creation; connect components later after the script component is stable. Use this instead of create_script_component_graph for C# priority modeling.",
                     parameters = new
                     {
                         type = "object",
                         properties = new
                         {
                             alias_id = new { type = "string", description = "Temporary alias for the C# Script component. Defaults to core when omitted." },
-                            label = new { type = "string", description = "Optional C# Script component nickname." },
+                            name = new { type = "string", description = "Optional C# Script component nickname applied after the default component has initialized." },
+                            label = new { type = "string", description = "Deprecated alias for name. Prefer name." },
                             x = new { type = "number", description = "Canvas X coordinate." },
                             y = new { type = "number", description = "Canvas Y coordinate." },
                             inputs = new { type = "array", items = inputPortSchema },
-                            outputs = new { type = "array", items = outputPortSchema, description = "Business output labels. Actual C# variables are forced to b,c,d... in this order. Do not assign to a." },
+                            outputs = new { type = "array", items = outputPortSchema, description = "Business output labels. Default out/a ports are preserved; requested outputs are added as b,c,d... in this order. Do not assign to a." },
                             body = new { type = "string", description = "Only the RunScript method body. No using statements, no class declaration, no RunScript signature, no template." },
                             components = new { type = "array", items = helperComponentSchema },
                             connections = new { type = "array", items = connectionSchema, description = "Optional. Currently skipped during C# creation for stability; use a later connection tool call after creation." },
@@ -3619,7 +3620,7 @@ namespace ADDGH
                             summary = new { type = "string", description = "Required short Chinese summary for the UI operation card. Do not write the function name." },
                             summary_detail = new { type = "string", description = "Optional short secondary phrase for the UI operation card." }
                         },
-                        required = new[] { "x", "y", "body", "outputs", "summary" }
+                        required = new[] { "x", "y", "body", "summary" }
                     }
                 }
             };
@@ -4021,6 +4022,8 @@ namespace ADDGH
                                         id = new { type = "string", description = "电池 GUID" },
                                         is_input = new { type = "boolean", description = "true 为输入端口，false 为输出端口" },
                                         action = new { type = "string", description = "'add' 或 'remove'" },
+                                        port_name = new { type = "string", description = "remove 时优先按此名称删除端口，匹配 Name / NickName（忽略大小写）" },
+                                        index = new { type = "integer", description = "remove 的可选兜底索引；未提供 port_name 时使用" },
                                         summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
                                         summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
                                     },
@@ -4348,9 +4351,11 @@ namespace ADDGH
                                 if (argsObj["connections"] is JArray conns) addConn += conns.Count;
                             }
                             else if (funcName == "create_csharp_script_component") {
+                                string csharpName = argsObj["name"]?.ToString();
+                                if (string.IsNullOrWhiteSpace(csharpName)) csharpName = argsObj["label"]?.ToString();
                                 toolResult = ExecuteCreateCSharpScriptComponent(
                                     argsObj["alias_id"]?.ToString(),
-                                    argsObj["label"]?.ToString(),
+                                    csharpName,
                                     argsObj["x"]?.ToObject<float>() ?? 0f,
                                     argsObj["y"]?.ToObject<float>() ?? 0f,
                                     argsObj["inputs"] as JArray,
@@ -4362,7 +4367,6 @@ namespace ADDGH
                                 if (!toolResult.StartsWith("Error:")) {
                                     addComp += 1;
                                     if (argsObj["components"] is JArray compsArr) addComp += compsArr.Count;
-                                    if (argsObj["connections"] is JArray connsArr) addConn += connsArr.Count;
                                 }
                             }
                             else if (funcName == "edit_csharp_script_component") {
@@ -4403,7 +4407,9 @@ namespace ADDGH
                                 toolResult = ExecuteModifyGhComponentPorts(
                                     argsObj["id"]?.ToString(),
                                     argsObj["is_input"]?.ToObject<bool>() ?? false,
-                                    argsObj["action"]?.ToString());
+                                    argsObj["action"]?.ToString(),
+                                    argsObj["port_name"]?.ToString(),
+                                    argsObj["index"]?.ToObject<int?>());
                             }
                             else if (funcName == "modify_gh_port_data") {
                                 toolResult = ExecuteModifyGhPortData(
@@ -5502,6 +5508,33 @@ namespace ADDGH
             catch (Exception ex) { AddGhLog.Debug("FinalizeGrasshopperScriptMutation Refresh failed: " + ex.Message); }
         }
 
+        private static void WaitForUiResponsiveDelay(int milliseconds)
+        {
+            if (milliseconds <= 0) return;
+            var dispatcher = _window?.Dispatcher;
+            if (dispatcher != null && dispatcher.CheckAccess())
+            {
+                var frame = new System.Windows.Threading.DispatcherFrame();
+                var timer = new System.Windows.Threading.DispatcherTimer(
+                    System.Windows.Threading.DispatcherPriority.Background,
+                    dispatcher)
+                {
+                    Interval = TimeSpan.FromMilliseconds(milliseconds)
+                };
+                timer.Tick += (s, e) =>
+                {
+                    timer.Stop();
+                    frame.Continue = false;
+                };
+                timer.Start();
+                System.Windows.Threading.Dispatcher.PushFrame(frame);
+            }
+            else
+            {
+                System.Threading.Thread.Sleep(milliseconds);
+            }
+        }
+
         private static bool GhHasWritableStringMember(Grasshopper.Kernel.IGH_DocumentObject obj, string name)
         {
             if (obj == null || string.IsNullOrWhiteSpace(name)) return false;
@@ -5930,7 +5963,7 @@ namespace ADDGH
 
         private static JArray BuildCSharpOutputPortsFromLabels(JArray outputLabels)
         {
-            int count = outputLabels == null || outputLabels.Count == 0 ? 1 : Math.Min(26, outputLabels.Count);
+            int count = outputLabels == null ? 0 : Math.Min(26, outputLabels.Count);
             var outputs = new JArray();
             for (int i = 0; i < count; i++)
             {
@@ -6147,6 +6180,82 @@ namespace ADDGH
             return true;
         }
 
+        private static bool TryConfigureCSharpScriptPortsAfterDefaultCreate(Grasshopper.Kernel.IGH_DocumentObject obj, JArray inputs, JArray requestedOutputs, List<string> warnings)
+        {
+            if (!(obj is Grasshopper.Kernel.IGH_Component comp))
+            {
+                warnings?.Add((obj?.NickName ?? obj?.Name ?? "C# Script") + " is not a configurable component.");
+                return false;
+            }
+
+            if (!(obj is Grasshopper.Kernel.IGH_VariableParameterComponent vpc))
+            {
+                warnings?.Add((obj.NickName ?? obj.Name ?? "C# Script") + " does not support dynamic ports; default ports were preserved.");
+                return false;
+            }
+
+            bool changed = false;
+
+            bool AddPort(Grasshopper.Kernel.GH_ParameterSide side, out Grasshopper.Kernel.IGH_Param created)
+            {
+                created = null;
+                int index = side == Grasshopper.Kernel.GH_ParameterSide.Input ? comp.Params.Input.Count : comp.Params.Output.Count;
+                created = vpc.CreateParameter(side, index);
+                if (created == null) return false;
+                if (side == Grasshopper.Kernel.GH_ParameterSide.Input) comp.Params.RegisterInputParam(created);
+                else comp.Params.RegisterOutputParam(created);
+                changed = true;
+                return true;
+            }
+
+            if (inputs != null)
+            {
+                while (comp.Params.Input.Count < inputs.Count)
+                {
+                    if (!AddPort(Grasshopper.Kernel.GH_ParameterSide.Input, out _))
+                    {
+                        warnings?.Add("Failed to add one or more C# input ports; existing default inputs were preserved.");
+                        break;
+                    }
+                }
+            }
+
+            var outputTargets = requestedOutputs ?? new JArray();
+            var requestedOutputParams = new List<Grasshopper.Kernel.IGH_Param>();
+            for (int i = 0; i < outputTargets.Count; i++)
+            {
+                string forcedName = GetCSharpOutputPortName(i);
+                var existing = comp.Params.Output.FirstOrDefault(p =>
+                    string.Equals(p.Name, forcedName, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(p.NickName, forcedName, StringComparison.OrdinalIgnoreCase));
+
+                if (existing == null)
+                {
+                    if (!AddPort(Grasshopper.Kernel.GH_ParameterSide.Output, out existing))
+                    {
+                        warnings?.Add("Failed to add C# output port " + forcedName + "; default out/a outputs were preserved.");
+                        continue;
+                    }
+                }
+
+                requestedOutputParams.Add(existing);
+            }
+
+            if (changed)
+            {
+                try { vpc.VariableParameterMaintenance(); } catch (Exception ex) { warnings?.Add("C# port maintenance failed: " + ex.Message); }
+                try { comp.Params.OnParametersChanged(); } catch (Exception ex) { warnings?.Add("C# port refresh failed: " + ex.Message); }
+            }
+
+            for (int i = 0; inputs != null && i < inputs.Count && i < comp.Params.Input.Count; i++)
+                ApplyPortMetadata(comp.Params.Input[i], inputs[i], false, i, warnings);
+
+            for (int i = 0; i < outputTargets.Count && i < requestedOutputParams.Count; i++)
+                ApplyPortMetadata(requestedOutputParams[i], outputTargets[i], true, i, warnings);
+
+            return true;
+        }
+
         private static bool IsCSharpScriptComponent(Grasshopper.Kernel.IGH_DocumentObject obj)
         {
             if (obj == null) return false;
@@ -6272,13 +6381,6 @@ namespace ADDGH
                     return;
                 }
 
-                var scriptProbe = scriptProxy.CreateInstance() as Grasshopper.Kernel.IGH_DocumentObject;
-                if (!(scriptProbe is Grasshopper.Kernel.IGH_Component))
-                {
-                    result = "Error: C# Script component cannot be instantiated as a connectable component.";
-                    return;
-                }
-
                 if (components != null)
                 {
                     foreach (var c in components)
@@ -6314,15 +6416,33 @@ namespace ADDGH
                 var warnings = new List<string>();
 
                 var scriptObj = scriptProxy.CreateInstance() as Grasshopper.Kernel.IGH_DocumentObject;
+                if (!(scriptObj is Grasshopper.Kernel.IGH_Component))
+                {
+                    result = "Error: C# Script component cannot be instantiated as a connectable component.";
+                    return;
+                }
                 scriptObj.CreateAttributes();
                 scriptObj.Attributes.Pivot = new System.Drawing.PointF(x, y);
-                if (!string.IsNullOrWhiteSpace(label)) scriptObj.NickName = label;
                 doc.AddObject(scriptObj, false);
 
-                TryConfigureScriptPorts(scriptObj, inputs, outputSpecs, true, warnings);
+                ShowThinkingAnimation("正在稳定 C# 电池...");
+                WaitForUiResponsiveDelay(500);
+                ShowThinkingAnimation("正在配置 C# 电池...");
+
+                if (!string.IsNullOrWhiteSpace(label))
+                {
+                    scriptObj.NickName = label.Trim();
+                    scriptObj.Attributes?.ExpireLayout();
+                }
+
+                TryConfigureCSharpScriptPortsAfterDefaultCreate(scriptObj, inputs, outputSpecs, warnings);
 
                 bool wrote = TrySetCSharpScriptBodyIntoTemplate(scriptObj, body ?? "", warnings);
-                if (wrote) FinalizeGrasshopperScriptMutation(doc, scriptObj);
+                if (wrote)
+                {
+                    try { scriptObj.ExpireSolution(false); }
+                    catch (Exception ex) { warnings.Add("C# Script expire failed: " + ex.Message); }
+                }
                 else warnings.Add("C# Script body was not written.");
 
                 createdObjs[aliasId] = scriptObj;
@@ -6380,7 +6500,7 @@ namespace ADDGH
                     group.Colour = System.Drawing.Color.FromArgb(80, 100, 150, 250);
                     foreach (var obj in createdObjs.Values) group.AddObject(obj.InstanceGuid);
                     doc.AddObject(group, false);
-                    group.ExpireSolution(true);
+                    try { group.ExpireSolution(false); } catch { }
                 }
 
                 _canvasChanged = true;
@@ -7054,7 +7174,7 @@ namespace ADDGH
             return result;
         }
 
-        private static string ExecuteModifyGhComponentPorts(string id, bool isInput, string action)
+        private static string ExecuteModifyGhComponentPorts(string id, bool isInput, string action, string portName = null, int? index = null)
         {
             string result = "";
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
@@ -7078,8 +7198,44 @@ namespace ADDGH
                 } else if (action == "remove") {
                     var list = isInput ? comp.Params.Input : comp.Params.Output;
                     if (list.Count > 0) {
-                        var param = list[list.Count - 1];
-                        if (vpc.CanRemoveParameter(isInput ? Grasshopper.Kernel.GH_ParameterSide.Input : Grasshopper.Kernel.GH_ParameterSide.Output, list.Count - 1)) {
+                        int removeIndex = -1;
+                        Grasshopper.Kernel.IGH_Param param = null;
+                        string targetName = string.IsNullOrWhiteSpace(portName) ? null : portName.Trim();
+
+                        if (!string.IsNullOrWhiteSpace(targetName)) {
+                            for (int i = 0; i < list.Count; i++) {
+                                var candidate = list[i];
+                                if (candidate == null) continue;
+
+                                bool match = (!string.IsNullOrWhiteSpace(candidate.Name) && candidate.Name.Trim().Equals(targetName, StringComparison.OrdinalIgnoreCase))
+                                    || (!string.IsNullOrWhiteSpace(candidate.NickName) && candidate.NickName.Trim().Equals(targetName, StringComparison.OrdinalIgnoreCase));
+                                if (match) {
+                                    if (removeIndex >= 0) {
+                                        result = "Error: 端口名称不唯一，请改用 index。";
+                                        return;
+                                    }
+                                    removeIndex = i;
+                                    param = candidate;
+                                }
+                            }
+
+                            if (removeIndex < 0) {
+                                result = "Error: 未找到名称为 '" + targetName + "' 的端口。";
+                                return;
+                            }
+                        } else if (index.HasValue) {
+                            removeIndex = index.Value;
+                            if (removeIndex < 0 || removeIndex >= list.Count) {
+                                result = "Error: 端口索引超出范围。";
+                                return;
+                            }
+                            param = list[removeIndex];
+                        } else {
+                            removeIndex = list.Count - 1;
+                            param = list[removeIndex];
+                        }
+
+                        if (vpc.CanRemoveParameter(isInput ? Grasshopper.Kernel.GH_ParameterSide.Input : Grasshopper.Kernel.GH_ParameterSide.Output, removeIndex)) {
                             comp.Params.UnregisterParameter(param);
                         } else { result = "Error: 无法删除该端口。"; return; }
                     }
