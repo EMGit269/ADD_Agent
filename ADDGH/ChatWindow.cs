@@ -1444,6 +1444,161 @@ namespace ADDGH
             return baseType;
         }
 
+        private static string NormalizeRequestedGhTypeHint(string raw)
+        {
+            string s = (raw ?? "").Trim();
+            if (s.Length == 0) return "";
+
+            while (s.EndsWith("[]", StringComparison.Ordinal))
+                s = s.Substring(0, s.Length - 2).TrimEnd();
+
+            switch (s.ToLowerInvariant())
+            {
+                case "bool":
+                case "boolean":
+                    return "Boolean";
+                case "int":
+                case "integer":
+                    return "Integer";
+                case "double":
+                case "float":
+                case "number":
+                    return "Double";
+                case "text":
+                case "str":
+                case "string":
+                    return "String";
+                case "point":
+                case "point3d":
+                    return "Point3d";
+                case "vector":
+                case "vector3d":
+                    return "Vector3d";
+                case "rect":
+                case "rectangle":
+                    return "Rectangle3d";
+                default:
+                    return s;
+            }
+        }
+
+        private static Grasshopper.Kernel.Parameters.IGH_TypeHint TryCreateGhTypeHint(string raw)
+        {
+            string normalized = NormalizeRequestedGhTypeHint(raw);
+            if (string.IsNullOrWhiteSpace(normalized)) return null;
+
+            try
+            {
+                var found = Grasshopper.Kernel.Parameters.Hints.GH_TypeHintServer.FindHintByName(normalized);
+                if (found != null) return found;
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Debug("TryCreateGhTypeHint FindHintByName " + normalized + ": " + ex.Message);
+            }
+
+            string[] typeCandidates =
+            {
+                "Grasshopper.Kernel.Parameters.Hints.GH_" + normalized + "Hint",
+                "Grasshopper.Kernel.Parameters.Hints.GH_" + normalized + "Hint_CS",
+                "Grasshopper.Kernel.Parameters.Hints.GH_" + normalized
+            };
+
+            foreach (string fullName in typeCandidates)
+            {
+                try
+                {
+                    Type t = typeof(Grasshopper.Kernel.Parameters.IGH_TypeHint).Assembly.GetType(fullName, false);
+                    if (t == null) continue;
+                    if (!typeof(Grasshopper.Kernel.Parameters.IGH_TypeHint).IsAssignableFrom(t)) continue;
+                    return Activator.CreateInstance(t) as Grasshopper.Kernel.Parameters.IGH_TypeHint;
+                }
+                catch (Exception ex)
+                {
+                    AddGhLog.Debug("TryCreateGhTypeHint ctor " + fullName + ": " + ex.Message);
+                }
+            }
+
+            return null;
+        }
+
+        private static bool TryApplyRuntimeTypeHint(Grasshopper.Kernel.IGH_Param param, string rawTypeHint, List<string> warnings = null)
+        {
+            var hint = TryCreateGhTypeHint(rawTypeHint);
+            if (hint == null) return false;
+
+            Type paramType = param?.GetType();
+            if (paramType == null) return false;
+
+            BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+            foreach (var prop in paramType.GetProperties(flags))
+            {
+                if (!prop.CanWrite) continue;
+                if (prop.Name.IndexOf("TypeHint", StringComparison.OrdinalIgnoreCase) < 0 &&
+                    !string.Equals(prop.Name, "Hint", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (!prop.PropertyType.IsAssignableFrom(hint.GetType()) &&
+                    !prop.PropertyType.IsAssignableFrom(typeof(Grasshopper.Kernel.Parameters.IGH_TypeHint)))
+                    continue;
+                try
+                {
+                    prop.SetValue(param, hint, null);
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    AddGhLog.Debug("TryApplyRuntimeTypeHint prop " + prop.Name + ": " + ex.Message);
+                }
+            }
+
+            foreach (var method in paramType.GetMethods(flags))
+            {
+                if (method.Name.IndexOf("TypeHint", StringComparison.OrdinalIgnoreCase) < 0 &&
+                    !string.Equals(method.Name, "SetHint", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var args = method.GetParameters();
+                if (args.Length != 1) continue;
+                if (!args[0].ParameterType.IsAssignableFrom(hint.GetType()) &&
+                    !args[0].ParameterType.IsAssignableFrom(typeof(Grasshopper.Kernel.Parameters.IGH_TypeHint)))
+                    continue;
+                try
+                {
+                    method.Invoke(param, new object[] { hint });
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    AddGhLog.Debug("TryApplyRuntimeTypeHint method " + method.Name + ": " + ex.Message);
+                }
+            }
+
+            for (Type t = paramType; t != null && t != typeof(object); t = t.BaseType)
+            {
+                foreach (var field in t.GetFields(flags))
+                {
+                    if (field.Name.IndexOf("TypeHint", StringComparison.OrdinalIgnoreCase) < 0 &&
+                        !string.Equals(field.Name, "m_typeHint", StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    if (!field.FieldType.IsAssignableFrom(hint.GetType()) &&
+                        !field.FieldType.IsAssignableFrom(typeof(Grasshopper.Kernel.Parameters.IGH_TypeHint)))
+                        continue;
+                    try
+                    {
+                        field.SetValue(param, hint);
+                        return true;
+                    }
+                    catch (Exception ex)
+                    {
+                        AddGhLog.Debug("TryApplyRuntimeTypeHint field " + field.Name + ": " + ex.Message);
+                    }
+                }
+            }
+
+            warnings?.Add("Type hint '" + rawTypeHint + "' was recognized but could not be applied to runtime parameter type " + paramType.Name + ".");
+            return false;
+        }
+
         private static void UpdateLibraryUI()
         {
             if (_libraryContent == null) return;
@@ -6741,6 +6896,9 @@ namespace ADDGH
             if (param == null || specToken == null) return;
             string name = specToken["name"]?.ToString();
             string typeHint = specToken["type_hint"]?.ToString();
+            bool appliedRuntimeTypeHint = false;
+            if (!string.IsNullOrWhiteSpace(typeHint))
+                appliedRuntimeTypeHint = TryApplyRuntimeTypeHint(param, typeHint, warnings);
             if (forceCSharpOutputName)
             {
                 string forced = GetCSharpOutputPortName(portIndex);
@@ -6758,11 +6916,11 @@ namespace ADDGH
                 param.Name = name.Trim();
                 param.NickName = name.Trim();
                 if (!string.IsNullOrWhiteSpace(typeHint))
-                    param.Description = typeHint.Trim();
+                    param.Description = appliedRuntimeTypeHint ? "[type_hint] " + typeHint.Trim() : typeHint.Trim();
             }
             else if (!string.IsNullOrWhiteSpace(typeHint))
             {
-                param.Description = typeHint.Trim();
+                param.Description = appliedRuntimeTypeHint ? "[type_hint] " + typeHint.Trim() : typeHint.Trim();
             }
             param.Attributes?.ExpireLayout();
         }
