@@ -39,6 +39,7 @@ namespace ADDGH
         private const double CodeViewColumnWidth = 750;
         private const double HistorySidebarWidth = 320;
         private const double ChatContentMaxWidth = 900;
+        private const double ChatContentCollapsedMaxWidth = 780;
         private const double ChatScrollbarGutter = 18;
         private static double _widthBeforeCodeView = double.NaN;
         private static StackPanel _chatPanel;
@@ -543,12 +544,25 @@ namespace ADDGH
             double availableWidth = _isCodeVisible
                 ? Math.Max(ChatPaneMinWidth, layoutWidth / 3.0)
                 : layoutWidth;
-            double contentWidth = Math.Max(0, Math.Min(ChatContentMaxWidth, availableWidth - ChatScrollbarGutter));
+            double maxContentWidth = _isCodeVisible ? ChatContentMaxWidth : ChatContentCollapsedMaxWidth;
+            double contentWidth = Math.Max(0, Math.Min(maxContentWidth, availableWidth - ChatScrollbarGutter));
 
             SetElementWidthSmooth(_chatScroll, contentWidth);
             SetElementWidthSmooth(_inputAreaBorder, contentWidth);
             SetElementWidthSmooth(_libraryPanel, contentWidth);
+            UpdateChatBottomInset();
             UpdateToolbarDividerVisibility();
+        }
+
+        private static void UpdateChatBottomInset()
+        {
+            if (_chatPanel == null) return;
+
+            double inputHeight = _inputAreaBorder != null && _inputAreaBorder.ActualHeight > 0
+                ? _inputAreaBorder.ActualHeight
+                : 170;
+            double bottomInset = inputHeight + 18;
+            _chatPanel.Margin = new Thickness(18, 10, 18, bottomInset);
         }
 
         private static void ScheduleChatContentWidthUpdate()
@@ -872,19 +886,22 @@ namespace ADDGH
                 <Grid.RowDefinitions>
                     <RowDefinition Height=""Auto""/>
                     <RowDefinition Height=""*""/>
-                    <RowDefinition Height=""Auto""/>
+                    <RowDefinition Height=""0""/>
                     <RowDefinition Height=""0"" x:Name=""LibraryRow""/>
                 </Grid.RowDefinitions>
 
                 <Grid Grid.Row=""0"" Grid.Column=""0"" Grid.ColumnSpan=""3"" x:Name=""ChatToolbar"" Panel.ZIndex=""12"" Margin=""12,5,12,5"">
-                    <Button x:Name=""BtnToggleHistory"" Style=""{StaticResource ToolbarIconButtonStyle}"" HorizontalAlignment=""Left"" ToolTip=""对话历史"">
-                        <Viewbox Width=""17"" Height=""17"">
-                            <Grid Width=""20"" Height=""20"">
-                                <Path Data=""M4.5,4.5 L15.5,4.5 Q17,4.5 17,6 L17,14 Q17,15.5 15.5,15.5 L7.5,15.5 L4,18 L4,6 Q4,4.5 5.5,4.5"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""1.7"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" StrokeLineJoin=""Round"" Fill=""Transparent""/>
-                                <Path Data=""M8,8.5 L13,8.5 M8,11.5 L12,11.5"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""1.7"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round""/>
-                            </Grid>
-                        </Viewbox>
-                    </Button>
+                    <StackPanel Orientation=""Horizontal"" HorizontalAlignment=""Left"" VerticalAlignment=""Center"">
+                        <Button x:Name=""BtnToggleHistory"" Style=""{StaticResource ToolbarIconButtonStyle}"" ToolTip=""对话历史"">
+                            <Viewbox Width=""17"" Height=""17"">
+                                <Grid Width=""20"" Height=""20"">
+                                    <Path Data=""M4.5,4.5 L15.5,4.5 Q17,4.5 17,6 L17,14 Q17,15.5 15.5,15.5 L7.5,15.5 L4,18 L4,6 Q4,4.5 5.5,4.5"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""1.7"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" StrokeLineJoin=""Round"" Fill=""Transparent""/>
+                                    <Path Data=""M8,8.5 L13,8.5 M8,11.5 L12,11.5"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""1.7"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round""/>
+                                </Grid>
+                            </Viewbox>
+                        </Button>
+                        <TextBlock Text=""Magpie"" Foreground=""#C9CDD3"" FontSize=""13"" FontWeight=""SemiBold"" VerticalAlignment=""Center"" Margin=""8,0,0,0""/>
+                    </StackPanel>
                     <StackPanel Orientation=""Horizontal"" HorizontalAlignment=""Right"">
                         <Button x:Name=""BtnToggleViewMode"" Content=""JSON"" Foreground=""#B8B8B8"" Background=""Transparent"" BorderThickness=""0"" BorderBrush=""Transparent"" FontSize=""10"" Padding=""8,4"" Cursor=""Hand"" VerticalAlignment=""Center"" Margin=""0,0,8,0"" Visibility=""Collapsed"">
                             <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" CornerRadius=""6""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
@@ -938,11 +955,11 @@ namespace ADDGH
                     </Grid>
                 </Border>
 
-                <ScrollViewer Grid.Row=""1"" Grid.Column=""1"" x:Name=""ChatScroll"" HorizontalAlignment=""Center"" Margin=""0,10,0,0"" VerticalScrollBarVisibility=""Auto"" PanningMode=""VerticalOnly"">
+                <ScrollViewer Grid.Row=""1"" Grid.Column=""1"" Grid.RowSpan=""2"" x:Name=""ChatScroll"" HorizontalAlignment=""Center"" Margin=""0,10,0,0"" VerticalScrollBarVisibility=""Auto"" PanningMode=""VerticalOnly"">
                     <StackPanel x:Name=""ChatPanel"" Margin=""18,10,18,0""/>
                 </ScrollViewer>
 
-                <Border Grid.Row=""2"" Grid.Column=""1"" Background=""Transparent"" CornerRadius=""0"" Padding=""18,12,18,16"" x:Name=""InputAreaBorder"" HorizontalAlignment=""Center"">
+                <Border Grid.Row=""1"" Grid.RowSpan=""2"" Grid.Column=""1"" Panel.ZIndex=""8"" Background=""Transparent"" CornerRadius=""0"" Padding=""18,12,18,24"" x:Name=""InputAreaBorder"" HorizontalAlignment=""Center"" VerticalAlignment=""Bottom"">
                 <StackPanel>
                     <!-- Warning Bar -->
                     <Border x:Name=""WarningBar"" Visibility=""Collapsed"" Background=""#33CC9900"" BorderBrush=""#66CC9900"" BorderThickness=""1"" CornerRadius=""8"" Padding=""12,8"" Margin=""0,0,0,10"">
@@ -1309,7 +1326,11 @@ namespace ADDGH
 
             _inputAreaBorder = (Border)_window.FindName("InputAreaBorder");
             if (_inputAreaBorder != null)
-                _inputAreaBorder.SizeChanged += (s, ev) => SyncCodeIssuesStripHeightToInputArea();
+                _inputAreaBorder.SizeChanged += (s, ev) =>
+                {
+                    SyncCodeIssuesStripHeightToInputArea();
+                    UpdateChatBottomInset();
+                };
 
             if (btnToggleCode != null) {
             btnToggleCode.Click += (s, e) => {
@@ -1366,6 +1387,7 @@ namespace ADDGH
             _window.Loaded += (s, ev) =>
             {
                 UpdateChatContentWidth();
+                UpdateChatBottomInset();
                 StartGrasshopperCodeSurfaceHooks();
                 SyncCodeIssuesStripHeightToInputArea();
             };
