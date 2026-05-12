@@ -5638,13 +5638,6 @@ namespace ADDGH
                 } else if (obj is Grasshopper.Kernel.Special.GH_NumberSlider slider) {
                     List<string> changes = new List<string>();
                     
-                    if (value != null) {
-                        if (decimal.TryParse(value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out decimal decVal)) {
-                            slider.Slider.Value = decVal;
-                            changes.Add("值=" + decVal);
-                        } else { result = "Error: 数值解析失败。"; return; }
-                    }
-                    
                     if (min.HasValue) {
                         slider.Slider.Minimum = (decimal)min.Value;
                         changes.Add("最小值=" + min.Value);
@@ -5657,6 +5650,13 @@ namespace ADDGH
                         int dec = Math.Max(0, Math.Min(10, decimals.Value));
                         slider.Slider.DecimalPlaces = dec;
                         changes.Add("小数位=" + dec);
+                    }
+                    
+                    if (value != null) {
+                        if (decimal.TryParse(value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out decimal decVal)) {
+                            slider.Slider.Value = decVal;
+                            changes.Add("值=" + decVal);
+                        } else { result = "Error: 数值解析失败。"; return; }
                     }
                     
                     if (changes.Count > 0) {
