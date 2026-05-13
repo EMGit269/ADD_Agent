@@ -33,14 +33,14 @@ namespace ADDGH
     public static partial class ChatWindow
     {
         private static Window _window;
-        private const double DefaultWindowWidth = 450;
-        private const double ChatPaneMinWidth = 410;
+        private const double DefaultWindowWidth = 410;
+        private const double ChatPaneMinWidth = 386;
         private const double CodePaneMinWidth = 450;
         private const double CodeViewColumnWidth = 750;
         private const double HistorySidebarWidth = 320;
         private const double ChatContentMaxWidth = 900;
         private const double ChatContentCollapsedMaxWidth = 780;
-        private const double ChatScrollbarGutter = 18;
+        private const double ChatScrollbarGutter = 0;
         private static double _widthBeforeCodeView = double.NaN;
         private static StackPanel _chatPanel;
         private static ScrollViewer _chatScroll;
@@ -453,7 +453,7 @@ namespace ADDGH
             var root = scope ?? _window;
 
             foreach (var bar in FindVisualChildren<ScrollBar>(root)) {
-                bar.Opacity = 0.45;
+                bar.Opacity = 0.55;
             }
 
             _scrollHideTimer?.Stop();
@@ -556,10 +556,10 @@ namespace ADDGH
         {
             double windowWidth = _window != null && _window.ActualWidth > 0 ? _window.ActualWidth : DefaultWindowWidth;
             double historyWidth = _isHistorySidebarVisible && !ShouldOverlayHistorySidebar() ? HistorySidebarWidth : 0;
-            double layoutWidth = Math.Max(ChatPaneMinWidth, windowWidth - historyWidth);
-            double availableWidth = _isCodeVisible
-                ? Math.Max(ChatPaneMinWidth, layoutWidth / 3.0)
-                : layoutWidth;
+            double fallbackWidth = Math.Max(ChatPaneMinWidth, windowWidth - historyWidth);
+            double availableWidth = _chatCol != null && _chatCol.ActualWidth > 0
+                ? _chatCol.ActualWidth
+                : (_isCodeVisible ? Math.Max(ChatPaneMinWidth, fallbackWidth / 3.0) : fallbackWidth);
             double maxContentWidth = _isCodeVisible ? ChatContentMaxWidth : ChatContentCollapsedMaxWidth;
             double contentWidth = Math.Max(0, Math.Min(maxContentWidth, availableWidth - ChatScrollbarGutter));
 
@@ -681,8 +681,8 @@ namespace ADDGH
             string xaml = @"
 <Window xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation""
         xmlns:x=""http://schemas.microsoft.com/winfx/2006/xaml""
-        Title="""" Height=""850"" Width=""450""
-        MinHeight=""520"" MinWidth=""450""
+        Title="""" Height=""850"" Width=""410""
+        MinHeight=""520"" MinWidth=""410""
         ResizeMode=""CanResize""
         WindowStyle=""SingleBorderWindow"" Background=""#141414""
         Topmost=""True"" WindowStartupLocation=""CenterScreen"" x:Name=""MagpieWindow"">
@@ -707,7 +707,7 @@ namespace ADDGH
                                     <Thumb MinWidth=""0"" MinHeight=""0"" Background=""Transparent"">
                                         <Thumb.Template>
                                             <ControlTemplate TargetType=""Thumb"">
-                                                <Border Background=""#88FFFFFF"" Width=""6"" HorizontalAlignment=""Right"" CornerRadius=""3"" Margin=""0,2""/>
+                                                <Border Background=""#AAFFFFFF"" Width=""6"" HorizontalAlignment=""Right"" CornerRadius=""3"" Margin=""0,2""/>
                                             </ControlTemplate>
                                         </Thumb.Template>
                                     </Thumb>
@@ -719,16 +719,16 @@ namespace ADDGH
             </Setter>
             <Style.Triggers>
                 <Trigger Property=""Orientation"" Value=""Vertical"">
-                    <Setter Property=""Width"" Value=""6""/>
+                    <Setter Property=""Width"" Value=""12""/>
                 </Trigger>
                 <Trigger Property=""Orientation"" Value=""Horizontal"">
-                    <Setter Property=""Height"" Value=""6""/>
+                    <Setter Property=""Height"" Value=""12""/>
                 </Trigger>
                 <Trigger Property=""IsMouseOver"" Value=""True"">
-                    <Setter Property=""Opacity"" Value=""0.45""/>
+                    <Setter Property=""Opacity"" Value=""0.55""/>
                 </Trigger>
                 <Trigger Property=""IsMouseCaptureWithin"" Value=""True"">
-                    <Setter Property=""Opacity"" Value=""0.45""/>
+                    <Setter Property=""Opacity"" Value=""0.55""/>
                 </Trigger>
             </Style.Triggers>
         </Style>
@@ -896,7 +896,7 @@ namespace ADDGH
             <Grid x:Name=""MainLayout"">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width=""0"" x:Name=""HistoryCol""/>
-                    <ColumnDefinition Width=""*"" MinWidth=""410"" x:Name=""ChatCol""/>
+                    <ColumnDefinition Width=""*"" MinWidth=""386"" x:Name=""ChatCol""/>
                     <ColumnDefinition Width=""0"" x:Name=""CodeCol""/>
                 </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
@@ -2649,17 +2649,41 @@ namespace ADDGH
 
         private static Button CreateHistoryActionButton(string text, bool danger = false)
         {
+            object content = text;
+            Thickness padding = new Thickness(10, 4, 10, 4);
+            double width = double.NaN;
+            double height = double.NaN;
+
+            if (danger)
+            {
+                content = new TextBlock
+                {
+                    Text = "\uE74D",
+                    FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                    FontSize = 13,
+                    Foreground = Brushes.White,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                padding = new Thickness(0);
+                width = 34;
+                height = 30;
+            }
+
             var button = new Button
             {
-                Content = text,
-                Foreground = new SolidColorBrush(danger ? Color.FromRgb(190, 190, 190) : Color.FromRgb(208, 208, 208)),
+                Content = content,
+                Foreground = new SolidColorBrush(danger ? Color.FromRgb(255, 255, 255) : Color.FromRgb(208, 208, 208)),
                 Background = new SolidColorBrush(Color.FromRgb(28, 28, 28)),
                 BorderBrush = new SolidColorBrush(danger ? Color.FromRgb(52, 52, 52) : Color.FromRgb(44, 44, 44)),
                 BorderThickness = new Thickness(1),
-                Padding = new Thickness(10, 4, 10, 4),
+                Padding = padding,
                 Margin = new Thickness(0, 0, 0, 0),
                 Cursor = Cursors.Hand,
-                FontSize = 10.5
+                FontSize = 10.5,
+                Width = width,
+                Height = height,
+                ToolTip = danger ? "删除" : null
             };
             button.Template = (ControlTemplate)System.Windows.Markup.XamlReader.Parse(@"
                 <ControlTemplate TargetType=""Button"" xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation"">
@@ -2722,14 +2746,6 @@ namespace ADDGH
                 });
                 info.Children.Add(new TextBlock
                 {
-                    Text = GetConversationPreview(conv),
-                    Foreground = new SolidColorBrush(Color.FromRgb(128, 128, 128)),
-                    FontSize = 11,
-                    TextWrapping = TextWrapping.Wrap,
-                    Margin = new Thickness(0, 5, 0, 0)
-                });
-                info.Children.Add(new TextBlock
-                {
                     Text = FormatConversationTime(conv.UpdatedAtUtc),
                     Foreground = new SolidColorBrush(Color.FromRgb(98, 98, 98)),
                     FontSize = 10,
@@ -2747,14 +2763,9 @@ namespace ADDGH
                     Margin = new Thickness(8, 0, 0, 0)
                 };
 
-                var openBtn = CreateHistoryActionButton("打开");
-                openBtn.Margin = new Thickness(0, 0, 0, 6);
-                openBtn.Click += (s, e) => OpenHistoryConversation(conv.Id);
-
                 var deleteBtn = CreateHistoryActionButton("删除", true);
                 deleteBtn.Click += (s, e) => DeleteHistoryConversation(conv.Id);
 
-                actions.Children.Add(openBtn);
                 actions.Children.Add(deleteBtn);
 
                 Grid.SetColumn(actions, 1);
