@@ -1152,32 +1152,32 @@ namespace ADDGH
                                 </Grid>
                             </Viewbox>
                         </Button>
-                        <TextBlock Text=""Magpie"" Foreground=""#C9CDD3"" FontSize=""13"" FontWeight=""SemiBold"" VerticalAlignment=""Center"" Margin=""8,0,0,0""/>
-                    </StackPanel>
-                    <StackPanel Orientation=""Horizontal"" HorizontalAlignment=""Right"">
-                        <Button x:Name=""BtnToggleViewMode"" Content=""JSON"" Foreground=""#B8B8B8"" Background=""Transparent"" BorderThickness=""0"" BorderBrush=""Transparent"" FontSize=""10"" Padding=""8,4"" Cursor=""Hand"" VerticalAlignment=""Center"" Margin=""0,0,8,0"" Visibility=""Collapsed"">
-                            <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" CornerRadius=""6""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
-                        </Button>
-                        <Button x:Name=""BtnToggleCode"" Style=""{StaticResource ToolbarIconButtonStyle}"" ToolTip=""切换代码视图"" Margin=""0,0,4,0"">
-                            <Viewbox Width=""17"" Height=""17"">
-                                <Grid Width=""20"" Height=""20"">
-                                    <Path Data=""M3.5,6.5 L8,10 L3.5,13.5"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""1.8"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" StrokeLineJoin=""Round"" Fill=""Transparent""/>
-                                    <Path Data=""M16.5,6.5 L12,10 L16.5,13.5"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""1.8"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" StrokeLineJoin=""Round"" Fill=""Transparent""/>
-                                </Grid>
-                            </Viewbox>
-                        </Button>
-                        <Button x:Name=""BtnNewChat"" Style=""{StaticResource ToolbarIconButtonStyle}"" ToolTip=""新对话"" Margin=""0,0,4,0"">
+                        <Button x:Name=""BtnNewChat"" Style=""{StaticResource ToolbarIconButtonStyle}"" ToolTip=""新对话"" Margin=""4,0,0,0"">
                             <Viewbox Width=""17"" Height=""17"">
                                 <Grid Width=""20"" Height=""20"">
                                     <Path Data=""M10,4 L10,16 M4,10 L16,10"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""2"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round""/>
                                 </Grid>
                             </Viewbox>
                         </Button>
-                        <Button x:Name=""BtnSettings"" Style=""{StaticResource ToolbarIconButtonStyle}"" ToolTip=""配置"">
+                        <TextBlock Text=""Magpie"" Foreground=""#C9CDD3"" FontSize=""13"" FontWeight=""SemiBold"" VerticalAlignment=""Center"" Margin=""8,0,0,0""/>
+                    </StackPanel>
+                    <StackPanel Orientation=""Horizontal"" HorizontalAlignment=""Right"">
+                        <Button x:Name=""BtnToggleViewMode"" Content=""JSON"" Foreground=""#B8B8B8"" Background=""Transparent"" BorderThickness=""0"" BorderBrush=""Transparent"" FontSize=""10"" Padding=""8,4"" Cursor=""Hand"" VerticalAlignment=""Center"" Margin=""0,0,8,0"" Visibility=""Collapsed"">
+                            <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" CornerRadius=""6""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
+                        </Button>
+                        <Button x:Name=""BtnSettings"" Style=""{StaticResource ToolbarIconButtonStyle}"" ToolTip=""配置"" Margin=""0,0,4,0"">
                             <Viewbox Width=""17"" Height=""17"">
                                 <Grid Width=""20"" Height=""20"">
                                     <Path Data=""M10,3.5 L11.4,3.5 L11.9,5.4 C12.5,5.6 13.1,5.9 13.6,6.2 L15.4,5.4 L16.1,6.6 L14.8,8 C15,8.6 15.1,9.3 15.1,10 C15.1,10.7 15,11.4 14.8,12 L16.1,13.4 L15.4,14.6 L13.6,13.8 C13.1,14.1 12.5,14.4 11.9,14.6 L11.4,16.5 L8.6,16.5 L8.1,14.6 C7.5,14.4 6.9,14.1 6.4,13.8 L4.6,14.6 L3.9,13.4 L5.2,12 C5,11.4 4.9,10.7 4.9,10 C4.9,9.3 5,8.6 5.2,8 L3.9,6.6 L4.6,5.4 L6.4,6.2 C6.9,5.9 7.5,5.6 8.1,5.4 L8.6,3.5 L10,3.5 Z"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""1.45"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" StrokeLineJoin=""Round"" Fill=""Transparent""/>
                                     <Ellipse Width=""4.6"" Height=""4.6"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""1.45"" Fill=""Transparent"" HorizontalAlignment=""Center"" VerticalAlignment=""Center""/>
+                                </Grid>
+                            </Viewbox>
+                        </Button>
+                        <Button x:Name=""BtnToggleCode"" Style=""{StaticResource ToolbarIconButtonStyle}"" ToolTip=""切换代码视图"">
+                            <Viewbox Width=""17"" Height=""17"">
+                                <Grid Width=""20"" Height=""20"">
+                                    <Path Data=""M3.5,6.5 L8,10 L3.5,13.5"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""1.8"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" StrokeLineJoin=""Round"" Fill=""Transparent""/>
+                                    <Path Data=""M16.5,6.5 L12,10 L16.5,13.5"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""1.8"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" StrokeLineJoin=""Round"" Fill=""Transparent""/>
                                 </Grid>
                             </Viewbox>
                         </Button>
