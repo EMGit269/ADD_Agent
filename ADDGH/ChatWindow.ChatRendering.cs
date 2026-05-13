@@ -44,6 +44,7 @@ namespace ADDGH
                             AppendBubble(content, false, false);
                     }
                 }
+                UpdateEmptyChatLayout();
                 RefreshContextMeter();
             }));
         }

@@ -69,6 +69,7 @@ namespace ADDGH
         private static Border _codeCanvasIssuesHost;
         private static TextBox _txtCanvasIssues;
         private static Border _inputAreaBorder;
+        private static TextBlock _emptyChatPrompt;
         private static Button _btnToggleViewMode;
         private static ColumnDefinition _historyCol;
         private static ColumnDefinition _chatCol;
@@ -552,7 +553,7 @@ namespace ADDGH
                 _window.Width = minWidth;
         }
 
-        private static void UpdateChatContentWidth()
+        private static void UpdateChatContentWidth(bool animate = false)
         {
             double windowWidth = _window != null && _window.ActualWidth > 0 ? _window.ActualWidth : DefaultWindowWidth;
             double historyWidth = _isHistorySidebarVisible && !ShouldOverlayHistorySidebar() ? HistorySidebarWidth : 0;
@@ -563,9 +564,9 @@ namespace ADDGH
             double maxContentWidth = _isCodeVisible ? ChatContentMaxWidth : ChatContentCollapsedMaxWidth;
             double contentWidth = Math.Max(0, Math.Min(maxContentWidth, availableWidth - ChatScrollbarGutter));
 
-            SetElementWidthSmooth(_chatScroll, contentWidth);
-            SetElementWidthSmooth(_inputAreaBorder, contentWidth);
-            SetElementWidthSmooth(_libraryPanel, contentWidth);
+            SetElementWidth(_chatScroll, contentWidth, animate);
+            SetElementWidth(_inputAreaBorder, contentWidth, animate);
+            SetElementWidth(_libraryPanel, contentWidth, animate);
             UpdateChatBottomInset();
             UpdateToolbarDividerVisibility();
         }
@@ -581,16 +582,48 @@ namespace ADDGH
             _chatPanel.Margin = new Thickness(18, 10, 18, bottomInset);
         }
 
+        private static bool IsVisibleChatEmpty()
+        {
+            if (_messages == null || _messages.Count == 0) return true;
+
+            foreach (var msg in _messages)
+            {
+                string role = ChatMessageHelpers.TryGetRole(msg);
+                if (string.Equals(role, "user", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(role, "assistant", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(role, "tool", StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+
+            return true;
+        }
+
+        private static void UpdateEmptyChatLayout(bool? forceEmpty = null)
+        {
+            if (_inputAreaBorder == null) return;
+
+            bool isEmpty = forceEmpty ?? IsVisibleChatEmpty();
+            _inputAreaBorder.VerticalAlignment = isEmpty ? VerticalAlignment.Center : VerticalAlignment.Bottom;
+            _inputAreaBorder.Padding = isEmpty
+                ? new Thickness(18, 12, 18, 12)
+                : new Thickness(18, 12, 18, 24);
+
+            if (_emptyChatPrompt != null)
+                _emptyChatPrompt.Visibility = isEmpty ? Visibility.Visible : Visibility.Collapsed;
+
+            UpdateChatBottomInset();
+        }
+
         private static void ScheduleChatContentWidthUpdate()
         {
             if (_window == null) return;
-            _window.Dispatcher.BeginInvoke((Action)UpdateChatContentWidth, System.Windows.Threading.DispatcherPriority.Loaded);
+            _window.Dispatcher.BeginInvoke((Action)(() => UpdateChatContentWidth()), System.Windows.Threading.DispatcherPriority.Loaded);
         }
 
-        private static void SetElementWidthSmooth(FrameworkElement element, double width)
+        private static void SetElementWidth(FrameworkElement element, double width, bool animate = false)
         {
             if (element == null) return;
-            if (double.IsNaN(element.Width) || element.ActualWidth <= 0 || Math.Abs(element.ActualWidth - width) < 2)
+            if (!animate || double.IsNaN(element.Width) || element.ActualWidth <= 0 || Math.Abs(element.ActualWidth - width) < 2)
             {
                 element.BeginAnimation(FrameworkElement.WidthProperty, null);
                 element.Width = width;
@@ -681,7 +714,7 @@ namespace ADDGH
             string xaml = @"
 <Window xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation""
         xmlns:x=""http://schemas.microsoft.com/winfx/2006/xaml""
-        Title="""" Height=""850"" Width=""410""
+        Title="""" Height=""760"" Width=""410""
         MinHeight=""520"" MinWidth=""410""
         ResizeMode=""CanResize""
         WindowStyle=""SingleBorderWindow"" Background=""#141414""
@@ -977,6 +1010,7 @@ namespace ADDGH
 
                 <Border Grid.Row=""1"" Grid.RowSpan=""2"" Grid.Column=""1"" Panel.ZIndex=""8"" Background=""Transparent"" CornerRadius=""0"" Padding=""18,12,18,24"" x:Name=""InputAreaBorder"" HorizontalAlignment=""Center"" VerticalAlignment=""Bottom"">
                 <StackPanel>
+                    <TextBlock x:Name=""EmptyChatPrompt"" Text=""要用Magpie创造什么？"" Foreground=""#F3F3F3"" FontSize=""24"" FontWeight=""SemiBold"" TextAlignment=""Center"" HorizontalAlignment=""Center"" Margin=""0,0,0,24""/>
                     <!-- Warning Bar -->
                     <Border x:Name=""WarningBar"" Visibility=""Collapsed"" Background=""#33CC9900"" BorderBrush=""#66CC9900"" BorderThickness=""1"" CornerRadius=""8"" Padding=""12,8"" Margin=""0,0,0,10"">
                     <Grid>
@@ -1346,12 +1380,14 @@ namespace ADDGH
             var btnToggleCode = (Button)_window.FindName("BtnToggleCode");
 
             _inputAreaBorder = (Border)_window.FindName("InputAreaBorder");
+            _emptyChatPrompt = (TextBlock)_window.FindName("EmptyChatPrompt");
             if (_inputAreaBorder != null)
                 _inputAreaBorder.SizeChanged += (s, ev) =>
                 {
                     SyncCodeIssuesStripHeightToInputArea();
                     UpdateChatBottomInset();
                 };
+            UpdateEmptyChatLayout();
 
             if (btnToggleCode != null) {
             btnToggleCode.Click += (s, e) => {
@@ -1534,7 +1570,8 @@ namespace ADDGH
                     if (_chatPanel != null) _chatPanel.Children.Clear();
                     _cachedCanvasState = null;
                     _canvasChanged = true;
-                AppendSystemMessage("新对话已开启，当前会话已清空。");
+                if (_txtInput != null) _txtInput.Clear();
+                UpdateEmptyChatLayout(true);
                 RefreshContextMeter();
                 if (_isHistorySidebarVisible) RefreshHistorySidebar();
             };
@@ -2354,6 +2391,7 @@ namespace ADDGH
             _isGenerating = true;
             ApplySendButtonGeneratingState();
             _txtInput.Text = "";
+            UpdateEmptyChatLayout(false);
 
             if (_messages.Count == 0) {
                 _messages.AddRange(BuildInitialSystemMessages());
