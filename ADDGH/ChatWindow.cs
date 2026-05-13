@@ -51,6 +51,12 @@ namespace ADDGH
         private static Grid _contextMeterHost;
         private static WpfPath _contextRingProgress;
         private static System.Windows.Threading.DispatcherTimer _scrollHideTimer;
+        private static readonly DependencyProperty SmoothVerticalOffsetProperty =
+            DependencyProperty.RegisterAttached(
+                "SmoothVerticalOffset",
+                typeof(double),
+                typeof(ChatWindow),
+                new PropertyMetadata(0.0, OnSmoothVerticalOffsetChanged));
 
         private static Grid _settingsOverlay;
         private static TextBox _txtApiKey;
@@ -450,6 +456,34 @@ namespace ADDGH
         {
             if (Math.Abs(e.VerticalChange) < 0.01 && Math.Abs(e.HorizontalChange) < 0.01) return;
             ShowFloatingScrollbars(sender as DependencyObject);
+        }
+
+        private static void OnSmoothVerticalOffsetChanged(DependencyObject target, DependencyPropertyChangedEventArgs e)
+        {
+            if (target is ScrollViewer viewer)
+                viewer.ScrollToVerticalOffset((double)e.NewValue);
+        }
+
+        private static void SmoothScrollViewer_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+        {
+            if (!(sender is ScrollViewer viewer) || viewer.ScrollableHeight <= 0) return;
+
+            e.Handled = true;
+
+            double current = (double)viewer.GetValue(SmoothVerticalOffsetProperty);
+            if (Math.Abs(current - viewer.VerticalOffset) > 1)
+                current = viewer.VerticalOffset;
+
+            double target = Math.Max(0, Math.Min(viewer.ScrollableHeight, current - e.Delta * 0.62));
+            viewer.BeginAnimation(SmoothVerticalOffsetProperty, null);
+            viewer.SetValue(SmoothVerticalOffsetProperty, current);
+
+            var animation = new DoubleAnimation(current, target, TimeSpan.FromMilliseconds(190))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            };
+            viewer.BeginAnimation(SmoothVerticalOffsetProperty, animation, HandoffBehavior.SnapshotAndReplace);
+            ShowFloatingScrollbars(viewer);
         }
 
         private static void ShowFloatingScrollbars(DependencyObject scope)
@@ -1463,7 +1497,11 @@ namespace ADDGH
             _chatPanel = (StackPanel)_window.FindName("ChatPanel");
             _chatScroll = (ScrollViewer)_window.FindName("ChatScroll");
             if (_chatScroll != null)
+            {
                 _chatScroll.ScrollChanged += (s, e) => UpdateStickyUserMessage(e.VerticalChange);
+                _chatScroll.PreviewMouseWheel += SmoothScrollViewer_PreviewMouseWheel;
+                _chatScroll.SetValue(SmoothVerticalOffsetProperty, _chatScroll.VerticalOffset);
+            }
             _chatToolbar = (FrameworkElement)_window.FindName("ChatToolbar");
             _toolbarDivider = (Border)_window.FindName("ToolbarDivider");
             _stickyUserMessageHost = (Border)_window.FindName("StickyUserMessageHost");
