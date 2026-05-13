@@ -70,6 +70,10 @@ namespace ADDGH
         private static TextBox _txtCanvasIssues;
         private static Border _inputAreaBorder;
         private static TextBlock _emptyChatPrompt;
+        private static Border _stickyUserMessageHost;
+        private static Grid _stickyUserMessageStack;
+        private static string _stickyUserMessageCurrentText;
+        private static FrameworkElement _stickyUserMessageSource;
         private static Button _btnToggleViewMode;
         private static ColumnDefinition _historyCol;
         private static ColumnDefinition _chatCol;
@@ -567,8 +571,10 @@ namespace ADDGH
             SetElementWidth(_chatScroll, contentWidth, animate);
             SetElementWidth(_inputAreaBorder, contentWidth, animate);
             SetElementWidth(_libraryPanel, contentWidth, animate);
+            SetElementWidth(_stickyUserMessageHost, contentWidth, animate);
             UpdateChatBottomInset();
             UpdateToolbarDividerVisibility();
+            UpdateStickyUserMessage();
         }
 
         private static void UpdateChatBottomInset()
@@ -611,6 +617,14 @@ namespace ADDGH
             if (_emptyChatPrompt != null)
                 _emptyChatPrompt.Visibility = isEmpty ? Visibility.Visible : Visibility.Collapsed;
 
+            if (isEmpty && _stickyUserMessageHost != null)
+            {
+                _stickyUserMessageHost.Visibility = Visibility.Collapsed;
+                _stickyUserMessageCurrentText = null;
+                SetStickyUserMessageSource(null);
+                _stickyUserMessageStack?.Children.Clear();
+            }
+
             UpdateChatBottomInset();
         }
 
@@ -636,6 +650,161 @@ namespace ADDGH
                 EasingFunction = ease
             };
             element.BeginAnimation(FrameworkElement.WidthProperty, animation, HandoffBehavior.SnapshotAndReplace);
+        }
+
+        private static string NormalizeStickyUserText(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return "";
+            text = Regex.Replace(text.Trim(), @"\s+", " ");
+            const int maxLength = 140;
+            return text.Length > maxLength ? text.Substring(0, maxLength).TrimEnd() + "..." : text;
+        }
+
+        private static void UpdateStickyUserMessage(double scrollDelta = 0)
+        {
+            if (_chatScroll == null || _chatPanel == null || _stickyUserMessageHost == null || _stickyUserMessageStack == null)
+                return;
+
+            if (_chatScroll.VerticalOffset <= 0.5)
+            {
+                _stickyUserMessageHost.Visibility = Visibility.Collapsed;
+                _stickyUserMessageCurrentText = null;
+                SetStickyUserMessageSource(null);
+                _stickyUserMessageStack.Children.Clear();
+                return;
+            }
+
+            string activeText = null;
+            FrameworkElement activeSource = null;
+            const double activationY = 8;
+
+            foreach (FrameworkElement child in _chatPanel.Children.OfType<FrameworkElement>())
+            {
+                string userText = child.Tag as string;
+                if (string.IsNullOrWhiteSpace(userText)) continue;
+
+                double top;
+                try
+                {
+                    top = child.TransformToAncestor(_chatScroll).Transform(new Point(0, 0)).Y;
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (top <= activationY)
+                {
+                    activeText = userText;
+                    activeSource = child;
+                }
+                else
+                    break;
+            }
+
+            if (string.IsNullOrWhiteSpace(activeText))
+            {
+                _stickyUserMessageHost.Visibility = Visibility.Collapsed;
+                _stickyUserMessageCurrentText = null;
+                SetStickyUserMessageSource(null);
+                _stickyUserMessageStack.Children.Clear();
+                return;
+            }
+
+            SetStickyUserMessageSource(activeSource);
+
+            if (string.Equals(_stickyUserMessageCurrentText, activeText, StringComparison.Ordinal))
+            {
+                if (_stickyUserMessageStack.Children.Count > 0)
+                {
+                    _stickyUserMessageHost.Visibility = Visibility.Visible;
+                    return;
+                }
+
+                _stickyUserMessageCurrentText = null;
+            }
+
+            TransitionStickyUserMessage(activeText, scrollDelta);
+            _stickyUserMessageHost.Visibility = Visibility.Visible;
+        }
+
+        private static void SetStickyUserMessageSource(FrameworkElement source)
+        {
+            if (ReferenceEquals(_stickyUserMessageSource, source)) return;
+
+            if (_stickyUserMessageSource != null)
+                AnimateElementOpacity(_stickyUserMessageSource, 1, 100);
+
+            _stickyUserMessageSource = source;
+
+            if (_stickyUserMessageSource != null)
+                AnimateElementOpacity(_stickyUserMessageSource, 0, 100);
+        }
+
+        private static void AnimateElementOpacity(UIElement element, double opacity, int milliseconds)
+        {
+            if (element == null) return;
+
+            element.BeginAnimation(UIElement.OpacityProperty, null);
+            var animation = new DoubleAnimation(element.Opacity, opacity, TimeSpan.FromMilliseconds(milliseconds))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            };
+            element.BeginAnimation(UIElement.OpacityProperty, animation, HandoffBehavior.SnapshotAndReplace);
+        }
+
+        private static Border CreateStickyUserMessageCard(string text)
+        {
+            var card = new Border
+            {
+                Padding = new Thickness(14, 8, 14, 8),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                Background = new SolidColorBrush(Color.FromRgb(30, 30, 30)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(52, 52, 52)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(9),
+                Child = BuildMarkdownPanel(text, false),
+                RenderTransform = new TranslateTransform()
+            };
+
+            return card;
+        }
+
+        private static void TransitionStickyUserMessage(string text, double scrollDelta)
+        {
+            if (_stickyUserMessageStack == null) return;
+
+            var oldCards = _stickyUserMessageStack.Children.OfType<FrameworkElement>().ToList();
+            var nextCard = CreateStickyUserMessageCard(text);
+            nextCard.Opacity = oldCards.Count == 0 ? 1 : 0.88;
+            _stickyUserMessageStack.Children.Add(nextCard);
+            _stickyUserMessageCurrentText = text;
+
+            double offset = Math.Max(18, oldCards.FirstOrDefault()?.ActualHeight ?? 34);
+            var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+
+            if (oldCards.Count > 0)
+            {
+                double direction = scrollDelta < -0.01 ? -1 : 1;
+                ((TranslateTransform)nextCard.RenderTransform).Y = offset * direction;
+
+                foreach (var oldCard in oldCards)
+                {
+                    if (!(oldCard.RenderTransform is TranslateTransform oldTransform))
+                        oldCard.RenderTransform = oldTransform = new TranslateTransform();
+
+                    var oldSlide = new DoubleAnimation(0, -offset * direction, TimeSpan.FromMilliseconds(170)) { EasingFunction = ease };
+                    var oldFade = new DoubleAnimation(oldCard.Opacity, 0, TimeSpan.FromMilliseconds(150)) { EasingFunction = ease };
+                    oldFade.Completed += (s, e) => _stickyUserMessageStack.Children.Remove(oldCard);
+                    oldTransform.BeginAnimation(TranslateTransform.YProperty, oldSlide);
+                    oldCard.BeginAnimation(UIElement.OpacityProperty, oldFade);
+                }
+
+                var nextSlide = new DoubleAnimation(offset * direction, 0, TimeSpan.FromMilliseconds(190)) { EasingFunction = ease };
+                var nextFade = new DoubleAnimation(0.88, 1, TimeSpan.FromMilliseconds(170)) { EasingFunction = ease };
+                ((TranslateTransform)nextCard.RenderTransform).BeginAnimation(TranslateTransform.YProperty, nextSlide);
+                nextCard.BeginAnimation(UIElement.OpacityProperty, nextFade);
+            }
         }
 
         private static void UpdateToolbarDividerVisibility()
@@ -1008,6 +1177,10 @@ namespace ADDGH
                     <StackPanel x:Name=""ChatPanel"" Margin=""18,10,18,0""/>
                 </ScrollViewer>
 
+                <Border x:Name=""StickyUserMessageHost"" Grid.Row=""1"" Grid.RowSpan=""2"" Grid.Column=""1"" Panel.ZIndex=""7"" HorizontalAlignment=""Center"" VerticalAlignment=""Top"" Margin=""0,10,0,0"" Padding=""18,10,18,0"" Background=""Transparent"" Visibility=""Collapsed"" IsHitTestVisible=""False"" ClipToBounds=""False"">
+                    <Grid x:Name=""StickyUserMessageStack"" ClipToBounds=""False""/>
+                </Border>
+
                 <Border Grid.Row=""1"" Grid.RowSpan=""2"" Grid.Column=""1"" Panel.ZIndex=""8"" Background=""Transparent"" CornerRadius=""0"" Padding=""18,12,18,24"" x:Name=""InputAreaBorder"" HorizontalAlignment=""Center"" VerticalAlignment=""Bottom"">
                 <StackPanel>
                     <TextBlock x:Name=""EmptyChatPrompt"" Text=""要用Magpie创造什么？"" Foreground=""#F3F3F3"" FontSize=""24"" FontWeight=""SemiBold"" TextAlignment=""Center"" HorizontalAlignment=""Center"" Margin=""0,0,0,24""/>
@@ -1289,8 +1462,12 @@ namespace ADDGH
 
             _chatPanel = (StackPanel)_window.FindName("ChatPanel");
             _chatScroll = (ScrollViewer)_window.FindName("ChatScroll");
+            if (_chatScroll != null)
+                _chatScroll.ScrollChanged += (s, e) => UpdateStickyUserMessage(e.VerticalChange);
             _chatToolbar = (FrameworkElement)_window.FindName("ChatToolbar");
             _toolbarDivider = (Border)_window.FindName("ToolbarDivider");
+            _stickyUserMessageHost = (Border)_window.FindName("StickyUserMessageHost");
+            _stickyUserMessageStack = (Grid)_window.FindName("StickyUserMessageStack");
             _txtInput = (TextBox)_window.FindName("TxtInput");
             _btnSend = (Button)_window.FindName("BtnSend");
             _btnModeDropdown = (Button)_window.FindName("BtnModeDropdown");

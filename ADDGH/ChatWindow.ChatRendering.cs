@@ -56,6 +56,8 @@ namespace ADDGH
                     Margin = new Thickness(0, 0, 0, 20),
                     HorizontalAlignment = isUser ? HorizontalAlignment.Stretch : HorizontalAlignment.Left
                 };
+                if (isUser)
+                    container.Tag = NormalizeStickyUserText(text);
 
                 var bubble = new Border {
                     Padding = isUser ? new Thickness(14, 8, 14, 8) : new Thickness(0, 5, 0, 10),
@@ -89,6 +91,7 @@ namespace ADDGH
                     Margin = new Thickness(0, 0, 0, 20),
                     HorizontalAlignment = HorizontalAlignment.Stretch
                 };
+                container.Tag = NormalizeStickyUserText(text);
 
                 var bubbleContent = new StackPanel { HorizontalAlignment = HorizontalAlignment.Stretch };
                 if (!string.IsNullOrWhiteSpace(text))
