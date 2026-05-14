@@ -280,6 +280,40 @@ namespace ADDGH
                 new {
                     type = "function",
                     function = new {
+                        name = "set_all_csharp_script_previews",
+                        description = "批量控制当前画布上所有 C# Script 电池的预览状态。适合截图前一次性关闭所有 C# Script 预览，避免过程线、点、调试几何干扰视觉检查；也可在需要时重新开启。",
+                        parameters = new {
+                            type = "object",
+                            properties = new {
+                                preview = new { type = "boolean", description = "true 为开启所有 C# Script 预览，false 为关闭所有 C# Script 预览。" },
+                                summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
+                            },
+                            required = new[] { "preview", "summary" }
+                        }
+                    }
+                },
+                new {
+                    type = "function",
+                    function = new {
+                        name = "prepare_visual_review_preview",
+                        description = "为视觉截图检查准备一个干净的预览出口。该工具会创建或重建一个 Geometry 参数预览电池，把指定输出连接到它，并硬编码关闭所有 C# Script 预览，减少过程线、点和调试几何对截图的干扰。视觉检查前优先使用它，而不是依赖脚本过程预览。",
+                        parameters = new {
+                            type = "object",
+                            properties = new {
+                                source_id = new { type = "string", description = "最终视觉检查目标的源组件 GUID。" },
+                                source_output_index = new { type = "integer", description = "源组件输出端口索引，从 0 开始。" },
+                                label = new { type = "string", description = "可选：预览电池显示名称，默认 VisualReviewPreview。" },
+                                summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
+                            },
+                            required = new[] { "source_id", "source_output_index", "summary" }
+                        }
+                    }
+                },
+                new {
+                    type = "function",
+                    function = new {
                         name = "modify_gh_component_ports",
                         description = "针对支持动态端口的电池增加或删除端口。",
                         parameters = new {
@@ -584,7 +618,7 @@ namespace ADDGH
                 properties = new
                 {
                     name = new { type = "string", description = "C# input variable name. Must be a valid identifier and must not collide with reserved/output variables a,b,c..." },
-                    type_hint = new { type = "string", description = "Optional type hint written to the port description only. No strong type is forced." }
+                    type_hint = new { type = "string", description = "Optional input type hint. Common hints such as double/number, int/integer, bool, string, point3d, vector3d, curve, brep, mesh, plane will be used by the tool to auto-inject typed local aliases into the RunScript body, so the body can use the input name directly without repeatedly converting from object." }
                 },
                 required = new[] { "name" }
             };
@@ -638,7 +672,7 @@ namespace ADDGH
                 function = new
                 {
                     name = "create_csharp_script_component",
-                    description = "Dedicated C# Script layout tool. It first creates a default C# Script component, waits briefly for Grasshopper/Rhino 8 to finish initializing it, then applies the requested component name, input ports, extra output ports, and RunScript body. Default C# outputs such as out/a are preserved; requested business outputs are added as b,c,d... and those are the variables to assign. It intentionally skips connections during creation; connect components later after the script component is stable. Use this instead of create_script_component_graph for C# priority modeling.",
+                    description = "Dedicated C# Script layout tool. It first creates a default C# Script component, waits briefly for Grasshopper/Rhino 8 to finish initializing it, then applies the requested component name, input ports, extra output ports, and RunScript body. Default C# outputs such as out/a are preserved; requested business outputs are added as b,c,d... and those are the variables to assign. For common input type hints, the tool auto-injects typed local aliases into the body so the body can use the input names directly instead of repeatedly converting object values. After the body is written, the tool automatically triggers a short delayed two-pass recompute so the agent usually does not need a separate recompute step. It intentionally skips connections during creation; connect components later after the script component is stable. Use this instead of create_script_component_graph for C# priority modeling.",
                     parameters = new
                     {
                         type = "object",
@@ -651,7 +685,7 @@ namespace ADDGH
                             y = new { type = "number", description = "Canvas Y coordinate." },
                             inputs = new { type = "array", items = inputPortSchema },
                             outputs = new { type = "array", items = outputPortSchema, description = "Business output labels. Default out/a ports are preserved; requested outputs are added as b,c,d... in this order. Do not assign to a." },
-                            body = new { type = "string", description = "Only the RunScript method body. No using statements, no class declaration, no RunScript signature, no template." },
+                            body = new { type = "string", description = "Only the RunScript method body. No using statements, no class declaration, no RunScript signature, no template. When inputs carry common type hints, write the body as if those inputs were already strongly typed; the tool will inject local aliases automatically." },
                             components = new { type = "array", items = helperComponentSchema },
                             connections = new { type = "array", items = connectionSchema, description = "Optional. Currently skipped during C# creation for stability; use a later connection tool call after creation." },
                             group_name = new { type = "string", description = "Optional group name." },
@@ -672,7 +706,7 @@ namespace ADDGH
                 function = new
                 {
                     name = "edit_csharp_script_component",
-                    description = "Dedicated safe editor for existing Grasshopper C# Script components. read_body returns only the editable RunScript body when available. set_body replaces only the editable RunScript body while preserving the built-in C# Script template, using statements, class declaration, and GH-managed RunScript signature. Never pass a full C# file, class, using block, or RunScript signature.",
+                    description = "Dedicated safe editor for existing Grasshopper C# Script components. read_body returns only the editable RunScript body when available. set_body replaces only the editable RunScript body while preserving the built-in C# Script template, using statements, class declaration, and GH-managed RunScript signature. When current input ports carry common type hints, set_body auto-injects typed local aliases so the body can use input names directly. After writing the body, the tool automatically triggers a short delayed two-pass recompute so a separate recompute step is usually unnecessary. Never pass a full C# file, class, using block, or RunScript signature.",
                     parameters = new
                     {
                         type = "object",
@@ -680,7 +714,7 @@ namespace ADDGH
                         {
                             id = new { type = "string", description = "C# Script component InstanceGuid." },
                             mode = new { type = "string", description = "read_body | set_body" },
-                            body = new { type = "string", description = "Required for set_body: only the RunScript method body. No using statements, no class declaration, no RunScript signature, no template." },
+                            body = new { type = "string", description = "Required for set_body: only the RunScript method body. No using statements, no class declaration, no RunScript signature, no template. For common input type hints, write the body as if the inputs were already strongly typed." },
                             summary = new { type = "string", description = "Required short Chinese summary for the UI operation card. Do not write the function name." },
                             summary_detail = new { type = "string", description = "Optional short secondary phrase for the UI operation card." }
                         },

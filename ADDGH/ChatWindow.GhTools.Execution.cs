@@ -1489,10 +1489,15 @@ namespace ADDGH
         private static void FinalizeGrasshopperScriptMutation(GH_Document doc, Grasshopper.Kernel.IGH_DocumentObject obj)
         {
             if (doc == null) return;
-            obj?.ExpireSolution(true);
+            try { obj?.ExpireSolution(true); }
+            catch (Exception ex) { AddGhLog.Debug("FinalizeGrasshopperScriptMutation Expire failed: " + ex.Message); }
             _canvasChanged = true;
-            try { doc.ScheduleSolution(150); }
-            catch (Exception ex) { AddGhLog.Warn("FinalizeGrasshopperScriptMutation Schedule failed: " + ex.Message); }
+            try { doc.ScheduleSolution(120); }
+            catch (Exception ex) { AddGhLog.Warn("FinalizeGrasshopperScriptMutation Schedule(120) failed: " + ex.Message); }
+            // A second delayed solve helps freshly edited script bodies and recent port changes settle
+            // without requiring the agent to spend another tool call on recompute_gh_canvas.
+            try { doc.ScheduleSolution(420); }
+            catch (Exception ex) { AddGhLog.Warn("FinalizeGrasshopperScriptMutation Schedule(420) failed: " + ex.Message); }
             try { Grasshopper.Instances.ActiveCanvas?.Refresh(); }
             catch (Exception ex) { AddGhLog.Debug("FinalizeGrasshopperScriptMutation Refresh failed: " + ex.Message); }
         }
@@ -2019,6 +2024,165 @@ namespace ADDGH
             return !keywords.Contains(name);
         }
 
+        private sealed class CSharpTypedInputBinding
+        {
+            public string Name;
+            public string AliasName;
+            public string TypeHint;
+            public string Declaration;
+        }
+
+        private static string NormalizeCSharpTypeHint(string typeHint)
+        {
+            string norm = (typeHint ?? "").Trim().ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(norm)) return "";
+            norm = norm.Replace(" ", "").Replace("_", "");
+            switch (norm)
+            {
+                case "number":
+                case "float":
+                case "double":
+                    return "double";
+                case "int":
+                case "integer":
+                    return "int";
+                case "bool":
+                case "boolean":
+                    return "bool";
+                case "string":
+                case "text":
+                    return "string";
+                case "point":
+                case "point3d":
+                    return "point3d";
+                case "vector":
+                case "vector3d":
+                    return "vector3d";
+                case "curve":
+                    return "curve";
+                case "brep":
+                    return "brep";
+                case "mesh":
+                    return "mesh";
+                case "plane":
+                    return "plane";
+                default:
+                    return "";
+            }
+        }
+
+        private static List<CSharpTypedInputBinding> BuildCSharpTypedInputBindings(JArray inputs, List<string> warnings = null)
+        {
+            var bindings = new List<CSharpTypedInputBinding>();
+            if (inputs == null) return bindings;
+
+            foreach (var token in inputs.OfType<JObject>())
+            {
+                string name = token["name"]?.ToString()?.Trim();
+                if (!IsValidCSharpIdentifier(name)) continue;
+
+                string normalized = NormalizeCSharpTypeHint(token["type_hint"]?.ToString());
+                if (string.IsNullOrWhiteSpace(normalized)) continue;
+
+                string alias = "__addgh_in_" + name;
+                string declaration = null;
+                switch (normalized)
+                {
+                    case "double":
+                        declaration = "double " + alias + " = System.Convert.ToDouble(" + name + ", System.Globalization.CultureInfo.InvariantCulture);";
+                        break;
+                    case "int":
+                        declaration = "int " + alias + " = System.Convert.ToInt32(" + name + ", System.Globalization.CultureInfo.InvariantCulture);";
+                        break;
+                    case "bool":
+                        declaration = "bool " + alias + " = System.Convert.ToBoolean(" + name + ", System.Globalization.CultureInfo.InvariantCulture);";
+                        break;
+                    case "string":
+                        declaration = "string " + alias + " = " + name + " == null ? string.Empty : " + name + ".ToString();";
+                        break;
+                    case "point3d":
+                        declaration = "Rhino.Geometry.Point3d " + alias + " = " + name + " is Rhino.Geometry.Point3d v_" + name + " ? v_" + name + " : Rhino.Geometry.Point3d.Unset;";
+                        break;
+                    case "vector3d":
+                        declaration = "Rhino.Geometry.Vector3d " + alias + " = " + name + " is Rhino.Geometry.Vector3d v_" + name + " ? v_" + name + " : Rhino.Geometry.Vector3d.Unset;";
+                        break;
+                    case "curve":
+                        declaration = "Rhino.Geometry.Curve " + alias + " = " + name + " as Rhino.Geometry.Curve;";
+                        break;
+                    case "brep":
+                        declaration = "Rhino.Geometry.Brep " + alias + " = " + name + " as Rhino.Geometry.Brep;";
+                        break;
+                    case "mesh":
+                        declaration = "Rhino.Geometry.Mesh " + alias + " = " + name + " as Rhino.Geometry.Mesh;";
+                        break;
+                    case "plane":
+                        declaration = "Rhino.Geometry.Plane " + alias + " = " + name + " is Rhino.Geometry.Plane v_" + name + " ? v_" + name + " : Rhino.Geometry.Plane.Unset;";
+                        break;
+                }
+
+                if (string.IsNullOrWhiteSpace(declaration)) continue;
+                bindings.Add(new CSharpTypedInputBinding
+                {
+                    Name = name,
+                    AliasName = alias,
+                    TypeHint = normalized,
+                    Declaration = declaration
+                });
+            }
+
+            if (bindings.Count > 0)
+                warnings?.Add("已根据 C# 输入端口 type_hint 自动注入强类型局部变量，body 可直接按输入名使用常见标量/几何类型。");
+            return bindings;
+        }
+
+        private static List<CSharpTypedInputBinding> BuildCSharpTypedInputBindingsFromComponent(Grasshopper.Kernel.IGH_DocumentObject obj, List<string> warnings = null)
+        {
+            var inputs = new JArray();
+            if (!(obj is Grasshopper.Kernel.IGH_Component comp)) return new List<CSharpTypedInputBinding>();
+            foreach (var param in comp.Params.Input)
+            {
+                var jo = new JObject();
+                jo["name"] = param?.Name ?? "";
+                string desc = param?.Description ?? "";
+                string typeHint = desc;
+                const string tag = "[type_hint]";
+                int idx = desc.IndexOf(tag, StringComparison.OrdinalIgnoreCase);
+                if (idx >= 0) typeHint = desc.Substring(idx + tag.Length).Trim();
+                int semi = typeHint.IndexOf(';');
+                if (semi >= 0) typeHint = typeHint.Substring(0, semi).Trim();
+                inputs.Add(new JObject
+                {
+                    ["name"] = jo["name"],
+                    ["type_hint"] = typeHint
+                });
+            }
+            return BuildCSharpTypedInputBindings(inputs, warnings);
+        }
+
+        private static string ApplyCSharpTypedInputBindingsToBody(string body, List<CSharpTypedInputBinding> bindings, List<string> warnings = null)
+        {
+            if (string.IsNullOrWhiteSpace(body) || bindings == null || bindings.Count == 0)
+                return body ?? "";
+
+            string rewritten = body;
+            foreach (var binding in bindings.OrderByDescending(b => b.Name.Length))
+            {
+                rewritten = System.Text.RegularExpressions.Regex.Replace(
+                    rewritten,
+                    @"\b" + System.Text.RegularExpressions.Regex.Escape(binding.Name) + @"\b",
+                    binding.AliasName);
+            }
+
+            var prefix = new StringBuilder();
+            prefix.AppendLine("// Auto-injected typed aliases from C# input type hints");
+            foreach (var binding in bindings)
+                prefix.AppendLine(binding.Declaration);
+            prefix.AppendLine();
+
+            warnings?.Add("body 中的输入名已自动改写为强类型别名，避免重复手写 object -> 标量/几何转换。");
+            return prefix + rewritten.TrimStart();
+        }
+
         private static void ApplyPortMetadata(Grasshopper.Kernel.IGH_Param param, JToken specToken, bool forceCSharpOutputName = false, int portIndex = 0, List<string> warnings = null)
         {
             if (param == null || specToken == null) return;
@@ -2478,7 +2642,9 @@ namespace ADDGH
                 }
 
                 var warnings = new List<string>();
-                bool wrote = TrySetCSharpScriptBodyIntoTemplate(obj, body, warnings);
+                var typedBindings = BuildCSharpTypedInputBindingsFromComponent(obj, warnings);
+                string rewrittenBody = ApplyCSharpTypedInputBindingsToBody(body, typedBindings, warnings);
+                bool wrote = TrySetCSharpScriptBodyIntoTemplate(obj, rewrittenBody, warnings);
                 if (!wrote)
                 {
                     result = "Error: could not write C# Script body safely. The editable block structure was not recognized.";
@@ -2595,11 +2761,15 @@ namespace ADDGH
 
                 TryConfigureCSharpScriptPortsAfterDefaultCreate(scriptObj, inputs, outputSpecs, warnings);
 
-                bool wrote = TrySetCSharpScriptBodyIntoTemplate(scriptObj, body ?? "", warnings);
+                var typedBindings = BuildCSharpTypedInputBindings(inputs, warnings);
+                string rewrittenBody = ApplyCSharpTypedInputBindingsToBody(body ?? "", typedBindings, warnings);
+                bool wrote = TrySetCSharpScriptBodyIntoTemplate(scriptObj, rewrittenBody, warnings);
                 if (wrote)
                 {
-                    try { scriptObj.ExpireSolution(false); }
-                    catch (Exception ex) { warnings.Add("C# Script expire failed: " + ex.Message); }
+                    // Give Grasshopper a brief moment after dynamic port reconfiguration, then trigger
+                    // the standard two-pass solve so the agent does not need a separate recompute step.
+                    WaitForUiResponsiveDelay(120);
+                    FinalizeGrasshopperScriptMutation(doc, scriptObj);
                 }
                 else warnings.Add("C# Script body was not written.");
 
@@ -2672,7 +2842,7 @@ namespace ADDGH
                 }
 
                 _canvasChanged = true;
-                try { doc.ScheduleSolution(150); }
+                try { doc.ScheduleSolution(520); }
                 catch (Exception ex) { AddGhLog.Warn("ExecuteCreateCSharpScriptComponent Schedule failed: " + ex.Message); }
 
                 var payload = new JObject
@@ -3656,6 +3826,142 @@ namespace ADDGH
                 catch (Exception ex) { AddGhLog.Warn("ExecuteSetGhComponentStatus Schedule failed: " + ex.Message); }
                 result = "状态更新成功。";
                 _canvasChanged = true;
+            }));
+            return result;
+        }
+
+        private static string ExecuteSetAllCSharpScriptPreviews(bool? preview)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+                if (!preview.HasValue) { result = "Error: preview 参数必填。"; return; }
+
+                int affected = 0;
+                foreach (var obj in doc.Objects)
+                {
+                    if (!IsCSharpScriptComponent(obj)) continue;
+                    if (!(obj is Grasshopper.Kernel.IGH_PreviewObject po)) continue;
+                    po.Hidden = !preview.Value;
+                    try { obj.ExpireSolution(false); } catch { }
+                    affected++;
+                }
+
+                _canvasChanged = true;
+                try { doc.ScheduleSolution(120); } catch (Exception ex) { AddGhLog.Debug("ExecuteSetAllCSharpScriptPreviews Schedule(120): " + ex.Message); }
+                try { doc.ScheduleSolution(360); } catch (Exception ex) { AddGhLog.Debug("ExecuteSetAllCSharpScriptPreviews Schedule(360): " + ex.Message); }
+                try { Grasshopper.Instances.ActiveCanvas?.Refresh(); } catch { }
+
+                var payload = new JObject
+                {
+                    ["status"] = "ok",
+                    ["preview"] = preview.Value,
+                    ["affected_csharp_scripts"] = affected,
+                    ["note"] = preview.Value
+                        ? "已开启所有 C# Script 预览。"
+                        : "已关闭所有 C# Script 预览，适合截图或视觉复核前清理过程预览。"
+                };
+                result = payload.ToString(Formatting.None);
+            }));
+            return result;
+        }
+
+        private static string ExecutePrepareVisualReviewPreview(string sourceId, int sourceOutputIndex, string label)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: 没有打开的画布。"; return; }
+                if (!Guid.TryParse(sourceId, out Guid sourceGuid)) { result = "Error: source_id 无效。"; return; }
+
+                var sourceObj = doc.FindObject(sourceGuid, true);
+                if (sourceObj == null) { result = "Error: 找不到 source_id 对应的组件。"; return; }
+
+                Grasshopper.Kernel.IGH_Param sourceParam = null;
+                if (sourceObj is Grasshopper.Kernel.IGH_Component sourceComp)
+                {
+                    if (sourceOutputIndex < 0 || sourceOutputIndex >= sourceComp.Params.Output.Count)
+                    {
+                        result = "Error: source_output_index 超出输出端口范围。";
+                        return;
+                    }
+                    sourceParam = sourceComp.Params.Output[sourceOutputIndex];
+                }
+                else if (sourceObj is Grasshopper.Kernel.IGH_Param sourceSingleParam)
+                {
+                    sourceParam = sourceSingleParam;
+                }
+                else
+                {
+                    result = "Error: source_id 不是可预览输出源。";
+                    return;
+                }
+
+                if (!string.IsNullOrWhiteSpace(_visualReviewPreviewComponentId) && Guid.TryParse(_visualReviewPreviewComponentId, out Guid oldGuid))
+                {
+                    try
+                    {
+                        var oldObj = doc.FindObject(oldGuid, true);
+                        if (oldObj != null)
+                            doc.RemoveObject(oldObj, false);
+                    }
+                    catch (Exception ex)
+                    {
+                        AddGhLog.Debug("ExecutePrepareVisualReviewPreview remove old helper: " + ex.Message);
+                    }
+                }
+
+                var previewProxy = FindExactComponentProxyByName("Geometry");
+                if (previewProxy == null)
+                {
+                    result = "Error: 找不到 Geometry 参数电池，无法创建视觉预览出口。";
+                    return;
+                }
+
+                var previewObj = previewProxy.CreateInstance() as Grasshopper.Kernel.IGH_DocumentObject;
+                if (!(previewObj is Grasshopper.Kernel.IGH_Param previewParam))
+                {
+                    result = "Error: Geometry 参数电池无法实例化为可连接参数。";
+                    return;
+                }
+
+                previewObj.CreateAttributes();
+                var srcPivot = sourceObj.Attributes?.Pivot ?? new System.Drawing.PointF(0, 0);
+                previewObj.Attributes.Pivot = new System.Drawing.PointF(srcPivot.X + 240, srcPivot.Y + 10);
+                previewObj.NickName = string.IsNullOrWhiteSpace(label) ? "VisualReviewPreview" : label.Trim();
+                doc.AddObject(previewObj, false);
+
+                try { previewParam.AddSource(sourceParam); }
+                catch (Exception ex)
+                {
+                    try { doc.RemoveObject(previewObj, false); } catch { }
+                    result = "Error: 预览出口连接失败 - " + ex.Message;
+                    return;
+                }
+
+                if (previewObj is Grasshopper.Kernel.IGH_PreviewObject previewable)
+                    previewable.Hidden = false;
+
+                string previewCleanup = ExecuteSetAllCSharpScriptPreviews(false);
+                _visualReviewPreviewComponentId = previewObj.InstanceGuid.ToString();
+                _canvasChanged = true;
+                try { doc.ScheduleSolution(120); } catch (Exception ex) { AddGhLog.Debug("ExecutePrepareVisualReviewPreview Schedule(120): " + ex.Message); }
+                try { doc.ScheduleSolution(360); } catch (Exception ex) { AddGhLog.Debug("ExecutePrepareVisualReviewPreview Schedule(360): " + ex.Message); }
+                try { Grasshopper.Instances.ActiveCanvas?.Refresh(); } catch { }
+
+                var payload = new JObject
+                {
+                    ["status"] = "ok",
+                    ["preview_component_id"] = previewObj.InstanceGuid.ToString(),
+                    ["preview_label"] = previewObj.NickName,
+                    ["source_id"] = sourceId,
+                    ["source_output_index"] = sourceOutputIndex,
+                    ["preview_cleanup"] = string.IsNullOrWhiteSpace(previewCleanup) ? "skipped" : previewCleanup
+                };
+                result = payload.ToString(Formatting.None);
             }));
             return result;
         }

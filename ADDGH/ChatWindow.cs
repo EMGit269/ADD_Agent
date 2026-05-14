@@ -152,13 +152,16 @@ namespace ADDGH
 4. 如果图片是修改建议，围绕已有画布或上一轮结果定位要改的对象与变化点，不要无故重做整套方案。
 5. 如果图片像截图、报错或界面异常，优先诊断问题与下一步操作，不要把截图当作设计参考。
 6. 如果图片可能误发、与当前任务无关或意图不明确，先提出一个简短澄清问题，不要擅自建模。
-7. 视觉预处理模型可能会结合受控的局部画布上下文帮助定位问题，但它不负责最终决策，也不执行任何修改；你负责结合上下文决策、规划和调用工具完成画布操作。不要声称自己直接看到了图片。
-8. 当视觉分析指出疑似相关组件、输出或问题区域时，把它视为定位线索而不是最终事实；应继续用工具核实后再修改。
-9. 当文字指令与图片分析冲突时，优先遵循用户文字，并简短指出冲突点；无法判断时先澄清。
-10. 当收到视觉预处理模型的结构化报告时，把“【视觉事实】”视为高优先级参考，把“【关联画布定位】”“【执行模型下一步检查点】”“【给执行模型的任务摘要】”视为待核实线索；优先执行报告中的检查动作，再决定是否修改画布。
-11. 如果任务属于“按参考图修改”“与图片保持一致”“看起来不对但未报错”这类视觉一致性任务，不要只依赖无报错和非 Null 数据；在数据级检查通过后，仍应对结果是否符合图片目标保持怀疑，并在回复中说明已完成的数据级验证与剩余视觉风险。
-12. 若视觉报告与工具核实结果冲突，以工具核实结果为准，并向用户简短说明冲突点和你采取的依据。
-13. 当需要做视觉一致性核验、给用户展示结果，或准备把当前结果回送给视觉模型复核时，可调用 `capture_rhino_viewport` 截取 Rhino 视口；默认自动取景会优先按 Grasshopper 预览几何缩放，避免模型不在视窗内或尺度异常导致截图无效。
+7. 视觉预处理模型可结合受控画布上下文做定位，但不做最终决策，也不执行修改；你负责核实、规划和操作。不要声称自己直接看到了图片。
+8. 视觉报告里的相关组件、输出或问题区域只是线索，不是最终事实；先核实再修改。
+9. 文字与图片分析冲突时优先遵循用户文字；无法判断时先澄清。
+10. 收到结构化视觉报告后，把“视觉事实”当高优先级参考，把“关联画布定位”“执行模型下一步检查点”“给执行模型的任务摘要”当待核实线索；优先执行检查动作。
+11. 对“按参考图修改”“与图片保持一致”“看起来不对但未报错”这类任务，不要只依赖无报错和非 Null 数据；完成数据级检查后仍要说明剩余视觉风险。
+12. 视觉报告与工具核实冲突时，以工具结果为准，并简短说明依据。
+13. 需要视觉一致性核验、展示结果或回送视觉模型复核时，可调用 `capture_rhino_viewport`；默认自动取景会优先按 Grasshopper 预览几何缩放，避免模型不在视窗内或尺度异常。
+13a. 截图前先整理预览：应优先调用 `prepare_visual_review_preview`，把最终要检查的输出连接到一个干净的 Geometry 预览电池上；该工具会硬编码关闭所有 C# Script 预览。不要依赖脚本过程预览做视觉核验。
+14. 当用户要求检查模型形态、外观、轮廓、比例或整体效果，而数据级检查不足以判断时，可先做最小代价验证：优先检查报错、Null、空数据、Panel 与关键输出；仍无法确认时，再调用 `capture_rhino_viewport` 获取最小必要截图，并唤醒多模态模型做视觉复核。不要默认触发视觉复核，只在确有视觉判断必要时使用。
+15. 当用户提供了图像参考，或用图片指出当前结果存在问题时，最终完成前应进行一次截图级视觉复核：先完成数据级检查，再调用 `capture_rhino_viewport` 获取当前结果截图，并以该截图作为最终核验依据之一；不要仅凭无报错、非 Null 或局部 Panel 检查就宣称与图片要求一致。
 
 【工具调用效率】
 1. 需要当前拓扑、连线或实例 id 时再 get_gh_components，避免无目的重复拉全图。
@@ -192,6 +195,17 @@ namespace ADDGH
 6. Do not create unnecessary outputs. Prefer one or a few structured outputs; split into multiple script components only when the logic is genuinely clearer.
 7. Do not declare local variables whose names collide with output variables currently in use, such as a, b, c.
 8. Non-script helper components in this mode are limited to Params and Display categories for input, output, preview, and debugging.";
+        }
+
+        private static string BuildCSharpTypedInputPrompt()
+        {
+            return @"
+
+[C# typed input alias rules]
+1. When create_csharp_script_component or edit_csharp_script_component inputs carry common type hints such as double/number, int/integer, bool, string, point3d, vector3d, curve, brep, mesh, or plane, the tool auto-injects strongly typed local aliases into the RunScript body.
+2. Therefore, write the body as if those input names were already strongly typed. Do not spend extra tokens repeatedly converting object inputs unless you need custom validation beyond the tool's default aliasing.
+3. If an input has no recognized type hint, treat it conservatively and add explicit handling only where necessary.
+4. After writing a C# body, these tools automatically trigger a short delayed two-pass recompute. Do not routinely spend an extra tool call on recompute_gh_canvas unless the output still fails to update or verify.";
         }
 
         private static string BuildModePrompt(LayoutMode mode)
@@ -234,13 +248,13 @@ namespace ADDGH
         private static string BuildInitialSystemContent()
         {
             return _layoutMode != LayoutMode.CSharpFirst
-                ? BuildSystemPrompt() + GetSkillsSummary()
-                : BuildSystemPrompt();
+                ? BuildSystemPrompt() + BuildCSharpTypedInputPrompt() + GetSkillsSummary()
+                : BuildSystemPrompt() + BuildCSharpTypedInputPrompt();
         }
 
         private static List<object> BuildInitialSystemMessages()
         {
-            string basePrompt = BuildSystemPrompt();
+            string basePrompt = BuildSystemPrompt() + BuildCSharpTypedInputPrompt();
             string skills = _layoutMode != LayoutMode.CSharpFirst ? GetSkillsSummary() : "";
             var list = new List<object>();
 
@@ -338,6 +352,13 @@ namespace ADDGH
         private static string _cachedCanvasState = null;  // 画布状态缓存
         private static string _cachedRhinoUnitSignature = null;
         private static bool _canvasChanged = true;  // 画布是否改变标记
+        private static bool _pendingFinalVisualReview = false;
+        private static bool _finalVisualReviewCompleted = false;
+        private static bool _finalVisualReviewAttempted = false;
+        private static bool _currentTurnHadToolExecution = false;
+        private static string _finalVisualReviewSourceInput = null;
+        private static List<AttachmentItem> _finalVisualReviewSourceImages = new List<AttachmentItem>();
+        private static string _visualReviewPreviewComponentId = null;
 
         private static readonly HttpClient _httpClient = new HttpClient() { Timeout = TimeSpan.FromMinutes(5) };
 
@@ -2620,6 +2641,14 @@ namespace ADDGH
             var attachmentsToSend = _pendingAttachments.ToList();
             if (string.IsNullOrEmpty(input) && attachmentsToSend.Count == 0) return;
             bool hasImageAttachments = attachmentsToSend.Any(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64));
+            _currentTurnHadToolExecution = false;
+            _finalVisualReviewCompleted = false;
+            _finalVisualReviewAttempted = false;
+            _pendingFinalVisualReview = hasImageAttachments;
+            _finalVisualReviewSourceInput = input;
+            _finalVisualReviewSourceImages = hasImageAttachments
+                ? attachmentsToSend.Where(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64)).ToList()
+                : new List<AttachmentItem>();
 
             _isGenerating = true;
             ApplySendButtonGeneratingState();
@@ -3464,6 +3493,31 @@ namespace ADDGH
                         usedEndpoint);
                 }
 
+                bool shouldRunFinalVisualReview =
+                    fullToolCalls.Count == 0
+                    && _pendingFinalVisualReview
+                    && !_finalVisualReviewCompleted
+                    && !_finalVisualReviewAttempted
+                    && _currentTurnHadToolExecution;
+
+                if (shouldRunFinalVisualReview)
+                {
+                    _finalVisualReviewAttempted = true;
+                    string finalVisualReview = await RunFinalVisualReviewAsync(fullContent, ct);
+
+                    if (!string.IsNullOrWhiteSpace(finalVisualReview))
+                    {
+                        _finalVisualReviewCompleted = true;
+                        _pendingFinalVisualReview = false;
+                        _messages.Add(messageNode);
+                        _messages.Add(new { role = "user", content = BuildFinalVisualReviewExecutionUserText(fullContent, finalVisualReview) });
+                        EnforceChatHistoryLimit();
+                        SyncActiveHistoryConversation();
+                        ct.ThrowIfCancellationRequested();
+                        return await CallLLMAPI(apiKey, depth + 1, ct);
+                    }
+                }
+
                 await _window.Dispatcher.InvokeAsync(() => {
                     if (!string.IsNullOrEmpty(fullReasoning))
                     {
@@ -3482,6 +3536,7 @@ namespace ADDGH
 
                 if (fullToolCalls.Count > 0)
                 {
+                    _currentTurnHadToolExecution = true;
                     ShowThinkingAnimation("工作中...");
                     var operationCards = new List<(string primary, string secondary)>();
 

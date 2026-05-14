@@ -237,6 +237,18 @@ namespace ADDGH
                         ReadNullableBool(argsObj, "preview"),
                         ReadNullableBool(argsObj, "enabled"));
                 }
+                else if (funcName == "set_all_csharp_script_previews")
+                {
+                    result.ToolResult = ExecuteSetAllCSharpScriptPreviews(
+                        ReadNullableBool(argsObj, "preview"));
+                }
+                else if (funcName == "prepare_visual_review_preview")
+                {
+                    result.ToolResult = ExecutePrepareVisualReviewPreview(
+                        argsObj["source_id"]?.ToString(),
+                        argsObj["source_output_index"]?.ToObject<int?>() ?? 0,
+                        argsObj["label"]?.ToString());
+                }
                 else if (funcName == "modify_gh_component_ports")
                 {
                     result.ToolResult = ExecuteModifyGhComponentPorts(
