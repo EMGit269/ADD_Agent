@@ -172,6 +172,7 @@ namespace ADDGH
                     compJson["nickname"] = obj.NickName;
                     compJson["id"] = obj.InstanceGuid.ToString();
                     compJson["pivot"] = new JObject { { "x", Math.Round(obj.Attributes.Pivot.X) }, { "y", Math.Round(obj.Attributes.Pivot.Y) } };
+                    AppendSliderStateJson(obj, compJson);
 
                     // 检查报错
                     if (obj is IGH_ActiveObject ao && ao.RuntimeMessageLevel != GH_RuntimeMessageLevel.Blank)
@@ -915,6 +916,7 @@ namespace ADDGH
                         compJson["nickname"] = obj.NickName;
                         compJson["id"] = obj.InstanceGuid.ToString();
                         compJson["pivot"] = new JObject { { "x", Math.Round(obj.Attributes.Pivot.X) }, { "y", Math.Round(obj.Attributes.Pivot.Y) } };
+                        AppendSliderStateJson(obj, compJson);
 
                         if (obj is Grasshopper.Kernel.IGH_Component comp)
                         {
@@ -1704,6 +1706,31 @@ namespace ADDGH
             return names.Count == 0 ? "" : " 可写 string 成员：" + string.Join(", ", names);
         }
 
+        private static void AppendSliderStateJson(Grasshopper.Kernel.IGH_DocumentObject obj, JObject compJson)
+        {
+            if (!(obj is Grasshopper.Kernel.Special.GH_NumberSlider slider) || compJson == null)
+                return;
+
+            compJson["component_kind"] = "number_slider";
+            compJson["slider"] = new JObject
+            {
+                ["current"] = (double)slider.Slider.Value,
+                ["minimum"] = (double)slider.Slider.Minimum,
+                ["maximum"] = (double)slider.Slider.Maximum,
+                ["decimals"] = slider.Slider.DecimalPlaces
+            };
+        }
+
+        private static decimal ClampSliderValue(Grasshopper.Kernel.Special.GH_NumberSlider slider, decimal value)
+        {
+            if (slider == null) return value;
+            decimal min = slider.Slider.Minimum;
+            decimal max = slider.Slider.Maximum;
+            if (value < min) return min;
+            if (value > max) return max;
+            return value;
+        }
+
         private static string ExecuteSetGhComponentValue(string id, string value, double? min, double? max, int? decimals, string exactMember = null, string graphMapperType = null)
         {
             string result = "";
@@ -1756,8 +1783,11 @@ namespace ADDGH
 
                     if (value != null) {
                         if (decimal.TryParse(value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out decimal decVal)) {
-                            slider.Slider.Value = decVal;
-                            changes.Add("值=" + decVal);
+                            decimal applied = ClampSliderValue(slider, decVal);
+                            slider.Slider.Value = applied;
+                            changes.Add("值=" + applied);
+                            if (applied != decVal)
+                                changes.Add("原请求值已按范围夹紧(" + decVal + "→" + applied + ")");
                         } else { result = "Error: 数值解析失败。"; return; }
                     }
 
@@ -2749,9 +2779,7 @@ namespace ADDGH
                 scriptObj.Attributes.Pivot = new System.Drawing.PointF(x, y);
                 doc.AddObject(scriptObj, false);
 
-                ShowThinkingAnimation("正在稳定 C# 电池...");
                 WaitForUiResponsiveDelay(500);
-                ShowThinkingAnimation("正在配置 C# 电池...");
 
                 if (!string.IsNullOrWhiteSpace(label))
                 {
@@ -2810,7 +2838,7 @@ namespace ADDGH
                             if (max.HasValue) slider.Slider.Maximum = (decimal)max.Value;
                             if (decimals.HasValue) slider.Slider.DecimalPlaces = Math.Max(0, Math.Min(10, decimals.Value));
                             if (!string.IsNullOrEmpty(val) && decimal.TryParse(val, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out decimal d))
-                                slider.Slider.Value = d;
+                                slider.Slider.Value = ClampSliderValue(slider, d);
                         }
                         else if (obj is Grasshopper.Kernel.Special.GH_Panel panel && !string.IsNullOrEmpty(val))
                         {
@@ -3028,7 +3056,7 @@ namespace ADDGH
                             if (max.HasValue) slider.Slider.Maximum = (decimal)max.Value;
                             if (decimals.HasValue) slider.Slider.DecimalPlaces = Math.Max(0, Math.Min(10, decimals.Value));
                             if (!string.IsNullOrEmpty(val) && decimal.TryParse(val, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out decimal d))
-                                slider.Slider.Value = d;
+                                slider.Slider.Value = ClampSliderValue(slider, d);
                         }
                         else if (obj is Grasshopper.Kernel.Special.GH_Panel panel && !string.IsNullOrEmpty(val))
                         {
@@ -3147,7 +3175,7 @@ namespace ADDGH
                                 if (max.HasValue) s.Slider.Maximum = (decimal)max.Value;
                                 if (decimals.HasValue) s.Slider.DecimalPlaces = Math.Max(0, Math.Min(10, decimals.Value));
                                 if (!string.IsNullOrEmpty(val) && decimal.TryParse(val, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out decimal d))
-                                    s.Slider.Value = d;
+                                    s.Slider.Value = ClampSliderValue(s, d);
                             }
                             else if (isGraphMapper) {
                             }
@@ -3947,6 +3975,8 @@ namespace ADDGH
 
                 string previewCleanup = ExecuteSetAllCSharpScriptPreviews(false);
                 _visualReviewPreviewComponentId = previewObj.InstanceGuid.ToString();
+                _visualReviewTargetSourceId = sourceId;
+                _visualReviewTargetOutputIndex = sourceOutputIndex;
                 _canvasChanged = true;
                 try { doc.ScheduleSolution(120); } catch (Exception ex) { AddGhLog.Debug("ExecutePrepareVisualReviewPreview Schedule(120): " + ex.Message); }
                 try { doc.ScheduleSolution(360); } catch (Exception ex) { AddGhLog.Debug("ExecutePrepareVisualReviewPreview Schedule(360): " + ex.Message); }

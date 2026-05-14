@@ -180,7 +180,7 @@ namespace ADDGH
 
             try
             {
-                ShowThinkingAnimation("图片理解中...");
+                ShowThinkingAnimation("理解中...");
                 foreach (var endpoint in BuildEndpointCandidates(providerSettings.BaseUrl))
                 {
                     ct.ThrowIfCancellationRequested();
@@ -248,7 +248,7 @@ namespace ADDGH
             return analysis.Trim();
         }
 
-        private static async Task<string> RunFinalVisualReviewAsync(string priorDraft, System.Threading.CancellationToken ct)
+        private static async Task<string> RunFinalVisualReviewLegacyAsync(string priorDraft, System.Threading.CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
             if (!_pendingFinalVisualReview || _finalVisualReviewCompleted || !_currentTurnHadToolExecution)
@@ -258,7 +258,6 @@ namespace ADDGH
             if (sourceImages.Count == 0)
                 return null;
 
-            AppendSystemMessage("开始最终截图视觉复核。");
             if (string.IsNullOrWhiteSpace(_visualReviewPreviewComponentId))
             {
                 AppendQuietDiagnosticCard("最终视觉复核", "未提前准备视觉预览出口；截图将继续使用当前可见预览，可能受过程几何干扰。");
@@ -319,7 +318,7 @@ namespace ADDGH
             DateTime startTime = DateTime.Now;
             try
             {
-                ShowThinkingAnimation("最终视觉复核中...");
+                ShowThinkingAnimation("复核中...");
                 foreach (var endpoint in BuildEndpointCandidates(providerSettings.BaseUrl))
                 {
                     ct.ThrowIfCancellationRequested();

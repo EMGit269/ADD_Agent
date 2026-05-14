@@ -104,7 +104,7 @@ namespace ADDGH
                     type = "function",
                     function = new {
                         name = "set_gh_component_value",
-                        description = "用于： Slider/Panel 的数值或显示文本； **仅当**用户明确要求或方案必需时，向 Evaluate/Expression/C#/Python/VB 等**脚本或表达式电池实例**写入代码/公式。**GhPython、Rhino Python 3 Script：可执行源码在 `Text`，严禁用 `Description`（摘要/元数据）；未指定 property 时会优先匹配 `Text`。** 默认按成员名启发式匹配可写 string 属性或字段；若失败，错误信息会列出候选名。可用 property 精确指定成员名。写完后会触发求解与延迟再算以尽量使脚本执行。**读代码**请用 get_gh_components（含 script_bodies 字段）。Slider 可同时设置 min/max/decimals。",
+                        description = "用于： Slider/Panel 的数值或显示文本； **仅当**用户明确要求或方案必需时，向 Evaluate/Expression/C#/Python/VB 等**脚本或表达式电池实例**写入代码/公式。**GhPython、Rhino Python 3 Script：可执行源码在 `Text`，严禁用 `Description`（摘要/元数据）；未指定 property 时会优先匹配 `Text`。** 默认按成员名启发式匹配可写 string 属性或字段；若失败，错误信息会列出候选名。可用 property 精确指定成员名。写完后会触发求解与延迟再算以尽量使脚本执行。**读代码**请用 get_gh_components（含 script_bodies 字段）。Slider 可同时设置 min/max/decimals；若只设置 value，工具会按当前 slider 最小/最大值自动夹紧。",
                         parameters = new {
                             type = "object",
                             properties = new {

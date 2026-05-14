@@ -419,9 +419,17 @@ namespace ADDGH
 
         private static Border _thinkingBubble;
         private static bool _isGenerating = false;
+        private static int _thinkingStatusStep = 0;
+        private static readonly string[] ThinkingStatusVariants = new[]
+        {
+            "让我想想...",
+            "努力中...",
+            "我看看..."
+        };
 
         private static void ShowThinkingAnimation(string status = "思考中...")
         {
+            status = NormalizeThinkingStatus(status);
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
                 if (_thinkingBubble != null) {
                     var tb = _thinkingBubble.Child as TextBlock;
@@ -460,6 +468,21 @@ namespace ADDGH
                     _thinkingBubble = null;
                 }
             }));
+        }
+
+        private static string NormalizeThinkingStatus(string status)
+        {
+            string text = string.IsNullOrWhiteSpace(status) ? "思考中..." : status.Trim();
+            if (!string.Equals(text, "思考中...", StringComparison.Ordinal))
+                return text;
+
+            if (_thinkingStatusStep++ == 0)
+                return "思考中...";
+
+            if (ThinkingStatusVariants.Length == 0)
+                return "思考中...";
+
+            return ThinkingStatusVariants[new Random(Guid.NewGuid().GetHashCode()).Next(ThinkingStatusVariants.Length)];
         }
 
         private static void InitializeFloatingScrollbars()
@@ -2640,15 +2663,9 @@ namespace ADDGH
             string input = _txtInput.Text.Trim();
             var attachmentsToSend = _pendingAttachments.ToList();
             if (string.IsNullOrEmpty(input) && attachmentsToSend.Count == 0) return;
+            _thinkingStatusStep = 0;
             bool hasImageAttachments = attachmentsToSend.Any(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64));
-            _currentTurnHadToolExecution = false;
-            _finalVisualReviewCompleted = false;
-            _finalVisualReviewAttempted = false;
-            _pendingFinalVisualReview = hasImageAttachments;
-            _finalVisualReviewSourceInput = input;
-            _finalVisualReviewSourceImages = hasImageAttachments
-                ? attachmentsToSend.Where(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64)).ToList()
-                : new List<AttachmentItem>();
+            ResetVisualWorkflowState(input, attachmentsToSend);
 
             _isGenerating = true;
             ApplySendButtonGeneratingState();
@@ -2686,16 +2703,8 @@ namespace ADDGH
 
             try {
                 ShowThinkingAnimation();
-                if (hasImageAttachments)
-                {
-                    string visionAnalysis = await PreprocessImageAttachmentsAsync(input, attachmentsToSend, _cts.Token);
-                    if (string.IsNullOrWhiteSpace(visionAnalysis))
-                        return;
-
-                    _messages.Add(new { role = "user", content = BuildVisionExecutionUserText(input, attachmentsToSend, visionAnalysis) });
-                    EnforceChatHistoryLimit();
-                    SyncActiveHistoryConversation();
-                }
+                if (!await PrepareImageDrivenExecutionContextAsync(input, attachmentsToSend, _cts.Token))
+                    return;
 
                 string apiKey = GetProviderRuntimeSettings().ApiKey;
                 await CallLLMAPI(apiKey, 0, _cts.Token);
@@ -3493,29 +3502,11 @@ namespace ADDGH
                         usedEndpoint);
                 }
 
-                bool shouldRunFinalVisualReview =
-                    fullToolCalls.Count == 0
-                    && _pendingFinalVisualReview
-                    && !_finalVisualReviewCompleted
-                    && !_finalVisualReviewAttempted
-                    && _currentTurnHadToolExecution;
-
-                if (shouldRunFinalVisualReview)
+                if (ShouldRunFinalVisualReviewThisRound(fullToolCalls))
                 {
-                    _finalVisualReviewAttempted = true;
-                    string finalVisualReview = await RunFinalVisualReviewAsync(fullContent, ct);
-
-                    if (!string.IsNullOrWhiteSpace(finalVisualReview))
-                    {
-                        _finalVisualReviewCompleted = true;
-                        _pendingFinalVisualReview = false;
-                        _messages.Add(messageNode);
-                        _messages.Add(new { role = "user", content = BuildFinalVisualReviewExecutionUserText(fullContent, finalVisualReview) });
-                        EnforceChatHistoryLimit();
-                        SyncActiveHistoryConversation();
-                        ct.ThrowIfCancellationRequested();
-                        return await CallLLMAPI(apiKey, depth + 1, ct);
-                    }
+                    var continuedResponse = await TryContinueWithFinalVisualReviewAsync(apiKey, depth, fullContent, ct);
+                    if (continuedResponse != null)
+                        return continuedResponse;
                 }
 
                 await _window.Dispatcher.InvokeAsync(() => {
