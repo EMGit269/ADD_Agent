@@ -413,10 +413,123 @@ namespace ADDGH
             if (attachments != null && attachments.Any(a => a.Kind != AttachmentKind.Image))
                 sb.AppendLine();
 
-            sb.AppendLine("以下图片理解来自视觉预处理模型，执行模型没有直接看到原图。请基于该分析和用户原始请求继续规划并执行 Grasshopper 操作。");
+            sb.AppendLine("以下图片理解来自视觉预处理模型；执行模型没有直接看到原图。");
+            sb.AppendLine("职责分工：视觉预处理模型只负责识别图片内容、可读文字、用户可能意图、不确定性，以及结合受控画布上下文定位疑似问题位置；执行模型负责结合用户原始请求与上下文判断是否需要画图/建模，并在需要时继续规划和执行 Grasshopper 操作。");
+            sb.AppendLine("该报告应按字段消费：把“视觉事实”视为高优先级事实，把“关联画布定位”与“给执行模型的任务摘要”视为待核实线索；优先检查“执行模型下一步检查点”，不要把视觉模型的定位结论直接当成最终事实。");
+            sb.AppendLine("不要默认把图片当作建模参考；如果意图是修改建议、问题诊断、内容解释、素材输入、错误上传或不明确，请按对应意图处理，必要时先向用户澄清。");
             sb.AppendLine();
             sb.AppendLine(visionAnalysis?.Trim() ?? "");
             return sb.ToString().Trim();
+        }
+
+        private static string BuildVisionCanvasContext(string input)
+        {
+            try
+            {
+                string raw = ExecuteGetGhComponents();
+                if (string.IsNullOrWhiteSpace(raw) || raw.StartsWith("Error:", StringComparison.OrdinalIgnoreCase))
+                    return "当前无可用 Grasshopper 画布上下文。";
+
+                var root = JObject.Parse(raw);
+                var components = root["components"] as JArray ?? new JArray();
+                var canvasErrors = root["canvas_errors"] as JArray ?? new JArray();
+                var units = root["rhino_units"] as JObject;
+
+                var sb = new StringBuilder();
+                sb.AppendLine("当前 Grasshopper 画布受控上下文：");
+                sb.AppendLine($"- 组件数：{components.Count}");
+                sb.AppendLine($"- 运行时问题数：{canvasErrors.Count}");
+                if (units != null)
+                {
+                    string modelUnit = units["model_unit_system"]?.ToString();
+                    string absTol = units["model_absolute_tolerance"]?.ToString();
+                    if (!string.IsNullOrWhiteSpace(modelUnit) || !string.IsNullOrWhiteSpace(absTol))
+                        sb.AppendLine($"- Rhino 单位：{modelUnit ?? "未知"}，绝对公差：{absTol ?? "未知"}");
+                }
+
+                string canvasIssueText = _txtCanvasIssues?.Text?.Trim();
+                if (!string.IsNullOrWhiteSpace(canvasIssueText))
+                {
+                    sb.AppendLine("- 画布诊断：");
+                    sb.AppendLine(ClampVisionText(canvasIssueText, 800));
+                }
+
+                if (canvasErrors.Count > 0)
+                {
+                    sb.AppendLine("- 关键运行时问题：");
+                    foreach (var err in canvasErrors.Take(8))
+                    {
+                        string name = err?["name"]?.ToString();
+                        string level = err?["level"]?.ToString();
+                        string message = err?["message"]?.ToString();
+                        sb.AppendLine($"  - {name} [{level}] {message}".TrimEnd());
+                    }
+                }
+
+                var selected = new List<JToken>();
+                selected.AddRange(components.Where(c => c?["runtime_messages"] is JArray).Take(8));
+                selected.AddRange(components.Reverse().Take(10));
+                var unique = selected
+                    .Where(c => c != null)
+                    .GroupBy(c => c["id"]?.ToString() ?? Guid.NewGuid().ToString("n"))
+                    .Select(g => g.First())
+                    .Take(12)
+                    .ToList();
+
+                if (unique.Count > 0)
+                {
+                    sb.AppendLine("- 相关组件摘要：");
+                    foreach (var comp in unique)
+                    {
+                        string name = comp["name"]?.ToString() ?? "未知组件";
+                        string nickname = comp["nickname"]?.ToString();
+                        string id = comp["id"]?.ToString();
+                        string idShort = string.IsNullOrWhiteSpace(id) || id.Length < 8 ? id : id.Substring(0, 8);
+                        sb.AppendLine($"  - {name}" + (string.IsNullOrWhiteSpace(nickname) || nickname == name ? "" : $"（{nickname}）") + (string.IsNullOrWhiteSpace(idShort) ? "" : $" #{idShort}"));
+
+                        if (comp["runtime_messages"] is JArray msgs && msgs.Count > 0)
+                            sb.AppendLine($"    - 运行时消息：{string.Join(" | ", msgs.Take(3).Select(m => m?.ToString()).Where(m => !string.IsNullOrWhiteSpace(m)))}");
+
+                        if (comp["inputs"] is JArray inputs && inputs.Count > 0)
+                        {
+                            var inputParts = inputs.Take(3).Select(i =>
+                            {
+                                string portName = i?["name"]?.ToString() ?? "?";
+                                string ds = i?["data_structure"]?.ToString() ?? "未知";
+                                string src = "";
+                                if (i?["sources"] is JArray srcs && srcs.Count > 0)
+                                    src = " <- " + string.Join(", ", srcs.Take(2).Select(s => s?["name"]?.ToString()).Where(s => !string.IsNullOrWhiteSpace(s)));
+                                return $"{portName}: {ds}{src}";
+                            });
+                            sb.AppendLine("    - 输入：" + string.Join(" ; ", inputParts));
+                        }
+
+                        if (comp["outputs"] is JArray outputs && outputs.Count > 0)
+                        {
+                            var outputParts = outputs.Take(3).Select(o =>
+                            {
+                                string portName = o?["name"]?.ToString() ?? "?";
+                                string ds = o?["data_structure"]?.ToString();
+                                string type = o?["type"]?.ToString();
+                                return string.IsNullOrWhiteSpace(ds) ? $"{portName}: {type}" : $"{portName}: {ds}";
+                            });
+                            sb.AppendLine("    - 输出：" + string.Join(" ; ", outputParts));
+                        }
+                    }
+                }
+
+                return ClampVisionText(sb.ToString().Trim(), 5000);
+            }
+            catch (Exception ex)
+            {
+                return "画布上下文读取失败：" + ex.Message;
+            }
+        }
+
+        private static string ClampVisionText(string text, int maxChars)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return "";
+            return text.Length <= maxChars ? text.Trim() : text.Substring(0, maxChars).TrimEnd() + "\n[已截断]";
         }
 
         private static JObject BuildVisionPreprocessRequestBody(ProviderRuntimeSettings providerSettings, string input, List<AttachmentItem> attachments)
@@ -424,14 +537,38 @@ namespace ADDGH
             var content = new JArray();
             var textBuilder = new StringBuilder();
             textBuilder.AppendLine("请只分析用户上传的图片和文字，不要调用工具，也不要执行任何 Grasshopper 操作。");
-            textBuilder.AppendLine("输出应包含：图片概述、关键对象/可读文字、用户可能意图、与 Grasshopper 建模相关的信息、约束/不确定性、给执行模型的简短任务摘要。");
-            textBuilder.AppendLine("如果无法确定，请明确写出不确定点，不要编造。");
+            textBuilder.AppendLine("用户发图不一定是为了根据图片建模；也可能是误发、修改建议、截图报错、内容解释、素材输入或其它相关要求。请先判断真实意图。");
+            textBuilder.AppendLine("你可以利用随附的受控 Grasshopper 画布上下文帮助定位问题、判断图片中的修改意见对应到哪一段逻辑，但不能代替执行模型规划或执行修改。");
+            textBuilder.AppendLine("输出必须严格按以下标题顺序组织，缺一不可：");
+            textBuilder.AppendLine("【视觉事实】");
+            textBuilder.AppendLine("只写可直接观察到的事实，不要推断。");
+            textBuilder.AppendLine("【用户意图判断】");
+            textBuilder.AppendLine("从建模参考、修改建议、问题诊断、内容解释、素材输入、错误上传、不明确中选择一个或多个，并给出一句理由。");
+            textBuilder.AppendLine("【问题点】");
+            textBuilder.AppendLine("如果用户是在提修改或纠错，明确区分最终结果问题、中间过程问题、标注/尺寸/比例/位置问题、数据或界面异常问题；如果不适用，写“不适用”。");
+            textBuilder.AppendLine("【关联画布定位】");
+            textBuilder.AppendLine("如果提供的画布上下文足以支持判断，请列出最可能相关的组件、输出、数据流或问题区域，并按优先级排序；每项包含：组件名/昵称/简短标识、关联原因、置信度（高/中/低）。若不足以判断，明确说明缺什么信息。");
+            textBuilder.AppendLine("【执行模型下一步检查点】");
+            textBuilder.AppendLine("只列最值得先检查的 1-3 项，例如某输出是否为 Null、某端口数据树结构、某参数是否与参考冲突、是否需要在某输出端接 Panel 查看实际值。");
+            textBuilder.AppendLine("【与 Grasshopper 建模/画图相关的信息】");
+            textBuilder.AppendLine("仅在相关时提取形状、结构、比例、材质、颜色、布局、约束和可执行线索；无关时写“无”。");
+            textBuilder.AppendLine("【不确定性】");
+            textBuilder.AppendLine("说明图片、文字和上下文之间的冲突，以及当前无法确定的点；不要编造。");
+            textBuilder.AppendLine("【给执行模型的任务摘要】");
+            textBuilder.AppendLine("用 3-6 句话说明用户真正要的动作、疑似问题区域、优先验证项、是否应先澄清。");
 
             if (!string.IsNullOrWhiteSpace(input))
             {
                 textBuilder.AppendLine();
                 textBuilder.AppendLine("用户原始请求：");
                 textBuilder.AppendLine(input.Trim());
+            }
+
+            string canvasContext = BuildVisionCanvasContext(input);
+            if (!string.IsNullOrWhiteSpace(canvasContext))
+            {
+                textBuilder.AppendLine();
+                textBuilder.AppendLine(canvasContext);
             }
 
             AppendNonImageAttachmentText(textBuilder, attachments);
@@ -461,7 +598,7 @@ namespace ADDGH
                     new JObject
                     {
                         ["role"] = "system",
-                        ["content"] = "你是图像理解预处理器。你的任务是把图片内容和用户意图转写成准确、简洁、可执行的中文分析，供另一个低成本 LLM 继续操作。不要调用工具，不要输出无关说明。"
+                        ["content"] = "你是图像理解与问题定位预处理器。你的职责不是规划修改方案，也不是执行 Grasshopper 操作，而是把用户图片、文字和受控画布上下文转写成可供执行模型直接使用的定位报告。你可以使用随附的受控 Grasshopper 画布上下文帮助定位问题、判断图片中的修改意见可能对应哪一段逻辑，但不能代替执行模型做最终规划、工具调用或画布修改。你下游有一个非多模态执行模型会根据你的分析和用户原始请求决定是否画图、建模、修改 Grasshopper 画布或向用户澄清；它没有直接看到原图。不要调用工具，不要执行 Grasshopper 操作，不要默认用户发图就是要建模。输出必须严格按用户消息中要求的标题顺序组织；区分视觉事实、推断、置信度和不确定性，语言要准确、简洁、可执行。"
                     },
                     new JObject
                     {

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.IO;
 using System.Windows.Media;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -3050,6 +3051,253 @@ namespace ADDGH
                 result = "已触发画布重新求解（含延迟再算）。";
             }));
             return result;
+        }
+
+        private static string ExecuteCaptureRhinoViewport(string framing, int? width, int? height, double? paddingRatio)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                var rhinoDoc = Rhino.RhinoDoc.ActiveDoc;
+                if (rhinoDoc == null) { result = "Error: 没有打开的 Rhino 文档。"; return; }
+
+                var view = rhinoDoc.Views.ActiveView ?? rhinoDoc.Views.FirstOrDefault();
+                if (view == null) { result = "Error: 没有可用的 Rhino 视口。"; return; }
+
+                string framingMode = string.IsNullOrWhiteSpace(framing) ? "auto" : framing.Trim().ToLowerInvariant();
+                int captureWidth = Math.Max(320, Math.Min(4096, width ?? 1600));
+                int captureHeight = Math.Max(240, Math.Min(4096, height ?? 900));
+                double pad = paddingRatio ?? 0.12;
+                if (double.IsNaN(pad) || double.IsInfinity(pad)) pad = 0.12;
+                pad = Math.Max(0.0, Math.Min(0.5, pad));
+
+                var ghDoc = Grasshopper.Instances.ActiveCanvas?.Document;
+                Rhino.Geometry.BoundingBox targetBox = Rhino.Geometry.BoundingBox.Empty;
+                string bboxSource = "current_view";
+                int previewCount = 0;
+                int rhinoObjectCount = 0;
+                bool needsZoom = false;
+
+                bool ghOk = TryGetGrasshopperPreviewBoundingBox(ghDoc, out Rhino.Geometry.BoundingBox ghBox, out previewCount);
+                bool rhinoOk = TryGetRhinoDocumentBoundingBox(rhinoDoc, out Rhino.Geometry.BoundingBox rhinoBox, out rhinoObjectCount);
+
+                switch (framingMode)
+                {
+                    case "gh_preview":
+                        if (!ghOk) { result = "Error: 当前没有可用于取景的 Grasshopper 预览几何。"; return; }
+                        targetBox = ghBox;
+                        bboxSource = "gh_preview";
+                        needsZoom = true;
+                        break;
+                    case "rhino_doc":
+                        if (!rhinoOk) { result = "Error: 当前 Rhino 文档中没有可用于取景的可见对象。"; return; }
+                        targetBox = rhinoBox;
+                        bboxSource = "rhino_doc";
+                        needsZoom = true;
+                        break;
+                    case "current_view":
+                        needsZoom = false;
+                        bboxSource = "current_view";
+                        break;
+                    default:
+                        if (ghOk)
+                        {
+                            targetBox = ghBox;
+                            bboxSource = "gh_preview";
+                            needsZoom = true;
+                        }
+                        else if (rhinoOk)
+                        {
+                            targetBox = rhinoBox;
+                            bboxSource = "rhino_doc";
+                            needsZoom = true;
+                        }
+                        else
+                        {
+                            needsZoom = false;
+                            bboxSource = "current_view";
+                        }
+                        break;
+                }
+
+                if (needsZoom)
+                {
+                    Rhino.Geometry.BoundingBox fitted = ExpandBoundingBoxForViewportCapture(targetBox, rhinoDoc, pad);
+                    if (!fitted.IsValid)
+                    {
+                        result = "Error: 视口取景失败，未得到有效的包围盒。";
+                        return;
+                    }
+
+                    try
+                    {
+                        view.ActiveViewport.ZoomBoundingBox(fitted);
+                        view.Redraw();
+                        rhinoDoc.Views.Redraw();
+                    }
+                    catch (Exception ex)
+                    {
+                        result = "Error: 视口缩放失败 - " + ex.Message;
+                        return;
+                    }
+                }
+
+                try
+                {
+                    var capture = new Rhino.Display.ViewCapture
+                    {
+                        Width = captureWidth,
+                        Height = captureHeight,
+                        ScaleScreenItems = false,
+                        DrawAxes = false,
+                        DrawGrid = false,
+                        DrawGridAxes = false
+                    };
+
+                    using (var bitmap = capture.CaptureToBitmap(view))
+                    {
+                        if (bitmap == null)
+                        {
+                            result = "Error: Rhino 视口截图失败，未返回位图。";
+                            return;
+                        }
+
+                        string dir = GetViewportCaptureDirectory();
+                        Directory.CreateDirectory(dir);
+                        string filePath = Path.Combine(dir, "rhino_capture_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".png");
+                        bitmap.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
+
+                        var payload = new JObject
+                        {
+                            ["path"] = filePath,
+                            ["width"] = captureWidth,
+                            ["height"] = captureHeight,
+                            ["framing"] = framingMode,
+                            ["bbox_source"] = bboxSource,
+                            ["gh_preview_count"] = previewCount,
+                            ["rhino_object_count"] = rhinoObjectCount
+                        };
+                        if (needsZoom && targetBox.IsValid)
+                        {
+                            payload["bbox"] = new JObject
+                            {
+                                ["min"] = new JObject
+                                {
+                                    ["x"] = Math.Round(targetBox.Min.X, 4),
+                                    ["y"] = Math.Round(targetBox.Min.Y, 4),
+                                    ["z"] = Math.Round(targetBox.Min.Z, 4)
+                                },
+                                ["max"] = new JObject
+                                {
+                                    ["x"] = Math.Round(targetBox.Max.X, 4),
+                                    ["y"] = Math.Round(targetBox.Max.Y, 4),
+                                    ["z"] = Math.Round(targetBox.Max.Z, 4)
+                                }
+                            };
+                        }
+                        if (!needsZoom)
+                            payload["note"] = "未自动缩放，直接截取当前视图。";
+                        else if (bboxSource == "gh_preview")
+                            payload["note"] = "已按 Grasshopper 预览几何自动取景，适合检查当前建模结果。";
+                        else if (bboxSource == "rhino_doc")
+                            payload["note"] = "未找到有效 GH 预览范围，已退回 Rhino 文档对象范围自动取景。";
+
+                        result = payload.ToString(Formatting.None);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    result = "Error: Rhino 视口截图失败 - " + ex.Message;
+                }
+            }));
+            return result;
+        }
+
+        private static bool TryGetGrasshopperPreviewBoundingBox(Grasshopper.Kernel.GH_Document doc, out Rhino.Geometry.BoundingBox bbox, out int previewCount)
+        {
+            bbox = Rhino.Geometry.BoundingBox.Empty;
+            previewCount = 0;
+            if (doc == null) return false;
+
+            foreach (var obj in doc.Objects)
+            {
+                if (!(obj is Grasshopper.Kernel.IGH_PreviewObject po)) continue;
+                if (po.Hidden) continue;
+
+                Rhino.Geometry.BoundingBox clip;
+                try { clip = po.ClippingBox; }
+                catch { continue; }
+                if (!clip.IsValid) continue;
+
+                if (previewCount == 0) bbox = clip;
+                else bbox.Union(clip);
+                previewCount++;
+            }
+
+            return previewCount > 0 && bbox.IsValid;
+        }
+
+        private static bool TryGetRhinoDocumentBoundingBox(Rhino.RhinoDoc rhinoDoc, out Rhino.Geometry.BoundingBox bbox, out int objectCount)
+        {
+            bbox = Rhino.Geometry.BoundingBox.Empty;
+            objectCount = 0;
+            if (rhinoDoc == null) return false;
+
+            foreach (var obj in rhinoDoc.Objects)
+            {
+                if (obj == null || obj.IsDeleted || obj.IsHidden) continue;
+                var geometry = obj.Geometry;
+                if (geometry == null) continue;
+
+                Rhino.Geometry.BoundingBox gbox;
+                try { gbox = geometry.GetBoundingBox(true); }
+                catch { continue; }
+                if (!gbox.IsValid) continue;
+
+                if (objectCount == 0) bbox = gbox;
+                else bbox.Union(gbox);
+                objectCount++;
+            }
+
+            return objectCount > 0 && bbox.IsValid;
+        }
+
+        private static Rhino.Geometry.BoundingBox ExpandBoundingBoxForViewportCapture(Rhino.Geometry.BoundingBox bbox, Rhino.RhinoDoc rhinoDoc, double paddingRatio)
+        {
+            if (!bbox.IsValid) return Rhino.Geometry.BoundingBox.Empty;
+
+            double absTol = Math.Max(rhinoDoc?.ModelAbsoluteTolerance ?? 0.01, 0.001);
+            var min = bbox.Min;
+            var max = bbox.Max;
+            var center = bbox.Center;
+
+            double dx = max.X - min.X;
+            double dy = max.Y - min.Y;
+            double dz = max.Z - min.Z;
+            double dominant = Math.Max(Math.Max(Math.Abs(dx), Math.Abs(dy)), Math.Abs(dz));
+            double minAxisSize = Math.Max(absTol * 20.0, dominant > 0 ? dominant * 0.02 : 1.0);
+
+            if (Math.Abs(dx) < minAxisSize) { min.X = center.X - minAxisSize / 2.0; max.X = center.X + minAxisSize / 2.0; }
+            if (Math.Abs(dy) < minAxisSize) { min.Y = center.Y - minAxisSize / 2.0; max.Y = center.Y + minAxisSize / 2.0; }
+            if (Math.Abs(dz) < minAxisSize) { min.Z = center.Z - minAxisSize / 2.0; max.Z = center.Z + minAxisSize / 2.0; }
+
+            var expanded = new Rhino.Geometry.BoundingBox(min, max);
+            var diagonal = expanded.Diagonal;
+            double sx = Math.Max(Math.Abs(diagonal.X) * paddingRatio, absTol * 5.0);
+            double sy = Math.Max(Math.Abs(diagonal.Y) * paddingRatio, absTol * 5.0);
+            double sz = Math.Max(Math.Abs(diagonal.Z) * paddingRatio, absTol * 5.0);
+
+            min = expanded.Min;
+            max = expanded.Max;
+            min.X -= sx; min.Y -= sy; min.Z -= sz;
+            max.X += sx; max.Y += sy; max.Z += sz;
+            return new Rhino.Geometry.BoundingBox(min, max);
+        }
+
+        private static string GetViewportCaptureDirectory()
+        {
+            string root = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            return Path.Combine(root, "ADDGH", "captures");
         }
 
         /// <summary>

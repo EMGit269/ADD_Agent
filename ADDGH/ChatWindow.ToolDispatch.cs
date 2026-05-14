@@ -64,6 +64,14 @@ namespace ADDGH
                 {
                     result.ToolResult = ExecuteRecomputeGhCanvas();
                 }
+                else if (funcName == "capture_rhino_viewport")
+                {
+                    result.ToolResult = ExecuteCaptureRhinoViewport(
+                        argsObj["framing"]?.ToString(),
+                        ReadNullableInt(argsObj, "width"),
+                        ReadNullableInt(argsObj, "height"),
+                        ReadNullableDouble(argsObj, "padding_ratio"));
+                }
                 else if (funcName == "gh_native_script_editor")
                 {
                     result.ToolResult = ExecuteGhNativeScriptEditor(

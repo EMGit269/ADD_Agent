@@ -209,6 +209,25 @@ namespace ADDGH
                 new {
                     type = "function",
                     function = new {
+                        name = "capture_rhino_viewport",
+                        description = "截取当前 Rhino 视口 PNG。默认会先自动取景：优先根据当前 Grasshopper 预览几何的包围盒缩放到可见范围，解决模型不在视窗内、太小或太大导致看不见的问题；若拿不到有效 GH 预览范围，则退回 Rhino 文档对象范围，最后才保留当前视图直接截图。",
+                        parameters = new {
+                            type = "object",
+                            properties = new {
+                                framing = new { type = "string", description = "可选：auto（默认，优先 GH 预览范围）| gh_preview（强制按 GH 预览取景）| rhino_doc（按 Rhino 文档对象取景）| current_view（不自动缩放，直接截当前视图）。" },
+                                width = new { type = "integer", description = "可选：输出图片宽度，默认 1600。" },
+                                height = new { type = "integer", description = "可选：输出图片高度，默认 900。" },
+                                padding_ratio = new { type = "number", description = "可选：自动取景时的留白比例，默认 0.12，建议 0.05-0.3。" },
+                                summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
+                                summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
+                            },
+                            required = new[] { "summary" }
+                        }
+                    }
+                },
+                new {
+                    type = "function",
+                    function = new {
                         name = "gh_native_script_editor",
                         description = "针对 **Grasshopper 内置 C#/VB Script**：`open_focus` 打开/聚焦 GH_ScriptEditor；`read_source` **只从电池实例反射可读脚本正文**（与 get_gh_components.script_bodies 同源，**不调用**编辑器 GetSourceCode，避免读取崩溃）；`set_source_commit` 走编辑器并仅替换首个可编辑块。**read_source→改返回的 primary_for_edit→set_source_commit** 为推荐流程。**GhPython / Python 3 Script** 请用 set_gh_component_value，源码属性为 **Text**（勿写 Description）。",
                         parameters = new {
