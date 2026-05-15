@@ -1125,7 +1125,7 @@ namespace ADDGH
         MinHeight=""520"" MinWidth=""410""
         ResizeMode=""CanResize""
         WindowStyle=""SingleBorderWindow"" Background=""#141414""
-        Topmost=""True"" WindowStartupLocation=""CenterScreen"" x:Name=""MagpieWindow"">
+        Topmost=""True"" WindowStartupLocation=""CenterScreen"" x:Name=""SquirrelWindow"">
     <Window.Resources>
         <Style TargetType=""ScrollBar"">
             <Setter Property=""Background"" Value=""Transparent""/>
@@ -1363,7 +1363,7 @@ namespace ADDGH
                                 </Grid>
                             </Viewbox>
                         </Button>
-                        <TextBlock Text=""Magpie"" Foreground=""#C9CDD3"" FontSize=""13"" FontWeight=""SemiBold"" VerticalAlignment=""Center"" Margin=""8,0,0,0""/>
+                        <TextBlock Text=""Squirrel"" Foreground=""#C9CDD3"" FontSize=""13"" FontWeight=""SemiBold"" VerticalAlignment=""Center"" Margin=""8,0,0,0""/>
                     </StackPanel>
                     <StackPanel Orientation=""Horizontal"" HorizontalAlignment=""Right"">
                         <Button x:Name=""BtnToggleViewMode"" Content=""JSON"" Foreground=""#B8B8B8"" Background=""Transparent"" BorderThickness=""0"" BorderBrush=""Transparent"" FontSize=""10"" Padding=""8,4"" Cursor=""Hand"" VerticalAlignment=""Center"" Margin=""0,0,8,0"" Visibility=""Collapsed"">
@@ -1421,7 +1421,7 @@ namespace ADDGH
 
                 <Border Grid.Row=""1"" Grid.RowSpan=""2"" Grid.Column=""1"" Panel.ZIndex=""8"" Background=""{x:Null}"" CornerRadius=""0"" Padding=""18,12,18,24"" x:Name=""InputAreaBorder"" HorizontalAlignment=""Center"" VerticalAlignment=""Bottom"">
                 <StackPanel>
-                    <TextBlock x:Name=""EmptyChatPrompt"" Text=""要用Magpie创造什么？"" Foreground=""#F3F3F3"" FontSize=""24"" FontWeight=""SemiBold"" TextAlignment=""Center"" HorizontalAlignment=""Center"" Margin=""0,0,0,24""/>
+                    <TextBlock x:Name=""EmptyChatPrompt"" Text=""要用Squirrel创造什么？"" Foreground=""#F3F3F3"" FontSize=""24"" FontWeight=""SemiBold"" TextAlignment=""Center"" HorizontalAlignment=""Center"" Margin=""0,0,0,24""/>
                     <!-- Warning Bar -->
                     <Border x:Name=""WarningBar"" Visibility=""Collapsed"" Background=""#33CC9900"" BorderBrush=""#66CC9900"" BorderThickness=""1"" CornerRadius=""8"" Padding=""12,8"" Margin=""0,0,0,10"">
                     <Grid>

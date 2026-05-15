@@ -1661,7 +1661,7 @@ namespace ADDGH
                 + displayName + " 属于 " + category + "，已拒绝创建。核心建模逻辑请写入 C# Script 电池。";
         }
 
-        private static string ExecuteAddGhComponent(string name, float x, float y, string label = null, string componentGuid = null, string graphMapperType = null)
+        private static string ExecuteAddGhComponent(string name, float x, float y, string label = null, string componentGuid = null, string graphMapperType = null, string value = null, double? min = null, double? max = null, int? decimals = null)
         {
             string result = "";
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
@@ -1697,6 +1697,20 @@ namespace ADDGH
                 }
 
                 doc.AddObject(obj, false);
+
+                if (obj is Grasshopper.Kernel.Special.GH_NumberSlider slider)
+                {
+                    if (min.HasValue) slider.Slider.Minimum = (decimal)min.Value;
+                    if (max.HasValue) slider.Slider.Maximum = (decimal)max.Value;
+                    if (decimals.HasValue) slider.Slider.DecimalPlaces = Math.Max(0, Math.Min(10, decimals.Value));
+                    if (!string.IsNullOrEmpty(value) && decimal.TryParse(value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out decimal d))
+                        slider.Slider.Value = ClampSliderValue(slider, d);
+                }
+                else if (obj is Grasshopper.Kernel.Special.GH_Panel panel && !string.IsNullOrEmpty(value))
+                {
+                    panel.UserText = value;
+                }
+
                 _canvasChanged = true;
                 try { doc.ScheduleSolution(150); }
                 catch (Exception ex) { AddGhLog.Warn("ExecuteAddGhComponent Schedule failed: " + ex.Message); }

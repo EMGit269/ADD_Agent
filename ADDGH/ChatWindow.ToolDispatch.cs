@@ -124,7 +124,11 @@ namespace ADDGH
                             y,
                             label,
                             cguid,
-                            argsObj["graph_mapper_type"]?.ToString() ?? argsObj["graph_type"]?.ToString());
+                            argsObj["graph_mapper_type"]?.ToString() ?? argsObj["graph_type"]?.ToString(),
+                            argsObj["value"]?.ToString(),
+                            argsObj["min"]?.ToObject<double?>(),
+                            argsObj["max"]?.ToObject<double?>(),
+                            argsObj["decimals"]?.ToObject<int?>());
                         if (!result.ToolResult.StartsWith("Error:")) result.AddComp++;
                     }
                 }

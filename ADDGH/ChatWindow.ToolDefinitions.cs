@@ -48,7 +48,7 @@ namespace ADDGH
                     type = "function",
                     function = new {
                         name = "add_gh_component",
-                        description = "在画布上创建**单个** Grasshopper 电池。适合只落一颗、占位/定位，或必须先看清画布反馈再决定下一步；**多颗电池且要带连线请优先用 create_component_graph 一次完成**。必须提供 name 或 component_guid 之一。默认只用 **name**。**不要**为普通电池先查 catalog；仅当已确认同名歧义或必须放置脚本/表达式类且 name 无法区分时，再用 search_gh_component_catalog 的 **component_guid**。Slider/Panel 必须提供 label。",
+                        description = "在画布上创建**单个** Grasshopper 电池。适合只落一颗、占位/定位，或必须先看清画布反馈再决定下一步；**多颗电池且要带连线请优先用 create_component_graph 一次完成**。必须提供 name 或 component_guid 之一。默认只用 **name**。**不要**为普通电池先查 catalog；仅当已确认同名歧义或必须放置脚本/表达式类且 name 无法区分时，再用 search_gh_component_catalog 的 **component_guid**。Slider/Panel 可在同一次创建里直接提供 value/min/max/decimals，工具会在对象落盘后按顺序一次性写入，避免先后冲突；仍然必须提供 label。",
                         parameters = new {
                             type = "object",
                             properties = new {
@@ -58,6 +58,10 @@ namespace ADDGH
                                 y = new { type = "number", description = "画布 Y 坐标" },
                                 label = new { type = "string", description = "仅限 Slider/Panel 的显示标签。普通电池严禁使用。" },
                                 graph_mapper_type = new { type = "string", description = "可选：Graph Mapper 曲线类型。Graph Mapper 未指定时默认 Bezier；可填 Bezier、Linear、Parabola、Sine、Gaussian、Power、Square Root 等。" },
+                                value = new { type = "string", description = "可选：Slider/Panel 初值；Slider 会自动按 min/max 夹紧后写入。" },
+                                min = new { type = "number", description = "可选：Slider 最小值。" },
+                                max = new { type = "number", description = "可选：Slider 最大值。" },
+                                decimals = new { type = "integer", description = "可选：Slider 小数位数（0-10）。" },
                                 summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
                                 summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
                             },

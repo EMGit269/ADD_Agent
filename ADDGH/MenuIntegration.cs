@@ -34,10 +34,10 @@ namespace ADDGH
             
             foreach(ToolStripItem item in editor.MainMenuStrip.Items)
             {
-                if (item.Text == "Magpie") return;
+                if (item.Text == "Squirrel") return;
             }
             
-            ToolStripMenuItem aiMenu = new ToolStripMenuItem("Magpie");
+            ToolStripMenuItem aiMenu = new ToolStripMenuItem("Squirrel");
             aiMenu.Click += (s, e) => {
                 ChatWindow.Show();
             };
