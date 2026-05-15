@@ -511,9 +511,10 @@ namespace ADDGH
                         }
                     }
                 },
-                ShowReferenceOptionsTool.GetApiToolDefinition()
+                ShowReferenceOptionsTool.GetApiToolDefinition(),
+                ShowPlanStepsTool.GetApiToolDefinition()
             };
-            return FilterToolsForLayoutMode(toolDefinitions);
+            return FilterToolsForVisionContext(FilterToolsForAgentMode(FilterToolsForLayoutMode(toolDefinitions)));
         }
 
         private static object GetCreateScriptComponentGraphToolDefinition()
@@ -752,15 +753,57 @@ namespace ADDGH
                 blocked.Add("create_component_graph");
                 blocked.Add("create_script_component_graph");
                 blocked.Add("gh_native_script_editor");
-                blocked.Add("read_skill_file");
-                blocked.Add("read_reference_json");
-                blocked.Add("create_gh_skill");
-                blocked.Add(ShowReferenceOptionsTool.FunctionName);
+                if (_agentMode == AgentMode.Create)
+                {
+                    blocked.Add("read_reference_json");
+                    blocked.Add("create_gh_skill");
+                    blocked.Add(ShowReferenceOptionsTool.FunctionName);
+                }
             }
 
             return toolDefinitions
                 .Where(t => !blocked.Contains(GetToolDefinitionName(t) ?? ""))
                 .Select(RestrictAddComponentToolForScriptMode)
+                .ToArray();
+        }
+
+        private static object[] FilterToolsForAgentMode(object[] toolDefinitions)
+        {
+            if (toolDefinitions == null || _agentMode != AgentMode.Plan) return toolDefinitions;
+
+            var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "get_gh_components",
+                "capture_rhino_viewport",
+                "check_gh_errors",
+                "search_component_library",
+                "search_gh_component_catalog",
+                "query_gh_components",
+                "get_component_context",
+                "read_component_script",
+                "read_skill_file",
+                "read_reference_json",
+                ShowPlanStepsTool.FunctionName
+            };
+
+            return toolDefinitions
+                .Where(t => allowed.Contains(GetToolDefinitionName(t) ?? ""))
+                .ToArray();
+        }
+
+        private static object[] FilterToolsForVisionContext(object[] toolDefinitions)
+        {
+            if (toolDefinitions == null || IsVisionToolContextActive()) return toolDefinitions;
+
+            var blocked = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "capture_rhino_viewport",
+                "prepare_visual_review_preview",
+                "set_all_csharp_script_previews"
+            };
+
+            return toolDefinitions
+                .Where(t => !blocked.Contains(GetToolDefinitionName(t) ?? ""))
                 .ToArray();
         }
 

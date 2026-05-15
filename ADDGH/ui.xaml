@@ -264,7 +264,42 @@
                             
                             <Button x:Name="BtnUploadImage" Grid.Column="0" Content="+" Foreground="#A0A0A0" Background="Transparent" BorderThickness="0" FontSize="22" FontWeight="Medium" Cursor="Hand" ToolTip="上传图片" Margin="0,0,10,0"/>
                             <Button x:Name="BtnStop" Grid.Column="1" Content="停止" Visibility="Collapsed" Foreground="#FF6B6B" Background="Transparent" BorderThickness="0" FontSize="16" Cursor="Hand" ToolTip="停止按钮" Margin="0,0,10,0"/>
-                            <Button x:Name="BtnContinue" Grid.Column="2" Content="继续" Foreground="#A0A0A0" Background="Transparent" BorderThickness="0" FontSize="14" Cursor="Hand" ToolTip="继续生成"/>
+                            <Button x:Name="BtnAgentModeDropdown" Grid.Column="2" Content="Create ▾" Foreground="#A0A0A0" Background="Transparent" BorderThickness="0" FontSize="14" Cursor="Hand" ToolTip="执行模式">
+                                <Button.ContextMenu>
+                                    <ContextMenu Background="#1E1E1E" Foreground="#E0E0E0" BorderBrush="#333" BorderThickness="1" Padding="4">
+                                        <ContextMenu.Template>
+                                            <ControlTemplate TargetType="ContextMenu">
+                                                <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                                                    <ItemsPresenter/>
+                                                </Border>
+                                            </ControlTemplate>
+                                        </ContextMenu.Template>
+                                        <ContextMenu.Resources>
+                                            <Style TargetType="MenuItem">
+                                                <Setter Property="Foreground" Value="#E0E0E0"/>
+                                                <Setter Property="Background" Value="Transparent"/>
+                                                <Setter Property="Padding" Value="12,8"/>
+                                                <Setter Property="Template">
+                                                    <Setter.Value>
+                                                        <ControlTemplate TargetType="MenuItem">
+                                                            <Border x:Name="Bg" Background="{TemplateBinding Background}" CornerRadius="4">
+                                                                <ContentPresenter Content="{TemplateBinding Header}" Margin="{TemplateBinding Padding}"/>
+                                                            </Border>
+                                                            <ControlTemplate.Triggers>
+                                                                <Trigger Property="IsHighlighted" Value="True">
+                                                                    <Setter TargetName="Bg" Property="Background" Value="#333333"/>
+                                                                </Trigger>
+                                                            </ControlTemplate.Triggers>
+                                                        </ControlTemplate>
+                                                    </Setter.Value>
+                                                </Setter>
+                                            </Style>
+                                        </ContextMenu.Resources>
+                                        <MenuItem x:Name="MenuAgentModeCreate" Header="Create"/>
+                                        <MenuItem x:Name="MenuAgentModePlan" Header="Plan"/>
+                                    </ContextMenu>
+                                </Button.ContextMenu>
+                            </Button>
                             <Button x:Name="BtnToggleLibrary" Grid.Column="3" Content="电池库" Foreground="#A0A0A0" Background="Transparent" BorderThickness="0" FontSize="14" Cursor="Hand" ToolTip="展开/收起电池库" Margin="8,0,0,0"/>
                             
                             <Button x:Name="BtnSend" Grid.Column="5" Content="➤" Foreground="Black" FontSize="18" Margin="0" Width="36" Height="36" Cursor="Hand" VerticalAlignment="Center">

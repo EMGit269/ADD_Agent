@@ -414,7 +414,9 @@ namespace ADDGH
                 sb.AppendLine();
 
             sb.AppendLine("以下图片理解来自视觉预处理模型；执行模型没有直接看到原图。");
-            sb.AppendLine("把“视觉事实”当事实，把“关联画布定位”“执行模型下一步检查点”“给执行模型的任务摘要”“最终截图复核建议”当待核实线索；先核实再修改。");
+            sb.AppendLine(_agentMode == AgentMode.Plan
+                ? "把“视觉事实”当事实，把“关联画布定位”“执行模型下一步检查点”“给执行模型的任务摘要”“最终截图复核建议”当待核实线索；先核实，再输出实施步骤卡片，不要直接修改画布。"
+                : "把“视觉事实”当事实，把“关联画布定位”“执行模型下一步检查点”“给执行模型的任务摘要”“最终截图复核建议”当待核实线索；先核实再修改。");
             sb.AppendLine();
             sb.AppendLine(visionAnalysis?.Trim() ?? "");
             return sb.ToString().Trim();
@@ -423,7 +425,9 @@ namespace ADDGH
         private static string BuildFinalVisualReviewExecutionUserText(string priorDraft, string visualReview)
         {
             var sb = new StringBuilder();
-            sb.AppendLine("以下是最终截图视觉复核结果。你需要结合这份复核，决定是否确认完成、继续修改，或明确说明仍存在的偏差。");
+            sb.AppendLine(_agentMode == AgentMode.Plan
+                ? "以下是最终截图视觉复核结果。你需要结合这份复核补充或修正实施步骤，并明确说明仍存在的偏差。"
+                : "以下是最终截图视觉复核结果。你需要结合这份复核，决定是否确认完成、继续修改，或明确说明仍存在的偏差。");
             if (!string.IsNullOrWhiteSpace(priorDraft))
             {
                 sb.AppendLine();
@@ -434,7 +438,9 @@ namespace ADDGH
             sb.AppendLine("最终截图视觉复核：");
             sb.AppendLine(visualReview?.Trim() ?? "");
             sb.AppendLine();
-            sb.AppendLine("要求：如果复核指出未达标或存在明显偏差，不要直接结束；应继续修正或向用户明确说明当前差距。");
+            sb.AppendLine(_agentMode == AgentMode.Plan
+                ? "要求：如果复核指出未达标或存在明显偏差，不要宣称已完成；应补充或修正实施步骤，并向用户明确说明当前差距。"
+                : "要求：如果复核指出未达标或存在明显偏差，不要直接结束；应继续修正或向用户明确说明当前差距。");
             return sb.ToString().Trim();
         }
 

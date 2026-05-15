@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -10,6 +11,7 @@ using Newtonsoft.Json.Linq;
 using Grasshopper.Kernel;
 using Grasshopper.GUI.Canvas;
 using Grasshopper.GUI.Script;
+using Rhino.Geometry;
 
 namespace ADDGH
 {
@@ -131,6 +133,115 @@ namespace ADDGH
             };
         }
 
+        private static void ResetPublicIdMap(Grasshopper.Kernel.GH_Document doc)
+        {
+            _publicIdBoundDocument = doc;
+            _publicIdByGuid.Clear();
+            _guidByPublicId.Clear();
+            _nextComponentPublicId = 1;
+            _nextGroupPublicId = 1;
+        }
+
+        private static void RefreshPublicIdMap(Grasshopper.Kernel.GH_Document doc)
+        {
+            if (doc == null)
+            {
+                ResetPublicIdMap(null);
+                return;
+            }
+
+            if (!ReferenceEquals(_publicIdBoundDocument, doc))
+                ResetPublicIdMap(doc);
+
+            var liveGuids = new HashSet<Guid>(doc.Objects.Select(o => o.InstanceGuid));
+            foreach (var stale in _publicIdByGuid.Keys.Where(g => !liveGuids.Contains(g)).ToList())
+            {
+                string publicId = _publicIdByGuid[stale];
+                _publicIdByGuid.Remove(stale);
+                _guidByPublicId.Remove(publicId);
+            }
+
+            foreach (var obj in doc.Objects)
+            {
+                if (_publicIdByGuid.ContainsKey(obj.InstanceGuid))
+                    continue;
+
+                bool isGroup = obj is Grasshopper.Kernel.Special.GH_Group;
+                string publicId = isGroup
+                    ? "G" + _nextGroupPublicId.ToString("D2")
+                    : _nextComponentPublicId.ToString("D2");
+                if (isGroup) _nextGroupPublicId++;
+                else _nextComponentPublicId++;
+
+                _publicIdByGuid[obj.InstanceGuid] = publicId;
+                _guidByPublicId[publicId] = obj.InstanceGuid;
+            }
+        }
+
+        private static string GetPublicId(Grasshopper.Kernel.GH_Document doc, Grasshopper.Kernel.IGH_DocumentObject obj)
+        {
+            if (obj == null)
+                return "";
+
+            RefreshPublicIdMap(doc);
+            if (_publicIdByGuid.TryGetValue(obj.InstanceGuid, out string publicId))
+                return publicId;
+            return obj.InstanceGuid.ToString();
+        }
+
+        private static string GetPublicId(Grasshopper.Kernel.IGH_DocumentObject obj)
+        {
+            return GetPublicId(Grasshopper.Instances.ActiveCanvas?.Document, obj);
+        }
+
+        private static string NormalizePublicId(string id)
+        {
+            string value = (id ?? "").Trim();
+            if (value.StartsWith("#", StringComparison.Ordinal))
+                value = value.Substring(1).Trim();
+            return value;
+        }
+
+        private static bool TryResolveGuidFromPublicId(Grasshopper.Kernel.GH_Document doc, string id, out Guid guid)
+        {
+            guid = Guid.Empty;
+            string token = NormalizePublicId(id);
+            if (string.IsNullOrWhiteSpace(token))
+                return false;
+
+            if (Guid.TryParse(token, out guid))
+                return true;
+
+            RefreshPublicIdMap(doc);
+            return _guidByPublicId.TryGetValue(token, out guid);
+        }
+
+        private static Grasshopper.Kernel.IGH_DocumentObject FindDocumentObjectByAnyId(Grasshopper.Kernel.GH_Document doc, string id)
+        {
+            if (doc == null)
+                return null;
+
+            if (!TryResolveGuidFromPublicId(doc, id, out Guid guid))
+                return null;
+
+            return doc.FindObject(guid, true);
+        }
+
+        private static bool ObjectMatchesAnyId(Grasshopper.Kernel.GH_Document doc, Grasshopper.Kernel.IGH_DocumentObject obj, string id)
+        {
+            if (obj == null)
+                return false;
+
+            string token = NormalizePublicId(id);
+            if (string.IsNullOrWhiteSpace(token))
+                return false;
+
+            if (obj.InstanceGuid.ToString().Equals(token, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            return string.Equals(GetPublicId(doc, obj), token, StringComparison.OrdinalIgnoreCase);
+        }
+
         private static string ExecuteGetGhComponents()
         {
             string currentUnitSignature = GetRhinoUnitSignature();
@@ -142,6 +253,7 @@ namespace ADDGH
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
             {
                 var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                RefreshPublicIdMap(doc);
                 if (doc == null) { result = "Error: 没有打开的画布。"; return; }
 
                 var graph = new JObject();
@@ -158,10 +270,14 @@ namespace ADDGH
                     if (obj is Grasshopper.Kernel.Special.GH_Group group)
                     {
                         var groupJson = new JObject();
-                        groupJson["id"] = group.InstanceGuid.ToString();
+                        groupJson["id"] = GetPublicId(doc, group);
+                        groupJson["guid"] = group.InstanceGuid.ToString();
                         groupJson["name"] = group.NickName;
                         var members = new JArray();
-                        foreach (var memberId in group.Objects()) members.Add(memberId.ToString());
+                        foreach (var member in group.Objects())
+                        {
+                            members.Add(member != null ? GetPublicId(doc, member) : "");
+                        }
                         groupJson["members"] = members;
                         groups.Add(groupJson);
                         continue;
@@ -170,7 +286,8 @@ namespace ADDGH
                     var compJson = new JObject();
                     compJson["name"] = obj.Name;
                     compJson["nickname"] = obj.NickName;
-                    compJson["id"] = obj.InstanceGuid.ToString();
+                    compJson["id"] = GetPublicId(doc, obj);
+                    compJson["guid"] = obj.InstanceGuid.ToString();
                     compJson["pivot"] = new JObject { { "x", Math.Round(obj.Attributes.Pivot.X) }, { "y", Math.Round(obj.Attributes.Pivot.Y) } };
                     AppendSliderStateJson(obj, compJson);
 
@@ -180,11 +297,11 @@ namespace ADDGH
                         var msgs = new JArray();
                         foreach (string m in ao.RuntimeMessages(GH_RuntimeMessageLevel.Error)) {
                             msgs.Add("Error: " + m);
-                            globalErrors.Add(new JObject { { "id", obj.InstanceGuid.ToString() }, { "name", obj.Name }, { "level", "Error" }, { "message", m } });
+                            globalErrors.Add(new JObject { { "id", GetPublicId(doc, obj) }, { "guid", obj.InstanceGuid.ToString() }, { "name", obj.Name }, { "level", "Error" }, { "message", m } });
                         }
                         foreach (string m in ao.RuntimeMessages(GH_RuntimeMessageLevel.Warning)) {
                             msgs.Add("Warning: " + m);
-                            globalErrors.Add(new JObject { { "id", obj.InstanceGuid.ToString() }, { "name", obj.Name }, { "level", "Warning" }, { "message", m } });
+                            globalErrors.Add(new JObject { { "id", GetPublicId(doc, obj) }, { "guid", obj.InstanceGuid.ToString() }, { "name", obj.Name }, { "level", "Warning" }, { "message", m } });
                         }
                         compJson["runtime_messages"] = msgs;
                     }
@@ -213,13 +330,14 @@ namespace ADDGH
                             if (param.DataMapping == Grasshopper.Kernel.GH_DataMapping.Graft) paramJson["is_grafted"] = true;
                             if (param.Reverse) paramJson["is_reversed"] = true;
                             if (param.Simplify) paramJson["is_simplified"] = true;
+                            AppendParamDataPreviewJson(paramJson, param);
 
                             var sources = new JArray();
                             foreach (var source in param.Sources)
                             {
                                 var srcObj = source.Attributes.GetTopLevel.DocObject;
                                 int srcIdx = (srcObj is Grasshopper.Kernel.IGH_Component srcC) ? srcC.Params.Output.IndexOf(source) : 0;
-                                sources.Add(new JObject { { "id", srcObj.InstanceGuid.ToString() }, { "output_index", srcIdx }, { "name", srcObj.Name } });
+                                sources.Add(new JObject { { "id", GetPublicId(doc, srcObj) }, { "guid", srcObj.InstanceGuid.ToString() }, { "output_index", srcIdx }, { "name", srcObj.Name } });
                             }
                             paramJson["sources"] = sources;
                             if (param.SourceCount == 0 && param.VolatileDataCount > 0) paramJson["has_internal_data"] = true;
@@ -239,6 +357,7 @@ namespace ADDGH
                             if (param.DataMapping == Grasshopper.Kernel.GH_DataMapping.Graft) portJson["is_grafted"] = true;
                             if (param.Reverse) portJson["is_reversed"] = true;
                             if (param.Simplify) portJson["is_simplified"] = true;
+                            AppendParamDataPreviewJson(portJson, param);
                             outputs.Add(portJson);
                         }
                         compJson["outputs"] = outputs;
@@ -253,13 +372,14 @@ namespace ADDGH
                         if (param.DataMapping == Grasshopper.Kernel.GH_DataMapping.Graft) compJson["is_grafted"] = true;
                         if (param.Reverse) compJson["is_reversed"] = true;
                         if (param.Simplify) compJson["is_simplified"] = true;
+                        AppendParamDataPreviewJson(compJson, param);
 
                         var sources = new JArray();
                         foreach (var source in param.Sources)
                         {
                             var srcObj = source.Attributes.GetTopLevel.DocObject;
                             int srcIdx = (srcObj is Grasshopper.Kernel.IGH_Component srcC) ? srcC.Params.Output.IndexOf(source) : 0;
-                            sources.Add(new JObject { { "id", srcObj.InstanceGuid.ToString() }, { "output_index", srcIdx }, { "name", srcObj.Name } });
+                            sources.Add(new JObject { { "id", GetPublicId(doc, srcObj) }, { "guid", srcObj.InstanceGuid.ToString() }, { "output_index", srcIdx }, { "name", srcObj.Name } });
                         }
                         compJson["sources"] = sources;
                     }
@@ -290,7 +410,8 @@ namespace ADDGH
             var j = new JObject();
             j["name"]     = obj.Name;
             j["nickname"] = obj.NickName;
-            j["id"]       = obj.InstanceGuid.ToString();
+            j["id"]       = GetPublicId(obj);
+            j["guid"]     = obj.InstanceGuid.ToString();
             j["pivot"]    = new JObject { { "x", Math.Round(obj.Attributes.Pivot.X) }, { "y", Math.Round(obj.Attributes.Pivot.Y) } };
             if (IsGraphMapperObject(obj)) j["graph_mapper_type"] = CurrentGraphMapperTypeName(obj) ?? "";
             if (obj is IGH_ActiveObject ao && ao.RuntimeMessageLevel != GH_RuntimeMessageLevel.Blank)
@@ -313,10 +434,11 @@ namespace ADDGH
                     if (param.DataMapping == Grasshopper.Kernel.GH_DataMapping.Graft)   pj["is_grafted"]  = true;
                     if (param.Reverse)  pj["is_reversed"]  = true;
                     if (param.Simplify) pj["is_simplified"] = true;
+                    AppendParamDataPreviewJson(pj, param);
                     var srcs = new JArray();
                     foreach (var src in param.Sources) {
                         var so = src.Attributes.GetTopLevel.DocObject;
-                        srcs.Add(new JObject { { "id", so.InstanceGuid.ToString() }, { "output_index", (so is Grasshopper.Kernel.IGH_Component sc) ? sc.Params.Output.IndexOf(src) : 0 }, { "name", so.Name } });
+                        srcs.Add(new JObject { { "id", GetPublicId(so) }, { "guid", so.InstanceGuid.ToString() }, { "output_index", (so is Grasshopper.Kernel.IGH_Component sc) ? sc.Params.Output.IndexOf(src) : 0 }, { "name", so.Name } });
                     }
                     pj["sources"] = srcs;
                     if (param.SourceCount == 0 && param.VolatileDataCount > 0) pj["has_internal_data"] = true;
@@ -333,6 +455,7 @@ namespace ADDGH
                     if (param.DataMapping == Grasshopper.Kernel.GH_DataMapping.Graft)   pj["is_grafted"]  = true;
                     if (param.Reverse)  pj["is_reversed"]  = true;
                     if (param.Simplify) pj["is_simplified"] = true;
+                    AppendParamDataPreviewJson(pj, param);
                     outputs.Add(pj);
                 }
                 j["outputs"] = outputs;
@@ -345,16 +468,448 @@ namespace ADDGH
                 if (pm.DataMapping == Grasshopper.Kernel.GH_DataMapping.Graft)   j["is_grafted"]  = true;
                 if (pm.Reverse)  j["is_reversed"]  = true;
                 if (pm.Simplify) j["is_simplified"] = true;
+                AppendParamDataPreviewJson(j, pm);
                 var srcs = new JArray();
                 foreach (var src in pm.Sources) {
                     var so = src.Attributes.GetTopLevel.DocObject;
-                    srcs.Add(new JObject { { "id", so.InstanceGuid.ToString() }, { "output_index", (so is Grasshopper.Kernel.IGH_Component sc) ? sc.Params.Output.IndexOf(src) : 0 }, { "name", so.Name } });
+                    srcs.Add(new JObject { { "id", GetPublicId(so) }, { "guid", so.InstanceGuid.ToString() }, { "output_index", (so is Grasshopper.Kernel.IGH_Component sc) ? sc.Params.Output.IndexOf(src) : 0 }, { "name", so.Name } });
                 }
                 j["sources"] = srcs;
             }
             if (includeScriptBodies)
                 AppendScriptBodiesToComponentJson(j, obj);
             return j;
+        }
+
+        private const int ParamDataPreviewBranchLimit = 4;
+        private const int ParamDataPreviewItemsPerBranchLimit = 4;
+        private const int ParamDataPreviewSequenceLimit = 6;
+        private const int ParamDataPreviewTextLimit = 160;
+        private const int ParamDataPreviewDigits = 6;
+
+        private static void AppendParamDataPreviewJson(JObject target, Grasshopper.Kernel.IGH_Param param)
+        {
+            if (target == null || param == null || param.VolatileDataCount <= 0)
+                return;
+
+            try
+            {
+                var preview = BuildParamDataPreviewJson(param);
+                if (preview != null)
+                    target["data_preview"] = preview;
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Debug("AppendParamDataPreviewJson: " + ex.Message);
+            }
+        }
+
+        private static JObject BuildParamDataPreviewJson(Grasshopper.Kernel.IGH_Param param)
+        {
+            var tree = param.VolatileData;
+            if (tree == null || tree.DataCount <= 0)
+                return null;
+
+            var preview = new JObject
+            {
+                ["branch_count"] = tree.PathCount,
+                ["item_count"] = tree.DataCount,
+                ["branch_limit"] = ParamDataPreviewBranchLimit,
+                ["items_per_branch_limit"] = ParamDataPreviewItemsPerBranchLimit
+            };
+
+            var branches = new JArray();
+            int branchCount = Math.Min(tree.PathCount, ParamDataPreviewBranchLimit);
+            for (int branchIndex = 0; branchIndex < branchCount; branchIndex++)
+            {
+                var path = tree.get_Path(branchIndex);
+                IList branch = tree.get_Branch(branchIndex);
+                int itemCount = branch?.Count ?? 0;
+                var branchJson = new JObject
+                {
+                    ["path"] = path?.ToString() ?? "{?}",
+                    ["item_count"] = itemCount
+                };
+
+                var items = new JArray();
+                int itemLimit = Math.Min(itemCount, ParamDataPreviewItemsPerBranchLimit);
+                for (int itemIndex = 0; itemIndex < itemLimit; itemIndex++)
+                    items.Add(SerializeGrasshopperDataItem(branch[itemIndex]));
+
+                branchJson["items"] = items;
+                if (itemCount > ParamDataPreviewItemsPerBranchLimit)
+                    branchJson["truncated"] = true;
+                branches.Add(branchJson);
+            }
+
+            preview["branches"] = branches;
+            if (tree.PathCount > ParamDataPreviewBranchLimit)
+                preview["truncated"] = true;
+            return preview;
+        }
+
+        private static JToken SerializeGrasshopperDataItem(object item)
+        {
+            if (item == null)
+                return JValue.CreateNull();
+
+            if (item is Grasshopper.Kernel.Types.IGH_Goo goo)
+                return SerializeGrasshopperGoo(goo);
+
+            return SerializeRuntimeValue(item, item.GetType().Name);
+        }
+
+        private static JToken SerializeGrasshopperGoo(Grasshopper.Kernel.Types.IGH_Goo goo)
+        {
+            if (goo == null)
+                return JValue.CreateNull();
+
+            try
+            {
+                object scriptValue = goo.ScriptVariable();
+                if (scriptValue != null && !ReferenceEquals(scriptValue, goo))
+                {
+                    var token = SerializeRuntimeValue(scriptValue, FirstNonEmpty(goo.TypeName, scriptValue.GetType().Name));
+                    if (token != null)
+                        return token;
+                }
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Debug("SerializeGrasshopperGoo ScriptVariable: " + ex.Message);
+            }
+
+            return new JObject
+            {
+                ["type"] = FirstNonEmpty(goo.TypeName, goo.GetType().Name),
+                ["text"] = TruncatePreviewText(goo.ToString(), ParamDataPreviewTextLimit)
+            };
+        }
+
+        private static JToken SerializeRuntimeValue(object value, string typeName = null)
+        {
+            if (value == null)
+                return JValue.CreateNull();
+
+            if (value is string s)
+                return new JValue(TruncatePreviewText(s, ParamDataPreviewTextLimit));
+            if (value is bool b)
+                return new JValue(b);
+            if (value is int i32)
+                return new JValue(i32);
+            if (value is long i64)
+                return new JValue(i64);
+            if (value is float f32)
+                return new JValue(RoundNumber(f32));
+            if (value is double f64)
+            {
+                if (double.IsNaN(f64) || double.IsInfinity(f64))
+                    return new JObject { ["type"] = FirstNonEmpty(typeName, "Number"), ["text"] = f64.ToString(System.Globalization.CultureInfo.InvariantCulture) };
+                return new JValue(RoundNumber(f64));
+            }
+            if (value is decimal dec)
+                return new JValue(Math.Round(dec, ParamDataPreviewDigits));
+            if (value is Guid guid)
+                return new JValue(guid.ToString());
+            if (value is Enum enumValue)
+                return new JValue(enumValue.ToString());
+
+            if (value is Point3d point3d)
+                return BuildPoint3dJson(typeName, point3d);
+            if (value is Point3f point3f)
+                return BuildPoint3dJson(typeName, new Point3d(point3f));
+            if (value is Point2d point2d)
+                return new JObject
+                {
+                    ["type"] = FirstNonEmpty(typeName, nameof(Point2d)),
+                    ["x"] = RoundNumber(point2d.X),
+                    ["y"] = RoundNumber(point2d.Y)
+                };
+            if (value is Vector3d vector3d)
+                return BuildVector3dJson(typeName, vector3d);
+            if (value is Vector3f vector3f)
+                return BuildVector3dJson(typeName, new Vector3d(vector3f));
+            if (value is Vector2d vector2d)
+                return new JObject
+                {
+                    ["type"] = FirstNonEmpty(typeName, nameof(Vector2d)),
+                    ["x"] = RoundNumber(vector2d.X),
+                    ["y"] = RoundNumber(vector2d.Y),
+                    ["length"] = RoundNumber(vector2d.Length)
+                };
+            if (value is Plane plane)
+                return new JObject
+                {
+                    ["type"] = FirstNonEmpty(typeName, nameof(Plane)),
+                    ["origin"] = BuildPoint3dJson("Point3d", plane.Origin),
+                    ["x_axis"] = BuildVector3dJson("Vector3d", plane.XAxis),
+                    ["y_axis"] = BuildVector3dJson("Vector3d", plane.YAxis),
+                    ["z_axis"] = BuildVector3dJson("Vector3d", plane.ZAxis)
+                };
+            if (value is Interval interval)
+                return BuildIntervalJson(typeName, interval);
+            if (value is Line line)
+                return new JObject
+                {
+                    ["type"] = FirstNonEmpty(typeName, nameof(Line)),
+                    ["from"] = BuildPoint3dJson("Point3d", line.From),
+                    ["to"] = BuildPoint3dJson("Point3d", line.To),
+                    ["length"] = RoundNumber(line.Length)
+                };
+            if (value is Circle circle)
+                return new JObject
+                {
+                    ["type"] = FirstNonEmpty(typeName, nameof(Circle)),
+                    ["center"] = BuildPoint3dJson("Point3d", circle.Center),
+                    ["radius"] = RoundNumber(circle.Radius),
+                    ["circumference"] = RoundNumber(circle.Circumference),
+                    ["plane"] = SerializeRuntimeValue(circle.Plane, nameof(Plane))
+                };
+            if (value is Arc arc)
+                return new JObject
+                {
+                    ["type"] = FirstNonEmpty(typeName, nameof(Arc)),
+                    ["start"] = BuildPoint3dJson("Point3d", arc.StartPoint),
+                    ["end"] = BuildPoint3dJson("Point3d", arc.EndPoint),
+                    ["mid"] = BuildPoint3dJson("Point3d", arc.MidPoint),
+                    ["radius"] = RoundNumber(arc.Radius),
+                    ["length"] = RoundNumber(arc.Length)
+                };
+            if (value is Rectangle3d rectangle)
+                return new JObject
+                {
+                    ["type"] = FirstNonEmpty(typeName, nameof(Rectangle3d)),
+                    ["plane"] = SerializeRuntimeValue(rectangle.Plane, nameof(Plane)),
+                    ["x"] = BuildIntervalJson("Interval", rectangle.X),
+                    ["y"] = BuildIntervalJson("Interval", rectangle.Y),
+                    ["width"] = RoundNumber(rectangle.Width),
+                    ["height"] = RoundNumber(rectangle.Height)
+                };
+            if (value is Box box)
+                return new JObject
+                {
+                    ["type"] = FirstNonEmpty(typeName, nameof(Box)),
+                    ["plane"] = SerializeRuntimeValue(box.Plane, nameof(Plane)),
+                    ["x"] = BuildIntervalJson("Interval", box.X),
+                    ["y"] = BuildIntervalJson("Interval", box.Y),
+                    ["z"] = BuildIntervalJson("Interval", box.Z),
+                    ["bounding_box"] = BuildBoundingBoxJson(box.BoundingBox)
+                };
+            if (value is Curve curve)
+                return BuildCurveJson(typeName, curve);
+            if (value is Surface surface)
+                return BuildSurfaceJson(typeName, surface);
+            if (value is Brep brep)
+                return BuildBrepJson(typeName, brep);
+            if (value is Mesh mesh)
+                return BuildMeshJson(typeName, mesh);
+            if (value is GeometryBase geometry)
+                return new JObject
+                {
+                    ["type"] = FirstNonEmpty(typeName, geometry.GetType().Name),
+                    ["geometry_type"] = geometry.GetType().Name,
+                    ["bounding_box"] = BuildBoundingBoxJson(geometry.GetBoundingBox(true))
+                };
+            if (value is IEnumerable sequence)
+                return BuildSequencePreviewJson(typeName, sequence);
+
+            return new JObject
+            {
+                ["type"] = FirstNonEmpty(typeName, value.GetType().Name),
+                ["text"] = TruncatePreviewText(value.ToString(), ParamDataPreviewTextLimit)
+            };
+        }
+
+        private static JObject BuildPoint3dJson(string typeName, Point3d point)
+        {
+            return new JObject
+            {
+                ["type"] = FirstNonEmpty(typeName, nameof(Point3d)),
+                ["x"] = RoundNumber(point.X),
+                ["y"] = RoundNumber(point.Y),
+                ["z"] = RoundNumber(point.Z)
+            };
+        }
+
+        private static JObject BuildVector3dJson(string typeName, Vector3d vector)
+        {
+            return new JObject
+            {
+                ["type"] = FirstNonEmpty(typeName, nameof(Vector3d)),
+                ["x"] = RoundNumber(vector.X),
+                ["y"] = RoundNumber(vector.Y),
+                ["z"] = RoundNumber(vector.Z),
+                ["length"] = RoundNumber(vector.Length)
+            };
+        }
+
+        private static JObject BuildIntervalJson(string typeName, Interval interval)
+        {
+            return new JObject
+            {
+                ["type"] = FirstNonEmpty(typeName, nameof(Interval)),
+                ["t0"] = RoundNumber(interval.T0),
+                ["t1"] = RoundNumber(interval.T1),
+                ["length"] = RoundNumber(interval.Length)
+            };
+        }
+
+        private static JObject BuildCurveJson(string typeName, Curve curve)
+        {
+            var json = new JObject
+            {
+                ["type"] = FirstNonEmpty(typeName, curve.GetType().Name),
+                ["curve_type"] = curve.GetType().Name,
+                ["domain"] = BuildIntervalJson("Interval", curve.Domain),
+                ["is_closed"] = curve.IsClosed,
+                ["point_at_start"] = BuildPoint3dJson("Point3d", curve.PointAtStart),
+                ["point_at_end"] = BuildPoint3dJson("Point3d", curve.PointAtEnd),
+                ["bounding_box"] = BuildBoundingBoxJson(curve.GetBoundingBox(true))
+            };
+
+            try { json["length"] = RoundNumber(curve.GetLength()); } catch { }
+            try { json["is_planar"] = curve.IsPlanar(); } catch { }
+            return json;
+        }
+
+        private static JObject BuildSurfaceJson(string typeName, Surface surface)
+        {
+            var u = surface.Domain(0);
+            var v = surface.Domain(1);
+            double um = (u.T0 + u.T1) * 0.5;
+            double vm = (v.T0 + v.T1) * 0.5;
+
+            var json = new JObject
+            {
+                ["type"] = FirstNonEmpty(typeName, surface.GetType().Name),
+                ["surface_type"] = surface.GetType().Name,
+                ["u_domain"] = BuildIntervalJson("Interval", u),
+                ["v_domain"] = BuildIntervalJson("Interval", v),
+                ["is_closed_u"] = surface.IsClosed(0),
+                ["is_closed_v"] = surface.IsClosed(1),
+                ["sample_uv"] = new JObject
+                {
+                    ["u"] = RoundNumber(um),
+                    ["v"] = RoundNumber(vm)
+                },
+                ["point_at_mid"] = BuildPoint3dJson("Point3d", surface.PointAt(um, vm)),
+                ["bounding_box"] = BuildBoundingBoxJson(surface.GetBoundingBox(true))
+            };
+
+            try { json["normal_at_mid"] = BuildVector3dJson("Vector3d", surface.NormalAt(um, vm)); } catch { }
+            try
+            {
+                json["u_iso_length_at_v_start"] = TryGetSurfaceIsoCurveLength(surface, 0, v.T0);
+                json["u_iso_length_at_v_mid"] = TryGetSurfaceIsoCurveLength(surface, 0, vm);
+                json["u_iso_length_at_v_end"] = TryGetSurfaceIsoCurveLength(surface, 0, v.T1);
+                json["v_iso_length_at_u_start"] = TryGetSurfaceIsoCurveLength(surface, 1, u.T0);
+                json["v_iso_length_at_u_mid"] = TryGetSurfaceIsoCurveLength(surface, 1, um);
+                json["v_iso_length_at_u_end"] = TryGetSurfaceIsoCurveLength(surface, 1, u.T1);
+            }
+            catch { }
+            return json;
+        }
+
+        private static JToken TryGetSurfaceIsoCurveLength(Surface surface, int direction, double parameter)
+        {
+            if (surface == null)
+                return JValue.CreateNull();
+
+            try
+            {
+                Curve iso = surface.IsoCurve(direction, parameter);
+                if (iso == null)
+                    return JValue.CreateNull();
+
+                using (iso)
+                {
+                    return new JValue(RoundNumber(iso.GetLength()));
+                }
+            }
+            catch
+            {
+                return JValue.CreateNull();
+            }
+        }
+
+        private static JObject BuildBrepJson(string typeName, Brep brep)
+        {
+            var json = new JObject
+            {
+                ["type"] = FirstNonEmpty(typeName, brep.GetType().Name),
+                ["brep_type"] = brep.GetType().Name,
+                ["face_count"] = brep.Faces.Count,
+                ["edge_count"] = brep.Edges.Count,
+                ["vertex_count"] = brep.Vertices.Count,
+                ["bounding_box"] = BuildBoundingBoxJson(brep.GetBoundingBox(true))
+            };
+
+            try { json["is_solid"] = brep.IsSolid; } catch { }
+            return json;
+        }
+
+        private static JObject BuildMeshJson(string typeName, Mesh mesh)
+        {
+            return new JObject
+            {
+                ["type"] = FirstNonEmpty(typeName, mesh.GetType().Name),
+                ["mesh_type"] = mesh.GetType().Name,
+                ["vertex_count"] = mesh.Vertices.Count,
+                ["face_count"] = mesh.Faces.Count,
+                ["bounding_box"] = BuildBoundingBoxJson(mesh.GetBoundingBox(true))
+            };
+        }
+
+        private static JObject BuildSequencePreviewJson(string typeName, IEnumerable sequence)
+        {
+            var items = new JArray();
+            int count = 0;
+            bool truncated = false;
+            foreach (object item in sequence)
+            {
+                if (count >= ParamDataPreviewSequenceLimit)
+                {
+                    truncated = true;
+                    break;
+                }
+
+                items.Add(SerializeRuntimeValue(item, item?.GetType().Name));
+                count++;
+            }
+
+            var json = new JObject
+            {
+                ["type"] = FirstNonEmpty(typeName, "Sequence"),
+                ["items"] = items
+            };
+            if (truncated)
+                json["truncated"] = true;
+            return json;
+        }
+
+        private static JObject BuildBoundingBoxJson(BoundingBox bbox)
+        {
+            if (!bbox.IsValid)
+                return new JObject { ["valid"] = false };
+
+            return new JObject
+            {
+                ["valid"] = true,
+                ["min"] = BuildPoint3dJson("Point3d", bbox.Min),
+                ["max"] = BuildPoint3dJson("Point3d", bbox.Max)
+            };
+        }
+
+        private static double RoundNumber(double value)
+        {
+            return Math.Round(value, ParamDataPreviewDigits);
+        }
+
+        private static string TruncatePreviewText(string text, int maxChars)
+        {
+            if (string.IsNullOrEmpty(text) || maxChars < 1 || text.Length <= maxChars)
+                return text ?? "";
+            return text.Substring(0, maxChars) + "...";
         }
 
         // ── 摘要：仅 id/name/pivot + 首条报错，不含端口 ──────────────────────
@@ -444,7 +999,8 @@ namespace ADDGH
             GetComponentIssueCounts(obj, out int errorCount, out int warningCount, out string firstIssue);
             var jo = new JObject
             {
-                ["id"] = obj.InstanceGuid.ToString(),
+                ["id"] = GetPublicId(obj),
+                ["guid"] = obj.InstanceGuid.ToString(),
                 ["name"] = obj.Name,
                 ["nickname"] = obj.NickName,
                 ["pivot"] = new JObject { { "x", Math.Round(obj.Attributes.Pivot.X) }, { "y", Math.Round(obj.Attributes.Pivot.Y) } },
@@ -654,7 +1210,8 @@ namespace ADDGH
                 {
                     if (obj is Grasshopper.Kernel.Special.GH_Group) continue;
                     var j = new JObject {
-                        ["id"]    = obj.InstanceGuid.ToString(),
+                        ["id"]    = GetPublicId(doc, obj),
+                        ["guid"]  = obj.InstanceGuid.ToString(),
                         ["name"]  = obj.Name,
                         ["pivot"] = new JObject { { "x", Math.Round(obj.Attributes.Pivot.X) }, { "y", Math.Round(obj.Attributes.Pivot.Y) } }
                     };
@@ -670,8 +1227,11 @@ namespace ADDGH
                 var groups = new JArray();
                 foreach (var g in doc.Objects.OfType<Grasshopper.Kernel.Special.GH_Group>()) {
                     var members = new JArray();
-                    foreach (var mid in g.Objects()) members.Add(mid.ToString());
-                    groups.Add(new JObject { ["id"] = g.InstanceGuid.ToString(), ["name"] = g.NickName, ["members"] = members });
+                    foreach (var member in g.Objects())
+                    {
+                        members.Add(member != null ? GetPublicId(doc, member) : "");
+                    }
+                    groups.Add(new JObject { ["id"] = GetPublicId(doc, g), ["guid"] = g.InstanceGuid.ToString(), ["name"] = g.NickName, ["members"] = members });
                 }
                 result = new JObject
                 {
@@ -914,7 +1474,8 @@ namespace ADDGH
                         var compJson = new JObject();
                         compJson["name"] = obj.Name;
                         compJson["nickname"] = obj.NickName;
-                        compJson["id"] = obj.InstanceGuid.ToString();
+                        compJson["id"] = GetPublicId(doc, obj);
+                        compJson["guid"] = obj.InstanceGuid.ToString();
                         compJson["pivot"] = new JObject { { "x", Math.Round(obj.Attributes.Pivot.X) }, { "y", Math.Round(obj.Attributes.Pivot.Y) } };
                         AppendSliderStateJson(obj, compJson);
 
@@ -930,7 +1491,7 @@ namespace ADDGH
                                 var sources = new JArray();
                                 foreach (var source in param.Sources)
                                 {
-                                    sources.Add(source.Attributes.GetTopLevel.DocObject.InstanceGuid.ToString());
+                                    sources.Add(GetPublicId(doc, source.Attributes.GetTopLevel.DocObject));
                                 }
                                 paramJson["sources"] = sources;
                                 inputs.Add(paramJson);
@@ -952,7 +1513,7 @@ namespace ADDGH
                             var sources = new JArray();
                             foreach (var source in param.Sources)
                             {
-                                sources.Add(source.Attributes.GetTopLevel.DocObject.InstanceGuid.ToString());
+                                sources.Add(GetPublicId(doc, source.Attributes.GetTopLevel.DocObject));
                             }
                             compJson["sources"] = sources;
                         }
@@ -1140,7 +1701,7 @@ namespace ADDGH
                 try { doc.ScheduleSolution(150); }
                 catch (Exception ex) { AddGhLog.Warn("ExecuteAddGhComponent Schedule failed: " + ex.Message); }
                 string displayName = !string.IsNullOrWhiteSpace(name) ? name : (obj.Name ?? "组件");
-                result = "已添加 " + displayName + " (ID: " + obj.InstanceGuid + ").";
+                result = "已添加 " + displayName + " (ID: " + GetPublicId(doc, obj) + ").";
                 if (!string.IsNullOrWhiteSpace(graphMapperDetail)) result += " " + graphMapperDetail + "。";
             }));
             return result;
@@ -2627,7 +3188,8 @@ namespace ADDGH
                         {
                             ["status"] = "ok",
                             ["mode"] = "read_body",
-                            ["id"] = obj.InstanceGuid.ToString(),
+                            ["id"] = GetPublicId(doc, obj),
+                            ["guid"] = obj.InstanceGuid.ToString(),
                             ["body"] = currentBody,
                             ["source"] = detail,
                             ["warning"] = "This is only the editable RunScript body. Do not add using/class/signature when writing it back."
@@ -2644,7 +3206,8 @@ namespace ADDGH
                             {
                                 ["status"] = "ok",
                                 ["mode"] = "read_body",
-                                ["id"] = obj.InstanceGuid.ToString(),
+                                ["id"] = GetPublicId(doc, obj),
+                                ["guid"] = obj.InstanceGuid.ToString(),
                                 ["body"] = jo["primary_for_edit"]?.ToString() ?? "",
                                 ["source"] = jo["primary_key"]?.ToString() ?? "reflection_fallback",
                                 ["runtime_type_hint"] = jo["runtime_type_hint"]?.ToString() ?? "",
@@ -2687,7 +3250,8 @@ namespace ADDGH
                 {
                     ["status"] = "ok",
                     ["mode"] = "set_body",
-                    ["id"] = obj.InstanceGuid.ToString(),
+                    ["id"] = GetPublicId(doc, obj),
+                    ["guid"] = obj.InstanceGuid.ToString(),
                     ["template_preserved"] = true,
                     ["warnings"] = new JArray(warnings)
                 };
@@ -3373,7 +3937,8 @@ namespace ADDGH
                             ["framing"] = framingMode,
                             ["bbox_source"] = bboxSource,
                             ["gh_preview_count"] = previewCount,
-                            ["rhino_object_count"] = rhinoObjectCount
+                            ["rhino_object_count"] = rhinoObjectCount,
+                            ["reasoning_warning"] = "This tool returns screenshot transport metadata only. Do not use bbox/path/count values for geometric or visual reasoning unless the screenshot is reviewed by a vision model."
                         };
                         if (needsZoom && targetBox.IsValid)
                         {
@@ -3985,7 +4550,8 @@ namespace ADDGH
                 var payload = new JObject
                 {
                     ["status"] = "ok",
-                    ["preview_component_id"] = previewObj.InstanceGuid.ToString(),
+                    ["preview_component_id"] = GetPublicId(doc, previewObj),
+                    ["preview_component_guid"] = previewObj.InstanceGuid.ToString(),
                     ["preview_label"] = previewObj.NickName,
                     ["source_id"] = sourceId,
                     ["source_output_index"] = sourceOutputIndex,
@@ -4090,7 +4656,7 @@ namespace ADDGH
                     }
                     doc.AddObject(group, false);
                     group.ExpireSolution(true);
-                    result = "已创建组 '" + group.NickName + "' (ID: " + group.InstanceGuid + ")。";
+                    result = "已创建组 '" + group.NickName + "' (ID: " + GetPublicId(doc, group) + ")。";
                 } else if (action == "ungroup") {
                     if (Guid.TryParse(groupId, out Guid gId)) {
                         var obj = doc.FindObject(gId, true);

@@ -30,6 +30,30 @@ namespace ADDGH
             public string Error { get; set; }
         }
 
+        private static AttachmentItem CloneAttachmentItem(AttachmentItem source)
+        {
+            if (source == null) return null;
+            return new AttachmentItem
+            {
+                Path = source.Path,
+                FileName = source.FileName,
+                MimeType = source.MimeType,
+                Kind = source.Kind,
+                Base64 = source.Base64,
+                ExtractedText = source.ExtractedText,
+                SizeBytes = source.SizeBytes,
+                Error = source.Error
+            };
+        }
+
+        private static List<AttachmentItem> CloneAttachments(IEnumerable<AttachmentItem> source)
+        {
+            return (source ?? Enumerable.Empty<AttachmentItem>())
+                .Select(CloneAttachmentItem)
+                .Where(a => a != null)
+                .ToList();
+        }
+
         private class ChatHistoryConversation
         {
             public string Id { get; set; }

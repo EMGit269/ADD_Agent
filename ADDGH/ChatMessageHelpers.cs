@@ -256,7 +256,7 @@ namespace ADDGH
             return n;
         }
 
-        public static JObject ParseToolArgumentsForExecution(string argsJson, out string cardSummary, out string cardSummaryDetail)
+        public static JObject ParseToolArgumentsForExecution(string funcName, string argsJson, out string cardSummary, out string cardSummaryDetail)
         {
             cardSummary = null;
             cardSummaryDetail = null;
@@ -269,6 +269,20 @@ namespace ADDGH
             {
                 AddGhLog.Warn("ParseToolArgumentsForExecution invalid JSON: " + ex.Message);
                 o = new JObject();
+            }
+
+            if (string.Equals(funcName, "show_plan_steps", StringComparison.OrdinalIgnoreCase))
+            {
+                JToken op = o["operation_summary"];
+                if (op != null && op.Type != JTokenType.Null) cardSummary = op.ToString().Trim();
+                if (string.IsNullOrWhiteSpace(cardSummary)) cardSummary = "生成实施步骤卡片";
+
+                JToken opd = o["operation_summary_detail"];
+                if (opd != null && opd.Type != JTokenType.Null) cardSummaryDetail = opd.ToString().Trim();
+
+                o.Remove("operation_summary");
+                o.Remove("operation_summary_detail");
+                return o;
             }
 
             JToken st = o["summary"];

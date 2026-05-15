@@ -39,6 +39,25 @@ namespace ADDGH
                 : argsObj[key].ToObject<bool>();
         }
 
+        private static string ResolveToolObjectId(string id)
+        {
+            var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+            if (doc == null || string.IsNullOrWhiteSpace(id))
+                return id;
+
+            return TryResolveGuidFromPublicId(doc, id, out Guid guid)
+                ? guid.ToString()
+                : id;
+        }
+
+        private static List<string> ResolveToolObjectIds(IEnumerable<string> ids)
+        {
+            if (ids == null)
+                return null;
+
+            return ids.Select(ResolveToolObjectId).ToList();
+        }
+
         private static ToolDispatchResult ExecuteToolCall(
             string funcName,
             JObject argsObj,
@@ -66,6 +85,12 @@ namespace ADDGH
                 }
                 else if (funcName == "capture_rhino_viewport")
                 {
+                    if (!CanUseViewportCaptureTool())
+                    {
+                        result.ToolResult = "Error: capture_rhino_viewport is disabled for this turn because there is no active multimodal image context. Do not use screenshot metadata for geometric or visual reasoning; inspect concrete GH data instead, or expose debug outputs with Panel/get_gh_components.";
+                        return result;
+                    }
+
                     result.ToolResult = ExecuteCaptureRhinoViewport(
                         argsObj["framing"]?.ToString(),
                         ReadNullableInt(argsObj, "width"),
@@ -75,7 +100,7 @@ namespace ADDGH
                 else if (funcName == "gh_native_script_editor")
                 {
                     result.ToolResult = ExecuteGhNativeScriptEditor(
-                        argsObj["id"]?.ToString(),
+                        ResolveToolObjectId(argsObj["id"]?.ToString()),
                         argsObj["mode"]?.ToString(),
                         argsObj["code"]?.ToString(),
                         argsObj["language"]?.ToString());
@@ -106,21 +131,21 @@ namespace ADDGH
                 else if (funcName == "connect_gh_components")
                 {
                     result.ToolResult = ExecuteConnectGhComponents(
-                        argsObj["from_id"]?.ToString(),
+                        ResolveToolObjectId(argsObj["from_id"]?.ToString()),
                         argsObj["from_index"]?.ToObject<int>() ?? 0,
-                        argsObj["to_id"]?.ToString(),
+                        ResolveToolObjectId(argsObj["to_id"]?.ToString()),
                         argsObj["to_index"]?.ToObject<int>() ?? 0);
                     result.AddConn++;
                 }
                 else if (funcName == "remove_gh_component")
                 {
-                    result.ToolResult = ExecuteRemoveGhComponent(argsObj["id"]?.ToString());
+                    result.ToolResult = ExecuteRemoveGhComponent(ResolveToolObjectId(argsObj["id"]?.ToString()));
                     result.DelComp++;
                 }
                 else if (funcName == "set_gh_component_value")
                 {
                     result.ToolResult = ExecuteSetGhComponentValue(
-                        argsObj["id"]?.ToString(),
+                        ResolveToolObjectId(argsObj["id"]?.ToString()),
                         argsObj["value"]?.ToString(),
                         ReadNullableDouble(argsObj, "min"),
                         ReadNullableDouble(argsObj, "max"),
@@ -131,9 +156,9 @@ namespace ADDGH
                 else if (funcName == "remove_gh_connection")
                 {
                     result.ToolResult = ExecuteRemoveGhConnection(
-                        argsObj["from_id"]?.ToString(),
+                        ResolveToolObjectId(argsObj["from_id"]?.ToString()),
                         argsObj["from_index"]?.ToObject<int>() ?? 0,
-                        argsObj["to_id"]?.ToString(),
+                        ResolveToolObjectId(argsObj["to_id"]?.ToString()),
                         argsObj["to_index"]?.ToObject<int>() ?? 0);
                     result.DelConn++;
                 }
@@ -174,7 +199,7 @@ namespace ADDGH
                 else if (funcName == "edit_csharp_script_component")
                 {
                     result.ToolResult = ExecuteEditCSharpScriptComponent(
-                        argsObj["id"]?.ToString(),
+                        ResolveToolObjectId(argsObj["id"]?.ToString()),
                         argsObj["mode"]?.ToString(),
                         argsObj["body"]?.ToString());
                 }
@@ -210,7 +235,7 @@ namespace ADDGH
                 else if (funcName == "query_gh_components")
                 {
                     result.ToolResult = ExecuteQueryGhComponents(
-                        argsObj["id"]?.ToString(),
+                        ResolveToolObjectId(argsObj["id"]?.ToString()),
                         argsObj["name_contains"]?.ToString(),
                         ReadNullableBool(argsObj, "has_errors"),
                         ReadNullableBool(argsObj, "is_script"),
@@ -222,18 +247,18 @@ namespace ADDGH
                 else if (funcName == "get_component_context")
                 {
                     result.ToolResult = ExecuteGetComponentContext(
-                        argsObj["id"]?.ToString(),
+                        ResolveToolObjectId(argsObj["id"]?.ToString()),
                         argsObj["depth"]?.ToObject<int?>() ?? 1,
                         ReadNullableBool(argsObj, "include_script_bodies") ?? false);
                 }
                 else if (funcName == "read_component_script")
                 {
-                    result.ToolResult = ExecuteReadComponentScript(argsObj["id"]?.ToString());
+                    result.ToolResult = ExecuteReadComponentScript(ResolveToolObjectId(argsObj["id"]?.ToString()));
                 }
                 else if (funcName == "set_gh_component_status")
                 {
                     result.ToolResult = ExecuteSetGhComponentStatus(
-                        argsObj["id"]?.ToString(),
+                        ResolveToolObjectId(argsObj["id"]?.ToString()),
                         ReadNullableBool(argsObj, "preview"),
                         ReadNullableBool(argsObj, "enabled"));
                 }
@@ -245,14 +270,14 @@ namespace ADDGH
                 else if (funcName == "prepare_visual_review_preview")
                 {
                     result.ToolResult = ExecutePrepareVisualReviewPreview(
-                        argsObj["source_id"]?.ToString(),
+                        ResolveToolObjectId(argsObj["source_id"]?.ToString()),
                         argsObj["source_output_index"]?.ToObject<int?>() ?? 0,
                         argsObj["label"]?.ToString());
                 }
                 else if (funcName == "modify_gh_component_ports")
                 {
                     result.ToolResult = ExecuteModifyGhComponentPorts(
-                        argsObj["id"]?.ToString(),
+                        ResolveToolObjectId(argsObj["id"]?.ToString()),
                         argsObj["is_input"]?.ToObject<bool>() ?? false,
                         argsObj["action"]?.ToString(),
                         argsObj["port_name"]?.ToString(),
@@ -261,17 +286,17 @@ namespace ADDGH
                 else if (funcName == "modify_gh_port_data")
                 {
                     result.ToolResult = ExecuteModifyGhPortData(
-                        argsObj["id"]?.ToString(),
+                        ResolveToolObjectId(argsObj["id"]?.ToString()),
                         argsObj["is_input"]?.ToObject<bool>() ?? false,
                         argsObj["index"]?.ToObject<int>() ?? 0,
                         argsObj["operation"]?.ToString());
                 }
                 else if (funcName == "manage_gh_groups")
                 {
-                    string groupId = argsObj["group_id"]?.ToString();
+                    string groupId = ResolveToolObjectId(argsObj["group_id"]?.ToString());
                     string groupName = argsObj["name"]?.ToString();
                     JArray idsArray = argsObj["ids"] as JArray;
-                    List<string> idsList = idsArray?.Select(v => v.ToString()).ToList();
+                    List<string> idsList = ResolveToolObjectIds(idsArray?.Select(v => v.ToString()));
                     result.ToolResult = ExecuteManageGhGroups(argsObj["action"]?.ToString(), idsList, groupId, groupName);
                 }
                 else if (funcName == "read_skill_file")
@@ -295,6 +320,22 @@ namespace ADDGH
                     var (refToolMsg, refEndRound) = ShowReferenceOptionsTool.Run(argsObj, argsJson, operationCards);
                     result.ToolResult = refToolMsg;
                     if (refEndRound)
+                    {
+                        _messages.Add(new { role = "tool", tool_call_id = callId, name = funcName, content = result.ToolResult });
+                        EnforceChatHistoryLimit();
+                        result.EndApiRoundAwaitingUser = true;
+                        result.EarlyResponse = new ApiResponse
+                        {
+                            Content = fullContent,
+                            Reasoning = fullReasoning
+                        };
+                    }
+                }
+                else if (funcName == ShowPlanStepsTool.FunctionName)
+                {
+                    var (planToolMsg, planEndRound) = ShowPlanStepsTool.Run(argsObj, argsJson, operationCards);
+                    result.ToolResult = planToolMsg;
+                    if (planEndRound)
                     {
                         _messages.Add(new { role = "tool", tool_call_id = callId, name = funcName, content = result.ToolResult });
                         EnforceChatHistoryLimit();

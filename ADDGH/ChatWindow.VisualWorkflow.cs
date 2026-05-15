@@ -20,7 +20,8 @@ namespace ADDGH
             _currentTurnHadToolExecution = false;
             _finalVisualReviewCompleted = false;
             _finalVisualReviewAttempted = false;
-            _pendingFinalVisualReview = hasImageAttachments;
+            _hasActiveVisionInputContext = hasImageAttachments;
+            _pendingFinalVisualReview = hasImageAttachments && _agentMode == AgentMode.Create;
             _finalVisualReviewSourceInput = input;
             _finalVisualReviewSourceImages = hasImageAttachments
                 ? attachmentsToSend
@@ -30,6 +31,17 @@ namespace ADDGH
             _visualReviewPreviewComponentId = null;
             _visualReviewTargetSourceId = null;
             _visualReviewTargetOutputIndex = 0;
+        }
+
+        private static bool IsVisionToolContextActive()
+        {
+            return _hasActiveVisionInputContext
+                || (_finalVisualReviewSourceImages != null && _finalVisualReviewSourceImages.Any(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64)));
+        }
+
+        private static bool CanUseViewportCaptureTool()
+        {
+            return IsVisionToolContextActive();
         }
 
         private static async Task<bool> PrepareImageDrivenExecutionContextAsync(string input, List<AttachmentItem> attachmentsToSend, System.Threading.CancellationToken ct)
@@ -49,6 +61,9 @@ namespace ADDGH
 
         private static bool ShouldRunFinalVisualReviewThisRound(JArray fullToolCalls)
         {
+            if (_agentMode == AgentMode.Plan)
+                return false;
+
             return (fullToolCalls == null || fullToolCalls.Count == 0)
                 && _pendingFinalVisualReview
                 && !_finalVisualReviewCompleted

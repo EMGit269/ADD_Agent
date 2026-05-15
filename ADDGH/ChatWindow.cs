@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -113,9 +113,12 @@ namespace ADDGH
         private static TextBlock _txtWarning;
         private static Button _btnCloseWarning;
         private static Button _btnModeDropdown;
+        private static Button _btnAgentModeDropdown;
         private static Button _btnModeBattery;
         private static Button _btnModeCSharp;
         private static Button _btnModeMixed;
+        private static MenuItem _menuAgentModeCreate;
+        private static MenuItem _menuAgentModePlan;
         private static MenuItem _menuModeBattery;
         private static MenuItem _menuModeCSharp;
         private static MenuItem _menuModeMixed;
@@ -127,8 +130,16 @@ namespace ADDGH
             CSharpFirst
         }
 
+        private enum AgentMode
+        {
+            Create,
+            Plan
+        }
+
         private const string LayoutModeSettingKey = "ADDGH_LayoutMode";
+        private const string AgentModeSettingKey = "ADDGH_AgentMode";
         private static LayoutMode _layoutMode = LayoutMode.Mixed;
+        private static AgentMode _agentMode = AgentMode.Create;
 
         private const string SYSTEM_PROMPT = @"你是 GH 参数化专家。
 
@@ -158,12 +169,14 @@ namespace ADDGH
 10. 收到结构化视觉报告后，把“视觉事实”当高优先级参考，把“关联画布定位”“执行模型下一步检查点”“给执行模型的任务摘要”当待核实线索；优先执行检查动作。
 11. 对“按参考图修改”“与图片保持一致”“看起来不对但未报错”这类任务，不要只依赖无报错和非 Null 数据；完成数据级检查后仍要说明剩余视觉风险。
 12. 视觉报告与工具核实冲突时，以工具结果为准，并简短说明依据。
-13. 需要视觉一致性核验、展示结果或回送视觉模型复核时，可调用 `capture_rhino_viewport`；默认自动取景会优先按 Grasshopper 预览几何缩放，避免模型不在视窗内或尺度异常。
-13a. 截图前先整理预览：应优先调用 `prepare_visual_review_preview`，把最终要检查的输出连接到一个干净的 Geometry 预览电池上；该工具会硬编码关闭所有 C# Script 预览。不要依赖脚本过程预览做视觉核验。
-14. 当用户要求检查模型形态、外观、轮廓、比例或整体效果，而数据级检查不足以判断时，可先做最小代价验证：优先检查报错、Null、空数据、Panel 与关键输出；仍无法确认时，再调用 `capture_rhino_viewport` 获取最小必要截图，并唤醒多模态模型做视觉复核。不要默认触发视觉复核，只在确有视觉判断必要时使用。
+13. 只有当当前任务实际包含用户提供的图片输入时，才允许调用 `capture_rhino_viewport` 做视觉一致性核验、展示结果或回送视觉模型复核；无图任务禁止主动触发截图式视觉检查。
+13a. 截图前先整理预览：应优先调用 `prepare_visual_review_preview`，把最终要检查的输出连接到一个干净的 Geometry 预览电池上；该工具会硬编码关闭所有 C# Script 预览。不要依赖脚本过程预览做视觉核验。无图任务不要调用它。
+13b. `capture_rhino_viewport` 返回给你的路径、bbox、预览计数等都不是视觉事实，只是截图传输元数据。除非该截图随后被送入视觉模型，否则你不能根据这些元数据推断形态是否正确、分段是否合理、长度是否匹配，也不能把 bbox 尺寸当作曲线/曲面 UV 路径长度。
+14. 当用户要求检查模型形态、外观、轮廓、比例或整体效果，而数据级检查不足以判断时，若当前任务带有图片输入，可先做最小代价验证：优先检查报错、Null、空数据、Panel 与关键输出；仍无法确认时，再调用 `capture_rhino_viewport` 获取最小必要截图，并唤醒多模态模型做视觉复核。不要默认触发视觉复核，只在有图片输入且确有视觉判断必要时使用。
 15. 当用户提供了图像参考，或用图片指出当前结果存在问题时，最终完成前应进行一次截图级视觉复核：先完成数据级检查，再调用 `capture_rhino_viewport` 获取当前结果截图，并以该截图作为最终核验依据之一；不要仅凭无报错、非 Null 或局部 Panel 检查就宣称与图片要求一致。
 
 【工具调用效率】
+0. 画布对象对外默认使用短号 `01`、`02`、`03`… 作为 `id`；工具参数里优先使用这些短号，系统内部仍会映射到真实 GUID。若返回里同时出现 `guid`，那只是兼容与调试字段，不是首选引用方式。
 1. 需要当前拓扑、连线或实例 id 时再 get_gh_components，避免无目的重复拉全图。
 2. 新增一整块逻辑时，**优先**用 create_component_graph **一次**提交 components 与 connections，把该块内的放置与连线同时做完；尽量少用多轮「少量 add_gh_component ↔ 少量 connect_gh_components」交替，除非必须等上一轮返回的 id/端口才能定案。
 3. 单独 add_gh_component 仅限少数必要情形（如占位定位、必须先看清画布再决定下一步）；能并入同一张局部图时仍应合并为一次 create_component_graph。
@@ -176,10 +189,55 @@ namespace ADDGH
 
         private static string BuildSystemPrompt()
         {
-            string prompt = SYSTEM_PROMPT + BuildModePrompt(_layoutMode);
-            if (_layoutMode == LayoutMode.CSharpFirst)
+            string prompt = SYSTEM_PROMPT + BuildModePrompt(_layoutMode) + BuildAgentModePrompt(_agentMode);
+            prompt += GetModeSystemSkillPrompt();
+            if (_agentMode == AgentMode.Create && _layoutMode == LayoutMode.CSharpFirst)
                 prompt += BuildCSharpDedicatedToolPrompt();
             return prompt;
+        }
+
+        private static string GetModeSystemSkillPrompt()
+        {
+            string fileName = null;
+            if (_layoutMode == LayoutMode.CSharpFirst)
+                fileName = "system_csharp_mode.md";
+            else if (_layoutMode == LayoutMode.Mixed)
+                fileName = "system_mixed_mode.md";
+
+            if (string.IsNullOrWhiteSpace(fileName))
+                return "";
+
+            try
+            {
+                string path = Path.Combine(GetSkillsDirectory(), fileName);
+                if (!File.Exists(path))
+                    return "";
+
+                string raw = File.ReadAllText(path);
+                string content = StripSkillFrontmatter(raw).Trim();
+                return string.IsNullOrWhiteSpace(content) ? "" : "\n\n" + content;
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("Load mode system skill failed: " + ex.Message);
+                return "";
+            }
+        }
+
+        private static string StripSkillFrontmatter(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                return "";
+
+            string normalized = raw.Replace("\r\n", "\n");
+            if (!normalized.StartsWith("---\n", StringComparison.Ordinal))
+                return raw;
+
+            int end = normalized.IndexOf("\n---\n", 4, StringComparison.Ordinal);
+            if (end < 0)
+                return raw;
+
+            return normalized.Substring(end + 5).Replace("\n", Environment.NewLine);
         }
 
         private static string BuildCSharpDedicatedToolPrompt()
@@ -194,7 +252,9 @@ namespace ADDGH
 5. Default C# outputs such as out/a are preserved. Output specs are business labels only; requested extra output variables start at b, c, d...; assign to those variables in the body. Do not assign to a in generated C# bodies because it is a default UI port.
 6. Do not create unnecessary outputs. Prefer one or a few structured outputs; split into multiple script components only when the logic is genuinely clearer.
 7. Do not declare local variables whose names collide with output variables currently in use, such as a, b, c.
-8. Non-script helper components in this mode are limited to Params and Display categories for input, output, preview, and debugging.";
+8. Non-script helper components in this mode are limited to Params and Display categories for input, output, preview, and debugging.
+9. When the user brings a new requirement or asks for an additive change, prefer adding one new C# Script component to extend the graph instead of rewriting an existing healthy C# Script component.
+10. If an existing C# Script component has no bug and already satisfies its current responsibility, leave it unchanged unless modifying it is clearly necessary for correctness, shared interface changes, or a simpler overall graph boundary.";
         }
 
         private static string BuildCSharpTypedInputPrompt()
@@ -208,21 +268,51 @@ namespace ADDGH
 4. After writing a C# body, these tools automatically trigger a short delayed two-pass recompute. Do not routinely spend an extra tool call on recompute_gh_canvas unless the output still fails to update or verify.";
         }
 
+        private static string BuildAgentModePrompt(AgentMode mode)
+        {
+            if (mode == AgentMode.Plan)
+            {
+                string csharpPlanRule = _layoutMode == LayoutMode.CSharpFirst
+                    ? @"
+6. In C# priority plus Plan mode, every implementation step must keep core modeling logic inside one or more C# Script components. Do not propose ordinary Grasshopper component chains for geometry, math, data-tree, transform, curve, surface, brep, mesh, or list-processing logic. Non-script components are limited to Params or Display helpers for input, output, preview, inspection, and debugging.
+7. Prefer plans where each step can be completed by creating one coherent C# Script component plus minimal Params or Display helpers. If the task is simple, do not artificially split it into multiple script steps. If the task is complex, split only along clear responsibility boundaries."
+                    : "";
+
+                return @"
+
+[Current execution mode: Plan]
+1. Use read-only tools only. Never call any tool that changes the Grasshopper canvas, scripts, references, skills, preview state, or saved assets.
+2. First verify the current state, then produce an implementation plan. Do not claim that the canvas has already been changed.
+3. When the plan is clear enough, call `show_plan_steps` to render one implementation plan card. Follow the schema exactly: provide top-level `schema_version`, `plan_title`, `steps`, and `execute_prompt`; optionally provide top-level `execute_label`. Each step must provide `step_id`, `title`, and `detail`. Do not create per-step execute buttons.
+4. `execute_prompt` must be a complete Chinese instruction that can be sent directly after switching to Create mode, and it should tell the agent to execute the full plan continuously rather than stopping after one step.
+5. If information is still missing, continue using read-only tools or ask one short clarification question. Do not invent canvas state or skip verification."
+                    + csharpPlanRule;
+            }
+
+            return @"
+
+[Current execution mode: Create]
+1. After verification, you may directly use the allowed tools to modify the Grasshopper canvas and complete the task.
+2. If the user sends `继续`, continue from the current context. Do not depend on any extra continue button.";
+        }
+
         private static string BuildModePrompt(LayoutMode mode)
         {
             if (mode == LayoutMode.CSharpFirst)
             {
                 return @"
 
-【当前排布模式：C# 优先】
-1. 强制使用一个或多个 C# Script 电池完成核心建模逻辑；逻辑复杂时可以拆成多个脚本电池组合，但优先保持数量少、数据流清晰。
-2. 其它非脚本电池只能来自 Params 或 Display 分类；必要时可用 add_gh_component 单独补充这些辅助电池，但只能作为脚本逻辑的输入、输出、显示或调试辅助，不能用普通 GH 电池替代核心逻辑。
-3. 新建 C# 脚本化逻辑必须调用 create_csharp_script_component 创建 C# Script、辅助电池、端口与方法体；不要调用 create_script_component_graph、read_skill_file、read_reference_json 或读取 reference。为避免 Grasshopper/Rhino 崩溃，C# Script 创建阶段不要同时连线，待组件稳定后再单独连接。
-4. C# Script 的 RunScript 签名由 GH 根据当前输入/输出端口自动生成，不能在 body 中写自定义 RunScript 签名、using、class 或完整模板；body 只提供 RunScript 方法内部语句。
-5. C# 输出端口由工具按 outputs 数量硬编码创建为 b, c, d...；outputs 里只写业务 label/type_hint。方法体里只给这些标准输出变量赋值，例如 b = curve; c = points;。不要给 a 赋值，因为部分 GH C# Script 在动态改端口后会显示 a 端口但签名中没有 ref object a。
-6. 若需要表达输出业务含义，把含义连接到带 label 的 Panel，或在最终说明中解释；不要把业务名写成 C# 输出变量名，也不要依赖工具从源码里推断输出数量。
-7. 修改已有 C# Script 的代码必须调用 edit_csharp_script_component，只替换 RunScript 方法体，保持原有 using、Script_Instance 类和签名模板。
-8. 若端口变更后出现签名未同步或变量不存在，先 recompute_gh_canvas 再只修正方法体；不要通过重写完整源码解决。";
+[Current layout mode: C# Priority]
+1. All core modeling logic must be implemented in one or more C# Script components. Keep the number of scripts small, but do not replace core logic with ordinary GH battery chains.
+2. Non-script components are limited to Params or Display categories, and only as inputs, outputs, previews, inspection, or debugging helpers.
+3. Do not propose or build ordinary Grasshopper components for geometry, math, data-tree, list-processing, transform, curve, surface, brep, mesh, or similar core logic in this mode.
+4. Use `create_csharp_script_component` for new core logic. Do not use `create_component_graph` or `create_script_component_graph` as a substitute for the core implementation.
+5. Existing C# Script logic must be edited with `edit_csharp_script_component`. Do not write C# source through generic value-setting tools.
+6. The C# body must contain only the RunScript method body. Do not include using statements, class declarations, full templates, or a custom RunScript signature.
+7. Business meaning for outputs belongs in labels, panels, or the final explanation. Do not encode business naming by inventing custom output variable conventions in the script body.
+8. If port changes temporarily desync the script signature, recompute and then fix the method body. Do not rewrite the full source template to work around it.
+9. For each new user requirement, prefer extending the canvas with a new C# Script component that owns the new responsibility, instead of folding fresh logic into an existing healthy script.
+10. Treat an existing correct C# Script component as stable by default. Do not modify it unless required by bug fixing, shared interface changes, or a clearly better script boundary that reduces overall complexity.";
             }
 
             if (mode == LayoutMode.Battery)
@@ -247,15 +337,14 @@ namespace ADDGH
 
         private static string BuildInitialSystemContent()
         {
-            return _layoutMode != LayoutMode.CSharpFirst
-                ? BuildSystemPrompt() + BuildCSharpTypedInputPrompt() + GetSkillsSummary()
-                : BuildSystemPrompt() + BuildCSharpTypedInputPrompt();
+            string typedPrompt = _agentMode == AgentMode.Create ? BuildCSharpTypedInputPrompt() : "";
+            return BuildSystemPrompt() + typedPrompt + GetSkillsSummary();
         }
 
         private static List<object> BuildInitialSystemMessages()
         {
-            string basePrompt = BuildSystemPrompt() + BuildCSharpTypedInputPrompt();
-            string skills = _layoutMode != LayoutMode.CSharpFirst ? GetSkillsSummary() : "";
+            string basePrompt = BuildSystemPrompt() + (_agentMode == AgentMode.Create ? BuildCSharpTypedInputPrompt() : "");
+            string skills = GetSkillsSummary();
             var list = new List<object>();
 
             if (string.IsNullOrWhiteSpace(skills) || DeploymentOptions.MergeSkillsIntoSameSystemPromptAsLibraryIndex)
@@ -285,10 +374,30 @@ namespace ADDGH
             return LayoutMode.Mixed;
         }
 
+        private static AgentMode ReadAgentModeSetting()
+        {
+            try
+            {
+                string raw = Grasshopper.Instances.Settings.GetValue(AgentModeSettingKey, AgentMode.Create.ToString());
+                if (Enum.TryParse(raw, true, out AgentMode mode)) return mode;
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("Read agent mode failed: " + ex.Message);
+            }
+            return AgentMode.Create;
+        }
+
         private static void SaveLayoutModeSetting()
         {
             try { Grasshopper.Instances.Settings.SetValue(LayoutModeSettingKey, _layoutMode.ToString()); }
             catch (Exception ex) { AddGhLog.Warn("Save layout mode failed: " + ex.Message); }
+        }
+
+        private static void SaveAgentModeSetting()
+        {
+            try { Grasshopper.Instances.Settings.SetValue(AgentModeSettingKey, _agentMode.ToString()); }
+            catch (Exception ex) { AddGhLog.Warn("Save agent mode failed: " + ex.Message); }
         }
 
         private static void ReplaceCurrentSystemPrompt()
@@ -307,6 +416,15 @@ namespace ADDGH
             _layoutMode = mode;
             SaveLayoutModeSetting();
             UpdateLayoutModeButtons();
+            ReplaceCurrentSystemPrompt();
+        }
+
+        private static void SetAgentMode(AgentMode mode)
+        {
+            if (_isGenerating) return;
+            _agentMode = mode;
+            SaveAgentModeSetting();
+            UpdateAgentModeButtons();
             ReplaceCurrentSystemPrompt();
         }
 
@@ -348,16 +466,40 @@ namespace ADDGH
             Paint(_btnModeCSharp, _layoutMode == LayoutMode.CSharpFirst);
         }
 
+        private static void UpdateAgentModeButtons()
+        {
+            string label = _agentMode == AgentMode.Plan ? "Plan" : "Create";
+
+            if (_btnAgentModeDropdown != null)
+            {
+                _btnAgentModeDropdown.IsEnabled = !_isGenerating;
+                _btnAgentModeDropdown.Content = label + " ▾";
+                _btnAgentModeDropdown.Foreground = new SolidColorBrush(Color.FromRgb(160, 160, 160));
+            }
+
+            if (_menuAgentModeCreate != null)
+                _menuAgentModeCreate.Header = (_agentMode == AgentMode.Create ? "✓ " : "   ") + "Create";
+            if (_menuAgentModePlan != null)
+                _menuAgentModePlan.Header = (_agentMode == AgentMode.Plan ? "✓ " : "   ") + "Plan";
+        }
+
         private static List<object> _messages = new List<object>();
         private static string _cachedCanvasState = null;  // 画布状态缓存
         private static string _cachedRhinoUnitSignature = null;
         private static bool _canvasChanged = true;  // 画布是否改变标记
+        private static Grasshopper.Kernel.GH_Document _publicIdBoundDocument = null;
+        private static readonly Dictionary<Guid, string> _publicIdByGuid = new Dictionary<Guid, string>();
+        private static readonly Dictionary<string, Guid> _guidByPublicId = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
+        private static int _nextComponentPublicId = 1;
+        private static int _nextGroupPublicId = 1;
         private static bool _pendingFinalVisualReview = false;
         private static bool _finalVisualReviewCompleted = false;
         private static bool _finalVisualReviewAttempted = false;
         private static bool _currentTurnHadToolExecution = false;
+        private static bool _hasActiveVisionInputContext = false;
         private static string _finalVisualReviewSourceInput = null;
         private static List<AttachmentItem> _finalVisualReviewSourceImages = new List<AttachmentItem>();
+        private static string _queuedImmediateSendVisionSourceInputOverride = null;
         private static string _visualReviewPreviewComponentId = null;
 
         private static readonly HttpClient _httpClient = new HttpClient() { Timeout = TimeSpan.FromMinutes(5) };
@@ -1319,7 +1461,42 @@ namespace ADDGH
 
                             <Button x:Name=""BtnUploadImage"" Grid.Column=""0"" Style=""{StaticResource IconButtonStyle}"" Content=""+"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""22"" FontWeight=""Medium"" Cursor=""Hand"" ToolTip=""上传图片或文件"" Margin=""0,0,10,0""/>
                             <Button x:Name=""BtnStop"" Grid.Column=""1"" Content=""停止"" Visibility=""Collapsed"" Foreground=""#FF6B6B"" Background=""Transparent"" BorderThickness=""0"" FontSize=""16"" Cursor=""Hand"" ToolTip=""停止按钮"" Margin=""0,0,10,0""/>
-                            <Button x:Name=""BtnContinue"" Grid.Column=""2"" Style=""{StaticResource IconButtonStyle}"" Content=""继续"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""继续生成""/>
+                            <Button x:Name=""BtnAgentModeDropdown"" Grid.Column=""2"" Style=""{StaticResource IconButtonStyle}"" Content=""Create ▾"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""执行模式"">
+                                <Button.ContextMenu>
+                                    <ContextMenu Background=""#1E1E1E"" Foreground=""#E0E0E0"" BorderBrush=""#333"" BorderThickness=""1"" Padding=""4"">
+                                        <ContextMenu.Template>
+                                            <ControlTemplate TargetType=""ContextMenu"">
+                                                <Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""4"" Padding=""{TemplateBinding Padding}"">
+                                                    <ItemsPresenter/>
+                                                </Border>
+                                            </ControlTemplate>
+                                        </ContextMenu.Template>
+                                        <ContextMenu.Resources>
+                                            <Style TargetType=""MenuItem"">
+                                                <Setter Property=""Foreground"" Value=""#E0E0E0""/>
+                                                <Setter Property=""Background"" Value=""Transparent""/>
+                                                <Setter Property=""Padding"" Value=""12,8""/>
+                                                <Setter Property=""Template"">
+                                                    <Setter.Value>
+                                                        <ControlTemplate TargetType=""MenuItem"">
+                                                            <Border x:Name=""Bg"" Background=""{TemplateBinding Background}"" CornerRadius=""4"">
+                                                                <ContentPresenter Content=""{TemplateBinding Header}"" Margin=""{TemplateBinding Padding}""/>
+                                                            </Border>
+                                                            <ControlTemplate.Triggers>
+                                                                <Trigger Property=""IsHighlighted"" Value=""True"">
+                                                                    <Setter TargetName=""Bg"" Property=""Background"" Value=""#333333""/>
+                                                                </Trigger>
+                                                            </ControlTemplate.Triggers>
+                                                        </ControlTemplate>
+                                                    </Setter.Value>
+                                                </Setter>
+                                            </Style>
+                                        </ContextMenu.Resources>
+                                        <MenuItem x:Name=""MenuAgentModeCreate"" Header=""Create""/>
+                                        <MenuItem x:Name=""MenuAgentModePlan"" Header=""Plan""/>
+                                    </ContextMenu>
+                                </Button.ContextMenu>
+                            </Button>
                             <Button x:Name=""BtnToggleLibrary"" Grid.Column=""3"" Style=""{StaticResource IconButtonStyle}"" Content=""电池库"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""展开/收起电池库"" Margin=""8,0,0,0""/>
                             <Button x:Name=""BtnReference"" Grid.Column=""4"" Style=""{StaticResource IconButtonStyle}"" Content=""参考"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""参考菜单"" Margin=""8,0,0,0"">
                                 <Button.ContextMenu>
@@ -1570,14 +1747,27 @@ namespace ADDGH
             _stickyUserMessageStack = (Grid)_window.FindName("StickyUserMessageStack");
             _txtInput = (TextBox)_window.FindName("TxtInput");
             _btnSend = (Button)_window.FindName("BtnSend");
+            _btnAgentModeDropdown = (Button)_window.FindName("BtnAgentModeDropdown");
             _btnModeDropdown = (Button)_window.FindName("BtnModeDropdown");
             _btnModeBattery = (Button)_window.FindName("BtnModeBattery");
             _btnModeCSharp = (Button)_window.FindName("BtnModeCSharp");
             _btnModeMixed = (Button)_window.FindName("BtnModeMixed");
+            _menuAgentModeCreate = (MenuItem)_window.FindName("MenuAgentModeCreate");
+            _menuAgentModePlan = (MenuItem)_window.FindName("MenuAgentModePlan");
             _menuModeBattery = (MenuItem)_window.FindName("MenuModeBattery");
             _menuModeCSharp = (MenuItem)_window.FindName("MenuModeCSharp");
             _menuModeMixed = (MenuItem)_window.FindName("MenuModeMixed");
             _layoutMode = ReadLayoutModeSetting();
+            _agentMode = ReadAgentModeSetting();
+            if (_btnAgentModeDropdown != null) {
+                _btnAgentModeDropdown.Click += (s, e) => {
+                    if (_btnAgentModeDropdown.ContextMenu != null) {
+                        _btnAgentModeDropdown.ContextMenu.PlacementTarget = _btnAgentModeDropdown;
+                        _btnAgentModeDropdown.ContextMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.Top;
+                        _btnAgentModeDropdown.ContextMenu.IsOpen = true;
+                    }
+                };
+            }
             if (_btnModeDropdown != null) {
                 _btnModeDropdown.Click += (s, e) => {
                     if (_btnModeDropdown.ContextMenu != null) {
@@ -1587,12 +1777,15 @@ namespace ADDGH
                     }
                 };
             }
+            if (_menuAgentModeCreate != null) _menuAgentModeCreate.Click += (s, e) => SetAgentMode(AgentMode.Create);
+            if (_menuAgentModePlan != null) _menuAgentModePlan.Click += (s, e) => SetAgentMode(AgentMode.Plan);
             if (_btnModeBattery != null) _btnModeBattery.Click += (s, e) => SetLayoutMode(LayoutMode.Battery);
             if (_btnModeMixed != null) _btnModeMixed.Click += (s, e) => SetLayoutMode(LayoutMode.Mixed);
             if (_btnModeCSharp != null) _btnModeCSharp.Click += (s, e) => SetLayoutMode(LayoutMode.CSharpFirst);
             if (_menuModeBattery != null) _menuModeBattery.Click += (s, e) => SetLayoutMode(LayoutMode.Battery);
             if (_menuModeMixed != null) _menuModeMixed.Click += (s, e) => SetLayoutMode(LayoutMode.Mixed);
             if (_menuModeCSharp != null) _menuModeCSharp.Click += (s, e) => SetLayoutMode(LayoutMode.CSharpFirst);
+            UpdateAgentModeButtons();
             UpdateLayoutModeButtons();
             _historySidebar = (Border)_window.FindName("HistorySidebar");
             _historyListPanel = (StackPanel)_window.FindName("HistoryListPanel");
@@ -1627,15 +1820,6 @@ namespace ADDGH
             if (btnCloseHistory != null) btnCloseHistory.Click += (s, e) => SetHistorySidebarVisible(false);
             LoadChatHistoryStore();
             RefreshHistorySidebar();
-
-            var btnContinue = (Button)_window.FindName("BtnContinue");
-            if (btnContinue != null) {
-            btnContinue.Click += (s, e) => {
-                if (_isGenerating) { _cts?.Cancel(); return; }
-                    if (_txtInput != null) _txtInput.Text = "继续";
-                BtnSend_Click(null, null);
-            };
-            }
 
             _codeViewBorder = (Border)_window.FindName("CodeViewBorder");
             _codeCanvasIssuesHost = (Border)_window.FindName("CodeCanvasIssuesHost");
@@ -2487,6 +2671,7 @@ namespace ADDGH
 
         private static void ApplySendButtonGeneratingState()
         {
+            UpdateAgentModeButtons();
             UpdateLayoutModeButtons();
             if (_btnSend == null) return;
             _btnSend.Content = CreateStopSendGlyph();
@@ -2498,6 +2683,7 @@ namespace ADDGH
 
         private static void ApplySendButtonIdleState()
         {
+            UpdateAgentModeButtons();
             UpdateLayoutModeButtons();
             if (_btnSend == null) return;
             _btnSend.Content = "➤";
@@ -2666,6 +2852,9 @@ namespace ADDGH
             _thinkingStatusStep = 0;
             bool hasImageAttachments = attachmentsToSend.Any(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64));
             ResetVisualWorkflowState(input, attachmentsToSend);
+            if (hasImageAttachments && !string.IsNullOrWhiteSpace(_queuedImmediateSendVisionSourceInputOverride))
+                _finalVisualReviewSourceInput = _queuedImmediateSendVisionSourceInputOverride;
+            _queuedImmediateSendVisionSourceInputOverride = null;
 
             _isGenerating = true;
             ApplySendButtonGeneratingState();
@@ -2721,6 +2910,24 @@ namespace ADDGH
                 try { _cts?.Dispose(); } catch (Exception ex) { AddGhLog.Warn("Dispose CTS after send: " + ex.Message); }
                 _cts = null;
             }
+        }
+
+        private static void QueuePromptForImmediateSend(string prompt, List<AttachmentItem> carryoverAttachments = null, string visionSourceInputOverride = null)
+        {
+            string text = (prompt ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(text) || _txtInput == null || _isGenerating) return;
+            if (carryoverAttachments != null && carryoverAttachments.Count > 0)
+            {
+                _pendingAttachments.Clear();
+                _pendingAttachments.AddRange(CloneAttachments(carryoverAttachments));
+                RefreshAttachmentPreview();
+                if (_btnClearImage != null) _btnClearImage.Visibility = Visibility.Visible;
+            }
+            _queuedImmediateSendVisionSourceInputOverride = string.IsNullOrWhiteSpace(visionSourceInputOverride)
+                ? null
+                : visionSourceInputOverride.Trim();
+            _txtInput.Text = text;
+            BtnSend_Click(null, null);
         }
 
         private static void SetSettingsOverlayVisible(bool visible)
@@ -3371,9 +3578,9 @@ namespace ADDGH
             const int MAX_DEPTH = 50;
             if (depth >= MAX_DEPTH)
             {
-                AppendQuietDiagnosticCard("对话请求", "已达对话轮数安全上限（50 轮）。如需继续，请点击“继续”。");
+                AppendQuietDiagnosticCard("对话请求", "已达对话轮数安全上限（50 轮）。如需继续，请发送“继续”或选择步骤卡片继续。");
                 return new ApiResponse {
-                    Content = "已达对话轮数安全上限 (50轮)。如需继续，请点击‘继续’。"
+                    Content = "已达对话轮数安全上限 (50轮)。如需继续，请发送“继续”或选择步骤卡片继续。"
                 };
             }
 
@@ -3538,7 +3745,7 @@ namespace ADDGH
                         string argsJson = toolCall["function"]?["arguments"]?.ToString();
                         string callId = toolCall["id"]?.ToString();
 
-                        JObject argsObj = ChatMessageHelpers.ParseToolArgumentsForExecution(argsJson, out string cardSum, out string cardDet);
+                        JObject argsObj = ChatMessageHelpers.ParseToolArgumentsForExecution(funcName, argsJson, out string cardSum, out string cardDet);
                         if (!string.IsNullOrWhiteSpace(cardSum))
                             operationCards.Add((cardSum, string.IsNullOrWhiteSpace(cardDet) ? "" : cardDet));
 
@@ -3725,3 +3932,5 @@ namespace ADDGH
         }
     }
 }
+
+
