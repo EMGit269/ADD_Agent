@@ -145,6 +145,7 @@ function CanvasWorkbench() {
   const cardMetaRef = useRef<Record<string, any>>({})
   const loadedConversationRef = useRef<string | null>(null)
   const saveTimerRef = useRef<number | null>(null)
+  const storeUpdateRafRef = useRef<number | null>(null)
   const gridCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const hostRef = useRef<HTMLDivElement | null>(null)
 
@@ -181,13 +182,32 @@ function CanvasWorkbench() {
   useEffect(() => {
     if (!editor) return
 
-    const stop = editor.store.listen(() => {
-      setSelectionVersion((value) => value + 1)
-      setCameraVersion((value) => value + 1)
-      scheduleSave()
-    })
+    const requestUiRefresh = () => {
+      if (storeUpdateRafRef.current !== null) return
+      storeUpdateRafRef.current = window.requestAnimationFrame(() => {
+        setSelectionVersion((value) => value + 1)
+        setCameraVersion((value) => value + 1)
+        storeUpdateRafRef.current = null
+      })
+    }
 
-    return () => stop?.()
+    const stopSession = editor.store.listen(requestUiRefresh, { scope: 'session', source: 'all' })
+    const stopDocument = editor.store.listen(
+      () => {
+        requestUiRefresh()
+        scheduleSave()
+      },
+      { scope: 'document', source: 'user' },
+    )
+
+    return () => {
+      stopSession?.()
+      stopDocument?.()
+      if (storeUpdateRafRef.current !== null) {
+        window.cancelAnimationFrame(storeUpdateRafRef.current)
+        storeUpdateRafRef.current = null
+      }
+    }
   }, [editor])
 
   useEffect(() => {
@@ -210,7 +230,7 @@ function CanvasWorkbench() {
           resetEditorDocument(editor)
           if (snapshot) {
             try {
-              loadSnapshot(editor.store, snapshot)
+              loadSnapshot(editor.store, sanitizeCanvasSnapshot(snapshot))
             } catch {
               resetEditorDocument(editor)
             }
@@ -343,14 +363,18 @@ function CanvasWorkbench() {
           geo: 'rectangle',
           w: 300,
           h: 180,
-          text: composeCardText(nextMeta),
+          richText: composeCardRichText(nextMeta),
           color: 'green',
+          labelColor: 'black',
           fill: 'semi',
           dash: 'draw',
           size: 's',
           align: 'start',
           verticalAlign: 'start',
           font: 'draw',
+          url: '',
+          growY: 0,
+          scale: 1,
         },
         meta: nextMeta,
       },
@@ -522,14 +546,18 @@ function syncCardsIntoEditor(editor: any, messages: CanvasMessageItem[], metaByS
             geo: 'rectangle',
             w,
             h,
-            text: composeCardText(mergedMeta),
+            richText: composeCardRichText(mergedMeta),
             color: shapeColor(mergedMeta.role, mergedMeta.kind),
+            labelColor: 'black',
             fill: 'semi',
             dash: 'draw',
             size: 's',
             align: 'start',
             verticalAlign: 'start',
             font: 'draw',
+            url: '',
+            growY: 0,
+            scale: 1,
           },
           meta: mergedMeta,
         },
@@ -545,20 +573,58 @@ function syncCardsIntoEditor(editor: any, messages: CanvasMessageItem[], metaByS
       h: existing.props?.h ?? h,
     }
 
+    const { text: _legacyText, ...existingProps } = existing.props ?? {}
     editor.updateShapes?.([
       {
         id: existing.id,
         type: existing.type,
         props: {
-          ...existing.props,
+          ...existingProps,
           h,
-          text: composeCardText(mergedMeta),
+          richText: composeCardRichText(mergedMeta),
           color: shapeColor(mergedMeta.role, mergedMeta.kind),
         },
         meta: mergedMeta,
       },
     ])
   })
+}
+
+function composeCardRichText(meta: any) {
+  return toTldrawRichText(composeCardText(meta))
+}
+
+function toTldrawRichText(text: string) {
+  return {
+    type: 'doc',
+    content: String(text ?? '').split('\n').map((line) => {
+      if (!line) return { type: 'paragraph' }
+      return {
+        type: 'paragraph',
+        content: [{ type: 'text', text: line }],
+      }
+    }),
+  }
+}
+
+function sanitizeCanvasSnapshot(snapshot: any): any {
+  if (!snapshot || typeof snapshot !== 'object') return snapshot
+  if (Array.isArray(snapshot)) return snapshot.map(sanitizeCanvasSnapshot)
+
+  const next: Record<string, any> = {}
+  for (const [key, value] of Object.entries(snapshot)) {
+    next[key] = sanitizeCanvasSnapshot(value)
+  }
+
+  if (next.type === 'geo' && next.props && typeof next.props === 'object' && 'text' in next.props) {
+    const { text, ...props } = next.props
+    next.props = {
+      ...props,
+      richText: props.richText ?? toTldrawRichText(String(text ?? '')),
+    }
+  }
+
+  return next
 }
 
 function drawGridOverlay(canvas: HTMLCanvasElement, host: HTMLDivElement, editor: any, isDarkMode: boolean) {

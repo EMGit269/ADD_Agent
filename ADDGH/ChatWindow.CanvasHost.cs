@@ -612,7 +612,8 @@ namespace ADDGH
                     canvasRoot,
                     CoreWebView2HostResourceAccessKind.Allow);
 
-                return new Uri("https://" + CanvasVirtualHostName + "/" + relativePath, UriKind.Absolute);
+                string cacheKey = File.GetLastWriteTimeUtc(entryPath).Ticks.ToString();
+                return new Uri("https://" + CanvasVirtualHostName + "/" + relativePath + "?v=" + cacheKey, UriKind.Absolute);
             }
             catch (Exception ex)
             {
