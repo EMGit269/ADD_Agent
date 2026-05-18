@@ -145,7 +145,9 @@ function CanvasWorkbench() {
   const cardMetaRef = useRef<Record<string, any>>({})
   const loadedConversationRef = useRef<string | null>(null)
   const saveTimerRef = useRef<number | null>(null)
-  const storeUpdateRafRef = useRef<number | null>(null)
+  const selectionPollTimerRef = useRef<number | null>(null)
+  const lastSelectionKeyRef = useRef('')
+  const lastCameraKeyRef = useRef('')
   const gridCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const hostRef = useRef<HTMLDivElement | null>(null)
 
@@ -182,33 +184,53 @@ function CanvasWorkbench() {
   useEffect(() => {
     if (!editor) return
 
-    const requestUiRefresh = () => {
-      if (storeUpdateRafRef.current !== null) return
-      storeUpdateRafRef.current = window.requestAnimationFrame(() => {
-        setSelectionVersion((value) => value + 1)
-        setCameraVersion((value) => value + 1)
-        storeUpdateRafRef.current = null
-      })
-    }
-
-    const stopSession = editor.store.listen(requestUiRefresh, { scope: 'session', source: 'all' })
     const stopDocument = editor.store.listen(
       () => {
-        requestUiRefresh()
+        syncShapeLayoutIntoMeta(editor, cardMetaRef.current)
         scheduleSave()
       },
       { scope: 'document', source: 'user' },
     )
 
+    const pollEditorState = () => {
+      const selectionKey = asArray<string>(editor.getSelectedShapeIds?.()).join('|')
+      if (selectionKey !== lastSelectionKeyRef.current) {
+        lastSelectionKeyRef.current = selectionKey
+        setSelectionVersion((value) => value + 1)
+      }
+
+      const camera = normalizeCamera(editor.getCamera?.())
+      const cameraKey = `${camera.x.toFixed(3)}|${camera.y.toFixed(3)}|${camera.z.toFixed(4)}`
+      if (cameraKey !== lastCameraKeyRef.current) {
+        lastCameraKeyRef.current = cameraKey
+        setCameraVersion((value) => value + 1)
+      }
+    }
+
+    pollEditorState()
+    selectionPollTimerRef.current = window.setInterval(pollEditorState, 120)
+
     return () => {
-      stopSession?.()
       stopDocument?.()
-      if (storeUpdateRafRef.current !== null) {
-        window.cancelAnimationFrame(storeUpdateRafRef.current)
-        storeUpdateRafRef.current = null
+      if (selectionPollTimerRef.current !== null) {
+        window.clearInterval(selectionPollTimerRef.current)
+        selectionPollTimerRef.current = null
       }
     }
   }, [editor])
+
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+      }
+      if (selectionPollTimerRef.current !== null) {
+        window.clearInterval(selectionPollTimerRef.current)
+        selectionPollTimerRef.current = null
+      }
+    }
+  }, [])
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
@@ -305,6 +327,7 @@ function CanvasWorkbench() {
   }
 
   function updateCardMeta(sourceRef: string, patch: Record<string, unknown>) {
+    if (editor) syncShapeLayoutIntoMeta(editor, cardMetaRef.current, sourceRef)
     cardMetaRef.current[sourceRef] = { ...(cardMetaRef.current[sourceRef] ?? {}), ...patch }
     postHostMessage('card_meta_patch', { sourceRef, ...cardMetaRef.current[sourceRef] })
     syncCardsIntoEditor(editor, messages, cardMetaRef.current)
@@ -537,6 +560,8 @@ function syncCardsIntoEditor(editor: any, messages: CanvasMessageItem[], metaByS
     const y = typeof userMeta.y === 'number' ? userMeta.y : (80 + Math.floor(index / 3) * 220)
     const w = typeof userMeta.w === 'number' ? userMeta.w : 300
     const h = typeof userMeta.h === 'number' ? userMeta.h : (mergedMeta.collapsed ? 96 : 180)
+    const richText = composeCardRichText(mergedMeta)
+    const color = shapeColor(mergedMeta.role, mergedMeta.kind)
 
     if (!existing) {
       createShapes.push({
@@ -548,8 +573,8 @@ function syncCardsIntoEditor(editor: any, messages: CanvasMessageItem[], metaByS
           geo: 'rectangle',
           w,
           h,
-          richText: composeCardRichText(mergedMeta),
-          color: shapeColor(mergedMeta.role, mergedMeta.kind),
+          richText,
+          color,
           labelColor: 'black',
           fill: 'semi',
           dash: 'draw',
@@ -575,15 +600,23 @@ function syncCardsIntoEditor(editor: any, messages: CanvasMessageItem[], metaByS
     }
 
     const { text: _legacyText, ...existingProps } = existing.props ?? {}
+    const nextProps = {
+      ...existingProps,
+      h,
+      richText,
+      color,
+    }
+
+    if (existing.x === x && existing.y === y && shallowJsonEqual(existing.meta, mergedMeta) && shallowJsonEqual(existingProps, nextProps)) {
+      return
+    }
+
     updateShapes.push({
       id: existing.id,
       type: existing.type,
-      props: {
-        ...existingProps,
-        h,
-        richText: composeCardRichText(mergedMeta),
-        color: shapeColor(mergedMeta.role, mergedMeta.kind),
-      },
+      x,
+      y,
+      props: nextProps,
       meta: mergedMeta,
     })
   })
@@ -597,6 +630,28 @@ function syncCardsIntoEditor(editor: any, messages: CanvasMessageItem[], metaByS
     editor.batch(flushChanges)
   } else {
     flushChanges()
+  }
+}
+
+function shallowJsonEqual(left: any, right: any) {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null)
+}
+
+function syncShapeLayoutIntoMeta(editor: any, metaBySourceRef: Record<string, any>, onlySourceRef?: string) {
+  const shapes = asArray<any>(editor?.getCurrentPageShapes?.())
+  for (const shape of shapes) {
+    const meta = extractShapeMeta(shape)
+    const sourceRef = meta.sourceRef
+    if (!sourceRef) continue
+    if (onlySourceRef && sourceRef !== onlySourceRef) continue
+
+    metaBySourceRef[sourceRef] = {
+      ...(metaBySourceRef[sourceRef] ?? {}),
+      x: typeof shape.x === 'number' ? shape.x : metaBySourceRef[sourceRef]?.x,
+      y: typeof shape.y === 'number' ? shape.y : metaBySourceRef[sourceRef]?.y,
+      w: typeof shape.props?.w === 'number' ? shape.props.w : metaBySourceRef[sourceRef]?.w,
+      h: typeof shape.props?.h === 'number' ? shape.props.h : metaBySourceRef[sourceRef]?.h,
+    }
   }
 }
 
@@ -652,11 +707,16 @@ function drawGridOverlay(canvas: HTMLCanvasElement, host: HTMLDivElement, editor
   ctx.save()
   ctx.scale(dpr, dpr)
 
-  const camera = editor.getCamera?.() ?? { x: 0, y: 0, z: 1 }
-  const minorStep = 24 * camera.z
+  const camera = normalizeCamera(editor.getCamera?.())
+  const minorStep = Math.max(12, 24 * camera.z)
   const majorStep = minorStep * 5
   const offsetX = camera.x * camera.z
   const offsetY = camera.y * camera.z
+
+  if (!Number.isFinite(minorStep) || !Number.isFinite(majorStep) || minorStep <= 0 || majorStep <= 0) {
+    ctx.restore()
+    return
+  }
 
   const minorColor = isDarkMode ? 'rgba(126, 144, 170, 0.18)' : 'rgba(126, 144, 170, 0.14)'
   const majorColor = isDarkMode ? 'rgba(164, 198, 255, 0.34)' : 'rgba(152, 182, 235, 0.24)'
@@ -696,4 +756,12 @@ function drawGridOverlay(canvas: HTMLCanvasElement, host: HTMLDivElement, editor
   }
 
   ctx.restore()
+}
+
+function normalizeCamera(camera: any) {
+  const x = Number.isFinite(camera?.x) ? camera.x : 0
+  const y = Number.isFinite(camera?.y) ? camera.y : 0
+  const zRaw = Number.isFinite(camera?.z) ? camera.z : 1
+  const z = Math.min(8, Math.max(0.25, zRaw))
+  return { x, y, z }
 }
