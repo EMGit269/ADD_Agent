@@ -1,0 +1,741 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Text;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using Grasshopper.Kernel;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.Wpf;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+
+namespace ADDGH
+{
+    public static partial class ChatWindow
+    {
+        private enum WorkbenchPane
+        {
+            Canvas,
+            Inspector
+        }
+
+        private static Button _btnCanvasPaneView;
+        private static Button _btnInspectorPaneView;
+        private static Button _btnCanvasSync;
+        private static Grid _canvasPane;
+        private static Grid _inspectorPane;
+        private static Grid _canvasSurfaceHost;
+        private static Border _canvasStatusHost;
+        private static TextBlock _txtCanvasStatus;
+        private static WebView2 _canvasWebView;
+        private static WorkbenchPane _activeWorkbenchPane = WorkbenchPane.Canvas;
+        private static bool _canvasRuntimeReady = false;
+        private static bool _canvasRuntimeInitializing = false;
+        private static bool _canvasRuntimeFailed = false;
+        private const string CanvasVirtualHostName = "addgh-canvas.local";
+
+        private static void InitializeCanvasWorkbenchBindings()
+        {
+            _btnCanvasPaneView = (Button)_window.FindName("BtnCanvasPaneView");
+            _btnInspectorPaneView = (Button)_window.FindName("BtnInspectorPaneView");
+            _btnCanvasSync = (Button)_window.FindName("BtnCanvasSync");
+            _canvasPane = (Grid)_window.FindName("CanvasPane");
+            _inspectorPane = (Grid)_window.FindName("InspectorPane");
+            _canvasSurfaceHost = (Grid)_window.FindName("CanvasSurfaceHost");
+            _canvasStatusHost = (Border)_window.FindName("CanvasStatusHost");
+            _txtCanvasStatus = (TextBlock)_window.FindName("TxtCanvasStatus");
+
+            if (_btnCanvasPaneView != null)
+                _btnCanvasPaneView.Click += (s, e) => SetWorkbenchPane(WorkbenchPane.Canvas);
+            if (_btnInspectorPaneView != null)
+                _btnInspectorPaneView.Click += (s, e) => SetWorkbenchPane(WorkbenchPane.Inspector);
+            if (_btnCanvasSync != null)
+                _btnCanvasSync.Click += (s, e) => NotifyCanvasConversationChanged(true);
+
+            RefreshCanvasWorkbenchViewState();
+        }
+
+        private static void SetWorkbenchPane(WorkbenchPane pane)
+        {
+            _activeWorkbenchPane = pane;
+            RefreshCanvasWorkbenchViewState();
+            if (pane == WorkbenchPane.Inspector)
+            {
+                UpdateCodeView();
+            }
+            else
+            {
+                EnsureCanvasWorkbench();
+                NotifyCanvasConversationChanged(true);
+            }
+        }
+
+        private static void RefreshCanvasWorkbenchViewState()
+        {
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                bool canvasActive = _activeWorkbenchPane == WorkbenchPane.Canvas;
+                if (_canvasPane != null)
+                    _canvasPane.Visibility = canvasActive ? Visibility.Visible : Visibility.Collapsed;
+                if (_inspectorPane != null)
+                    _inspectorPane.Visibility = canvasActive ? Visibility.Collapsed : Visibility.Visible;
+                if (_btnCanvasSync != null)
+                    _btnCanvasSync.Visibility = _isCodeVisible && canvasActive ? Visibility.Visible : Visibility.Collapsed;
+                if (_btnToggleViewMode != null)
+                    _btnToggleViewMode.Visibility = _isCodeVisible && !canvasActive ? Visibility.Visible : Visibility.Collapsed;
+
+                ApplyWorkbenchTabStyle(_btnCanvasPaneView, canvasActive);
+                ApplyWorkbenchTabStyle(_btnInspectorPaneView, !canvasActive);
+
+                if (_isCodeVisible && canvasActive)
+                    EnsureCanvasWorkbench();
+            }));
+        }
+
+        private static void ApplyWorkbenchTabStyle(Button button, bool isSelected)
+        {
+            if (button == null) return;
+            button.Background = isSelected
+                ? new SolidColorBrush(Color.FromRgb(43, 49, 58))
+                : Brushes.Transparent;
+            button.BorderBrush = new SolidColorBrush(isSelected
+                ? Color.FromRgb(58, 64, 74)
+                : Color.FromRgb(50, 56, 67));
+            button.Foreground = isSelected
+                ? new SolidColorBrush(Color.FromRgb(229, 231, 235))
+                : new SolidColorBrush(Color.FromRgb(174, 180, 189));
+        }
+
+        private static void SetCanvasStatus(string text, bool isError = false)
+        {
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                if (_txtCanvasStatus != null)
+                {
+                    _txtCanvasStatus.Text = string.IsNullOrWhiteSpace(text) ? "准备加载画布工作台..." : text.Trim();
+                    _txtCanvasStatus.Foreground = isError
+                        ? new SolidColorBrush(Color.FromRgb(255, 189, 189))
+                        : new SolidColorBrush(Color.FromRgb(170, 178, 191));
+                }
+                if (_canvasStatusHost != null)
+                    _canvasStatusHost.Visibility = Visibility.Visible;
+            }));
+        }
+
+        private static void HideCanvasStatus()
+        {
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                if (_canvasStatusHost != null)
+                    _canvasStatusHost.Visibility = Visibility.Collapsed;
+            }));
+        }
+
+        private static async void EnsureCanvasWorkbench()
+        {
+            if (_canvasRuntimeFailed || _canvasRuntimeInitializing || _canvasWebView != null || _canvasSurfaceHost == null)
+                return;
+
+            string entryPath = ResolveCanvasEntrypointPath();
+            if (string.IsNullOrWhiteSpace(entryPath) || !File.Exists(entryPath))
+            {
+                _canvasRuntimeFailed = true;
+                SetCanvasStatus("未找到 Canvas 前端资源，已回退到 Inspector。", true);
+                SetWorkbenchPane(WorkbenchPane.Inspector);
+                return;
+            }
+
+            _canvasRuntimeInitializing = true;
+            SetCanvasStatus("正在初始化画布宿主...");
+            try
+            {
+                var webView = new WebView2
+                {
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    VerticalAlignment = VerticalAlignment.Stretch,
+                    DefaultBackgroundColor = System.Drawing.Color.FromArgb(0x12, 0x16, 0x1C)
+                };
+
+                Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+                {
+                    _canvasSurfaceHost.Children.Insert(0, webView);
+                }));
+
+                _canvasWebView = webView;
+                string userDataFolder = GetCanvasWebViewUserDataFolder();
+                Directory.CreateDirectory(userDataFolder);
+                var environment = await CoreWebView2Environment.CreateAsync(null, userDataFolder);
+                await _canvasWebView.EnsureCoreWebView2Async(environment);
+                _canvasWebView.CoreWebView2.Settings.IsStatusBarEnabled = false;
+                _canvasWebView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
+                _canvasWebView.CoreWebView2.Settings.AreDevToolsEnabled = true;
+                _canvasWebView.CoreWebView2.WebMessageReceived += CanvasWebView_WebMessageReceived;
+                _canvasWebView.CoreWebView2.NavigationStarting += CanvasWebView_NavigationStarting;
+                _canvasWebView.CoreWebView2.SourceChanged += CanvasWebView_SourceChanged;
+                _canvasWebView.CoreWebView2.ProcessFailed += CanvasWebView_ProcessFailed;
+                _canvasWebView.NavigationCompleted += CanvasWebView_NavigationCompleted;
+
+                Uri navigationUri = ConfigureCanvasContentMapping(_canvasWebView.CoreWebView2, entryPath)
+                    ?? new Uri(entryPath, UriKind.Absolute);
+                _canvasWebView.Source = navigationUri;
+            }
+            catch (Exception ex)
+            {
+                _canvasRuntimeFailed = true;
+                AddGhLog.Warn("Canvas WebView init failed: " + ex.Message);
+                SetCanvasStatus("WebView2 初始化失败，已回退到 Inspector。\n" + ex.Message, true);
+                SetWorkbenchPane(WorkbenchPane.Inspector);
+            }
+            finally
+            {
+                _canvasRuntimeInitializing = false;
+            }
+        }
+
+        private static void CanvasWebView_NavigationCompleted(object sender, CoreWebView2NavigationCompletedEventArgs e)
+        {
+            if (!e.IsSuccess)
+            {
+                _canvasRuntimeFailed = true;
+                SetCanvasStatus("画布页面加载失败，已回退到 Inspector。", true);
+                SetWorkbenchPane(WorkbenchPane.Inspector);
+                return;
+            }
+
+            SetCanvasStatus("正在等待画布工作台就绪...");
+        }
+
+        private static void CanvasWebView_NavigationStarting(object sender, CoreWebView2NavigationStartingEventArgs e)
+        {
+            AddGhLog.Debug("Canvas navigation starting: " + e.Uri);
+        }
+
+        private static void CanvasWebView_SourceChanged(object sender, CoreWebView2SourceChangedEventArgs e)
+        {
+            try
+            {
+                AddGhLog.Debug("Canvas source changed: " + _canvasWebView?.Source);
+            }
+            catch { }
+        }
+
+        private static void CanvasWebView_ProcessFailed(object sender, CoreWebView2ProcessFailedEventArgs e)
+        {
+            _canvasRuntimeFailed = true;
+            AddGhLog.Warn("Canvas WebView process failed: " + e.ProcessFailedKind + " " + e.Reason);
+            SetCanvasStatus("Canvas WebView process failed.\n" + e.ProcessFailedKind + " " + e.Reason, true);
+        }
+
+        private static void CanvasWebView_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
+        {
+            try
+            {
+                var root = JObject.Parse(e.WebMessageAsJson);
+                string type = root["type"]?.ToString();
+                var payload = root["payload"] as JObject;
+                if (string.IsNullOrWhiteSpace(type)) return;
+
+                switch (type)
+                {
+                    case "canvas_ready":
+                        _canvasRuntimeReady = true;
+                        HideCanvasStatus();
+                        NotifyCanvasConversationChanged(true);
+                        NotifyCanvasInspectorUpdated();
+                        break;
+                    case "document_snapshot_save":
+                        SaveCanvasConversationSnapshot(GetCurrentCanvasConversationId(), payload?["snapshot"], null);
+                        break;
+                    case "card_meta_patch":
+                        SaveCanvasMetaPatch(GetCurrentCanvasConversationId(), payload);
+                        break;
+                    case "open_inspector_for_source":
+                        SetWorkbenchPane(WorkbenchPane.Inspector);
+                        UpdateCodeView();
+                        break;
+                    case "canvas_error":
+                        AddGhLog.Warn("Canvas web error: " + (payload?["kind"]?.ToString() ?? "error")
+                            + " " + (payload?["message"]?.ToString() ?? "")
+                            + "\n" + (payload?["stack"]?.ToString() ?? ""));
+                        SetCanvasStatus("Canvas web error.\n" + (payload?["message"]?.ToString() ?? ""), true);
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("Canvas web message parse failed: " + ex.Message);
+            }
+        }
+
+        private static void DisposeCanvasWorkbench()
+        {
+            try
+            {
+                if (_canvasWebView?.CoreWebView2 != null)
+                {
+                    _canvasWebView.CoreWebView2.WebMessageReceived -= CanvasWebView_WebMessageReceived;
+                    _canvasWebView.CoreWebView2.NavigationStarting -= CanvasWebView_NavigationStarting;
+                    _canvasWebView.CoreWebView2.SourceChanged -= CanvasWebView_SourceChanged;
+                    _canvasWebView.CoreWebView2.ProcessFailed -= CanvasWebView_ProcessFailed;
+                }
+            }
+            catch { }
+
+            try
+            {
+                if (_canvasWebView != null)
+                    _canvasWebView.NavigationCompleted -= CanvasWebView_NavigationCompleted;
+            }
+            catch { }
+
+            try { _canvasWebView?.Dispose(); }
+            catch { }
+
+            _canvasWebView = null;
+            _canvasRuntimeReady = false;
+            _canvasRuntimeInitializing = false;
+            _canvasRuntimeFailed = false;
+        }
+
+        private static void NotifyCanvasConversationChanged(bool forceBootstrap)
+        {
+            if (_window == null) return;
+
+            if (!_canvasRuntimeReady)
+            {
+                if (_isCodeVisible && _activeWorkbenchPane == WorkbenchPane.Canvas)
+                    EnsureCanvasWorkbench();
+                return;
+            }
+
+            var payload = forceBootstrap
+                ? BuildCanvasBootstrapPayload()
+                : BuildCanvasConversationDeltaPayload();
+
+            PostCanvasMessage(forceBootstrap ? "bootstrap" : "conversation_delta", payload);
+            NotifyCanvasInspectorUpdated();
+        }
+
+        private static void NotifyCanvasInspectorUpdated()
+        {
+            if (!_canvasRuntimeReady) return;
+            PostCanvasMessage("inspector_update", BuildInspectorSnapshot());
+        }
+
+        private static void PostCanvasMessage(string type, JToken payload)
+        {
+            try
+            {
+                if (_canvasWebView?.CoreWebView2 == null) return;
+                var message = new JObject
+                {
+                    ["type"] = type,
+                    ["payload"] = payload ?? new JObject()
+                };
+                _canvasWebView.CoreWebView2.PostWebMessageAsJson(message.ToString(Formatting.None));
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Debug("PostCanvasMessage failed: " + ex.Message);
+            }
+        }
+
+        private static JObject BuildCanvasBootstrapPayload()
+        {
+            string conversationId = GetCurrentCanvasConversationId();
+            return new JObject
+            {
+                ["conversationId"] = conversationId,
+                ["conversationTitle"] = GetCurrentCanvasConversationTitle(),
+                ["messages"] = BuildCanvasMessageItems(),
+                ["toolEvents"] = BuildCanvasToolItems(),
+                ["inspectorSnapshot"] = BuildInspectorSnapshot(),
+                ["canvasSnapshot"] = LoadCanvasConversationEnvelope(conversationId) ?? new JObject()
+            };
+        }
+
+        private static JObject BuildCanvasConversationDeltaPayload()
+        {
+            return new JObject
+            {
+                ["conversationId"] = GetCurrentCanvasConversationId(),
+                ["conversationTitle"] = GetCurrentCanvasConversationTitle(),
+                ["messages"] = BuildCanvasMessageItems(),
+                ["toolEvents"] = BuildCanvasToolItems()
+            };
+        }
+
+        private static JArray BuildCanvasMessageItems()
+        {
+            var result = new JArray();
+            if (_messages == null) return result;
+
+            int messageIndex = 0;
+            int toolFallbackIndex = 0;
+            foreach (var msg in _messages)
+            {
+                string role = ChatMessageHelpers.TryGetRole(msg);
+                if (string.Equals(role, "system", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                JObject messageObj = msg as JObject;
+                string title = role == "user"
+                    ? "User"
+                    : role == "assistant"
+                        ? "Assistant"
+                        : messageObj?["name"]?.ToString() ?? "Tool";
+                string body = ChatMessageHelpers.TryGetPlainTextContent(msg);
+                if (string.IsNullOrWhiteSpace(body))
+                    body = messageObj?["content"]?.ToString() ?? "";
+                string summary = ClampCanvasText(body, 120);
+
+                string sourceRef;
+                if (string.Equals(role, "tool", StringComparison.OrdinalIgnoreCase))
+                {
+                    string callId = messageObj?["tool_call_id"]?.ToString();
+                    sourceRef = "tool:" + (!string.IsNullOrWhiteSpace(callId) ? callId : ("fallback_" + toolFallbackIndex++));
+                }
+                else
+                {
+                    sourceRef = "message:" + messageIndex++;
+                }
+
+                result.Add(new JObject
+                {
+                    ["sourceRef"] = sourceRef,
+                    ["role"] = role ?? "",
+                    ["kind"] = role == "tool" ? "tool_result" : role == "assistant" ? "assistant_message" : "user_message",
+                    ["title"] = title,
+                    ["summary"] = string.IsNullOrWhiteSpace(summary) ? title : summary,
+                    ["body"] = body ?? "",
+                    ["tags"] = new JArray(),
+                    ["collapsed"] = false,
+                    ["pinned"] = false
+                });
+            }
+
+            return result;
+        }
+
+        private static JArray BuildCanvasToolItems()
+        {
+            var result = new JArray();
+            if (_messages == null) return result;
+
+            int fallbackIndex = 0;
+            foreach (var msg in _messages.OfType<JObject>())
+            {
+                string role = msg["role"]?.ToString();
+                if (!string.Equals(role, "tool", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                string content = msg["content"]?.ToString() ?? "";
+                string callId = msg["tool_call_id"]?.ToString();
+                string name = msg["name"]?.ToString() ?? "tool";
+                result.Add(new JObject
+                {
+                    ["sourceRef"] = "tool:" + (!string.IsNullOrWhiteSpace(callId) ? callId : ("fallback_" + fallbackIndex++)),
+                    ["callId"] = callId ?? "",
+                    ["name"] = name,
+                    ["summary"] = ClampCanvasText(content, 120),
+                    ["content"] = content
+                });
+            }
+
+            return result;
+        }
+
+        private static JObject BuildInspectorSnapshot()
+        {
+            bool asPlainComment;
+            string text = BuildInspectorCodeText(_isJsonMode, out asPlainComment);
+            return new JObject
+            {
+                ["mode"] = _isJsonMode ? "json" : "raw",
+                ["text"] = text ?? "",
+                ["asPlainComment"] = asPlainComment,
+                ["canvasIssues"] = _txtCanvasIssues?.Text ?? "",
+                ["generatedAtUtc"] = DateTime.UtcNow.ToString("o")
+            };
+        }
+
+        private static string BuildInspectorCodeText(bool jsonMode, out bool asPlainComment)
+        {
+            asPlainComment = false;
+            if (!jsonMode)
+            {
+                string raw = ExecuteGetGhComponents();
+                try
+                {
+                    var obj = JsonConvert.DeserializeObject(raw);
+                    return JsonConvert.SerializeObject(obj, Formatting.Indented);
+                }
+                catch
+                {
+                    return raw ?? "";
+                }
+            }
+
+            var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+            if (doc == null)
+            {
+                asPlainComment = true;
+                return "// 没有激活的画布";
+            }
+
+            var graph = new JObject();
+            if (DeploymentOptions.IncludeCanvasExportTimestamp)
+                graph["timestamp"] = DateTime.Now.ToString("HH:mm:ss");
+            graph["object_count"] = doc.ObjectCount;
+
+            var components = new JArray();
+            foreach (var obj in doc.Objects)
+            {
+                var compJson = new JObject
+                {
+                    ["name"] = obj.Name,
+                    ["nickname"] = obj.NickName,
+                    ["id"] = GetPublicId(doc, obj),
+                    ["guid"] = obj.InstanceGuid.ToString(),
+                    ["pivot"] = new JObject
+                    {
+                        ["x"] = Math.Round(obj.Attributes.Pivot.X),
+                        ["y"] = Math.Round(obj.Attributes.Pivot.Y)
+                    }
+                };
+
+                AppendSliderStateJson(obj, compJson);
+
+                if (obj is IGH_Component comp)
+                {
+                    var inputs = new JArray();
+                    foreach (var param in comp.Params.Input)
+                    {
+                        var paramJson = new JObject
+                        {
+                            ["name"] = param.Name,
+                            ["nickname"] = param.NickName
+                        };
+                        var sources = new JArray();
+                        foreach (var source in param.Sources)
+                            sources.Add(GetPublicId(doc, source.Attributes.GetTopLevel.DocObject));
+                        paramJson["sources"] = sources;
+                        inputs.Add(paramJson);
+                    }
+                    compJson["inputs"] = inputs;
+
+                    var outputs = new JArray();
+                    foreach (var param in comp.Params.Output)
+                    {
+                        outputs.Add(new JObject
+                        {
+                            ["name"] = param.Name,
+                            ["nickname"] = param.NickName
+                        });
+                    }
+                    compJson["outputs"] = outputs;
+                }
+                else if (obj is IGH_Param param)
+                {
+                    var sources = new JArray();
+                    foreach (var source in param.Sources)
+                        sources.Add(GetPublicId(doc, source.Attributes.GetTopLevel.DocObject));
+                    compJson["sources"] = sources;
+                }
+
+                components.Add(compJson);
+            }
+
+            graph["components"] = components;
+            return graph.ToString(Formatting.Indented);
+        }
+
+        private static string ClampCanvasText(string text, int maxLen)
+        {
+            string s = (text ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
+            if (s.Length <= maxLen) return s;
+            return s.Substring(0, maxLen) + "…";
+        }
+
+        private static string GetCurrentCanvasConversationId()
+        {
+            if (!string.IsNullOrWhiteSpace(_activeHistoryId))
+                return _activeHistoryId;
+            return "draft";
+        }
+
+        private static string GetCurrentCanvasConversationTitle()
+        {
+            var active = FindHistoryConversation(_activeHistoryId);
+            if (active != null && !string.IsNullOrWhiteSpace(active.Title))
+                return active.Title;
+            return "新对话";
+        }
+
+        private static string GetCanvasStateDirectory()
+        {
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ADDGH", "canvas");
+            try { Directory.CreateDirectory(dir); } catch { }
+            return dir;
+        }
+
+        private static string GetCanvasWebViewUserDataFolder()
+        {
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ADDGH", "WebView2", "CanvasWorkbench");
+            try { Directory.CreateDirectory(dir); } catch { }
+            return dir;
+        }
+
+        private static Uri ConfigureCanvasContentMapping(CoreWebView2 core, string entryPath)
+        {
+            if (core == null || string.IsNullOrWhiteSpace(entryPath) || !Path.IsPathRooted(entryPath))
+                return null;
+
+            try
+            {
+                string entryDirectory = Path.GetDirectoryName(entryPath);
+                string canvasRoot = Directory.GetParent(entryDirectory ?? "")?.FullName;
+                if (string.IsNullOrWhiteSpace(canvasRoot) || !Directory.Exists(canvasRoot))
+                    return null;
+
+                string relativePath = entryPath.Substring(canvasRoot.Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                relativePath = relativePath.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
+                if (string.IsNullOrWhiteSpace(relativePath))
+                    return null;
+
+                core.SetVirtualHostNameToFolderMapping(
+                    CanvasVirtualHostName,
+                    canvasRoot,
+                    CoreWebView2HostResourceAccessKind.Allow);
+
+                return new Uri("https://" + CanvasVirtualHostName + "/" + relativePath, UriKind.Absolute);
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Debug("ConfigureCanvasContentMapping failed: " + ex.Message);
+                return null;
+            }
+        }
+
+        private static string GetCanvasConversationStatePath(string conversationId)
+        {
+            string safe = string.IsNullOrWhiteSpace(conversationId) ? "draft" : conversationId.Trim();
+            return Path.Combine(GetCanvasStateDirectory(), safe + ".json");
+        }
+
+        private static JObject LoadCanvasConversationEnvelope(string conversationId)
+        {
+            try
+            {
+                string path = GetCanvasConversationStatePath(conversationId);
+                if (!File.Exists(path)) return null;
+                return JObject.Parse(File.ReadAllText(path, Encoding.UTF8));
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("LoadCanvasConversationEnvelope failed: " + ex.Message);
+                return null;
+            }
+        }
+
+        private static void SaveCanvasConversationSnapshot(string conversationId, JToken snapshot, JToken metaPatches)
+        {
+            try
+            {
+                string path = GetCanvasConversationStatePath(conversationId);
+                JObject root = LoadCanvasConversationEnvelope(conversationId) ?? new JObject();
+                root["schemaVersion"] = "canvas-v1";
+                root["conversationId"] = conversationId;
+                root["updatedAtUtc"] = DateTime.UtcNow.ToString("o");
+                if (snapshot != null)
+                    root["snapshot"] = snapshot;
+                if (metaPatches != null)
+                    root["cardMetaPatches"] = metaPatches;
+                File.WriteAllText(path, root.ToString(Formatting.Indented), Encoding.UTF8);
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("SaveCanvasConversationSnapshot failed: " + ex.Message);
+            }
+        }
+
+        private static void SaveCanvasMetaPatch(string conversationId, JObject patch)
+        {
+            if (patch == null) return;
+            try
+            {
+                JObject root = LoadCanvasConversationEnvelope(conversationId) ?? new JObject();
+                var bucket = root["cardMetaPatches"] as JObject ?? new JObject();
+                string sourceRef = patch["sourceRef"]?.ToString();
+                if (string.IsNullOrWhiteSpace(sourceRef))
+                    sourceRef = patch["cardId"]?.ToString() ?? Guid.NewGuid().ToString("n");
+                bucket[sourceRef] = patch.DeepClone();
+                root["schemaVersion"] = "canvas-v1";
+                root["conversationId"] = conversationId;
+                root["updatedAtUtc"] = DateTime.UtcNow.ToString("o");
+                root["cardMetaPatches"] = bucket;
+                File.WriteAllText(GetCanvasConversationStatePath(conversationId), root.ToString(Formatting.Indented), Encoding.UTF8);
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("SaveCanvasMetaPatch failed: " + ex.Message);
+            }
+        }
+
+        private static void DeleteCanvasConversationState(string conversationId)
+        {
+            try
+            {
+                string path = GetCanvasConversationStatePath(conversationId);
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("DeleteCanvasConversationState failed: " + ex.Message);
+            }
+        }
+
+        private static string ResolveCanvasEntrypointPath()
+        {
+            var candidates = new[]
+            {
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "CanvasWeb", "dist", "index.html"),
+                Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? "", "CanvasWeb", "dist", "index.html")
+            }.Where(p => !string.IsNullOrWhiteSpace(p)).Distinct().ToList();
+
+            foreach (string root in GetSearchAncestors(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)))
+            {
+                candidates.Add(Path.Combine(root, "CanvasWeb", "dist", "index.html"));
+            }
+
+            return candidates.FirstOrDefault(File.Exists);
+        }
+
+        private static IEnumerable<string> GetSearchAncestors(string start)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string current = start;
+            while (!string.IsNullOrWhiteSpace(current))
+            {
+                if (seen.Add(current))
+                    yield return current;
+                try
+                {
+                    string parent = Directory.GetParent(current)?.FullName;
+                    if (string.Equals(parent, current, StringComparison.OrdinalIgnoreCase))
+                        break;
+                    current = parent;
+                }
+                catch
+                {
+                    break;
+                }
+            }
+        }
+    }
+}

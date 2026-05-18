@@ -1,6 +1,10 @@
 bin/
 obj/
 dist/
+CanvasWeb/node_modules/
+CanvasWeb/.pnpm-store/
+CanvasWeb/runtime/
+.tools/
 .codex-tools/
 *.suo
 *.user

@@ -64,6 +64,7 @@ namespace ADDGH
         private static ComboBox _comboVisionProvider;
         private static TextBox _txtApiBaseUrl;
         private static TextBox _txtModel;
+        private static TextBox _txtProxyUrl;
         private static bool _isLoadingProviderSettings = false;
         private static System.Threading.CancellationTokenSource _cts;
         private static List<AttachmentItem> _pendingAttachments = new List<AttachmentItem>();
@@ -144,17 +145,13 @@ namespace ADDGH
         private const string SYSTEM_PROMPT = @"你是 GH 参数化专家。
 
 【建模逻辑】
-1. 先对齐用户需求与约束，再落到具体步骤：数据流、关键电池、风险点；再动手改画布。
-2. 风险等级：高风险操作需先用文字说明影响范围和关键风险；明确用户意图后再执行。
-   - 🔴 高风险：删除 8 个以上电池、重构主干逻辑、连接可能引发长时间计算的组件（如复杂网格/物理模拟）。
-   - 🟡 中风险：添加 5-8 个电池的功能分支、修改密集型交叉连线、替换现有逻辑块。
-   - 🟢 低风险（直接操作）：修改 Slider/Panel 数值、添加单个辅助电池、电池对齐或整理分组。
-3. 命名：Number Slider 必须设 label；普通电池严禁改 label。
-4. 最终回复用结构化 Markdown（短标题、列表、重点加粗）；代码/JSON/表达式/关键参数放在 ``` 代码块中，勿把大段技术内容堆在普通段落里。
-5. 参考画布（reference）：先完成建模思路与 GH 逻辑规划，再查阅 skills/reference_index.md；仅当条目与**已确定方案**明显相关时才调用 read_reference_json 读 JSON 做对照或局部复用，勿「先读参考再空想」。
-6. 完成建模或修改后必须检查关键输出是否正确，不能以“没有报错”作为完成标准；目标电池可能仍输出 `Null`、空列表、空树或明显不符合预期的数据。
-7. 检查时优先围绕目标结果相关的关键电池做验证：必要时先触发 recompute，再读取组件状态、预览信息或关键输出；如果仅靠现有信息无法确认，允许在目标输出端临时或直接连接 `Panel` 检查实际输出内容。
-8. 若检查发现输出为 `Null`、空数据、类型不对、数据结构不对或结果与用户目标不一致，不能宣称完成；应继续定位并修正，再次验证后再结束。
+1. 先对齐用户需求与约束，再落到具体步骤：数据流、关键电池；再动手改画布。
+2. 命名：Number Slider 必须设 label；普通电池严禁改 label。
+3. 最终回复用结构化 Markdown（短标题、列表、重点加粗）；代码/JSON/表达式/关键参数放在 ``` 代码块中，勿把大段技术内容堆在普通段落里。
+4. 参考画布（reference）：先完成建模思路与 GH 逻辑规划，再查阅 skills/reference_index.md；仅当条目与**已确定方案**明显相关时才调用 read_reference_json 读 JSON 做对照或局部复用，勿「先读参考再空想」。
+5. 完成建模或修改后必须检查关键输出是否正确，不能以“没有报错”作为完成标准；目标电池可能仍输出 `Null`、空列表、空树或明显不符合预期的数据。
+6. 检查时优先围绕目标结果相关的关键电池做验证：必要时先触发 recompute，再读取组件状态、预览信息或关键输出；如果仅靠现有信息无法确认，允许在目标输出端临时或直接连接 `Panel` 检查实际输出内容。
+7. 若检查发现输出为 `Null`、空数据、类型不对、数据结构不对或结果与用户目标不一致，不能宣称完成；应继续定位并修正，再次验证后再结束。
 
 【多模态图片任务路由】
 1. 你不是视觉模型，也看不到原图；当用户上传图片时，只能依据视觉预处理模型给出的图片分析、用户原始文字和当前上下文做判断。
@@ -167,7 +164,7 @@ namespace ADDGH
 8. 视觉报告里的相关组件、输出或问题区域只是线索，不是最终事实；先核实再修改。
 9. 文字与图片分析冲突时优先遵循用户文字；无法判断时先澄清。
 10. 收到结构化视觉报告后，把“视觉事实”当高优先级参考，把“关联画布定位”“执行模型下一步检查点”“给执行模型的任务摘要”当待核实线索；优先执行检查动作。
-11. 对“按参考图修改”“与图片保持一致”“看起来不对但未报错”这类任务，不要只依赖无报错和非 Null 数据；完成数据级检查后仍要说明剩余视觉风险。
+11. 对“按参考图修改”“与图片保持一致”“看起来不对但未报错”这类任务，不要只依赖无报错和非 Null 数据；完成数据级检查后仍要说明剩余视觉偏差或不确定性。
 12. 视觉报告与工具核实冲突时，以工具结果为准，并简短说明依据。
 13. 只有当当前任务实际包含用户提供的图片输入时，才允许调用 `capture_rhino_viewport` 做视觉一致性核验、展示结果或回送视觉模型复核；无图任务禁止主动触发截图式视觉检查。
 13a. 截图前先整理预览：应优先调用 `prepare_visual_review_preview`，把最终要检查的输出连接到一个干净的 Geometry 预览电池上；该工具会硬编码关闭所有 C# Script 预览。不要依赖脚本过程预览做视觉核验。无图任务不要调用它。
@@ -183,13 +180,14 @@ namespace ADDGH
 4. **脚本与 catalog（克制）**：get_gh_components 可读脚本在 **script_bodies**（可能截断）；内置 C#/VB Script 用 **gh_native_script_editor**（**read_source**＝与 script_bodies 同源反射读取，**set_source_commit**＝只替换首个可编辑块，勿整文件顶替模板）；**Rhino GhPython / Python 3 Script 等可执行源码在实例的 `Text` 属性，不是 `Description`，勿把代码写进 Description。** 其它用 **set_gh_component_value**（可加 **property**，优先 `Text`）；未执行可 **recompute_gh_canvas**。仅必要时 search_gh_component_catalog；日常用 get_gh_components、search_component_library、create_component_graph。
 5. 每次调用 function 须在参数中填 **summary**（一句中文说明本次在做什么，勿写函数名或 API）；可选 **summary_detail**（卡片右侧短语）。**例外**：show_reference_options 仅需 options（5 个字符串数组），可不填 summary。
 6. 优先批量、直接行动。
+7. 不要把“我先检查一下画布”“我先读取当前状态”这类工具前过渡句写进 reasoning_content。只有在确实进行了建模判断、方案取舍、错误定位或结果核实时，才输出可见思考；若只是准备调工具，reasoning_content 留空。
 
 【对用户表达】
-对用户表达要直接说明改动内容、影响范围和需要确认的风险点，避免暴露内部函数名或 API 名。";
+对用户表达要直接说明改动内容、影响范围和需要确认的信息，避免暴露内部函数名或 API 名。";
 
         private static string BuildSystemPrompt()
         {
-            string prompt = SYSTEM_PROMPT + BuildModePrompt(_layoutMode) + BuildAgentModePrompt(_agentMode);
+            string prompt = SYSTEM_PROMPT + BuildModePrompt(_layoutMode);
             prompt += GetModeSystemSkillPrompt();
             if (_agentMode == AgentMode.Create && _layoutMode == LayoutMode.CSharpFirst)
                 prompt += BuildCSharpDedicatedToolPrompt();
@@ -266,34 +264,6 @@ namespace ADDGH
 2. Therefore, write the body as if those input names were already strongly typed. Do not spend extra tokens repeatedly converting object inputs unless you need custom validation beyond the tool's default aliasing.
 3. If an input has no recognized type hint, treat it conservatively and add explicit handling only where necessary.
 4. After writing a C# body, these tools automatically trigger a short delayed two-pass recompute. Do not routinely spend an extra tool call on recompute_gh_canvas unless the output still fails to update or verify.";
-        }
-
-        private static string BuildAgentModePrompt(AgentMode mode)
-        {
-            if (mode == AgentMode.Plan)
-            {
-                string csharpPlanRule = _layoutMode == LayoutMode.CSharpFirst
-                    ? @"
-6. In C# priority plus Plan mode, every implementation step must keep core modeling logic inside one or more C# Script components. Do not propose ordinary Grasshopper component chains for geometry, math, data-tree, transform, curve, surface, brep, mesh, or list-processing logic. Non-script components are limited to Params or Display helpers for input, output, preview, inspection, and debugging.
-7. Prefer plans where each step can be completed by creating one coherent C# Script component plus minimal Params or Display helpers. If the task is simple, do not artificially split it into multiple script steps. If the task is complex, split only along clear responsibility boundaries."
-                    : "";
-
-                return @"
-
-[Current execution mode: Plan]
-1. Use read-only tools only. Never call any tool that changes the Grasshopper canvas, scripts, references, skills, preview state, or saved assets.
-2. First verify the current state, then produce an implementation plan. Do not claim that the canvas has already been changed.
-3. When the plan is clear enough, call `show_plan_steps` to render one implementation plan card. Follow the schema exactly: provide top-level `schema_version`, `plan_title`, `steps`, and `execute_prompt`; optionally provide top-level `execute_label`. Each step must provide `step_id`, `title`, and `detail`. Do not create per-step execute buttons.
-4. `execute_prompt` must be a complete Chinese instruction that can be sent directly after switching to Create mode, and it should tell the agent to execute the full plan continuously rather than stopping after one step.
-5. If information is still missing, continue using read-only tools or ask one short clarification question. Do not invent canvas state or skip verification."
-                    + csharpPlanRule;
-            }
-
-            return @"
-
-[Current execution mode: Create]
-1. After verification, you may directly use the allowed tools to modify the Grasshopper canvas and complete the task.
-2. If the user sends `继续`, continue from the current context. Do not depend on any extra continue button.";
         }
 
         private static string BuildModePrompt(LayoutMode mode)
@@ -428,6 +398,23 @@ namespace ADDGH
             ReplaceCurrentSystemPrompt();
         }
 
+        private static void ResetTransientConversationState()
+        {
+            _pendingAttachments.Clear();
+            _queuedImmediateSendVisionSourceInputOverride = null;
+            _queuedImmediateSendDisplayTextOverride = null;
+            _pendingFinalVisualReview = false;
+            _finalVisualReviewCompleted = false;
+            _finalVisualReviewAttempted = false;
+            _currentTurnHadToolExecution = false;
+            _hasActiveVisionInputContext = false;
+            _finalVisualReviewSourceInput = null;
+            _finalVisualReviewSourceImages = new List<AttachmentItem>();
+            _visualReviewPreviewComponentId = null;
+            _visualReviewTargetSourceId = null;
+            _visualReviewTargetOutputIndex = 0;
+        }
+
         private static void UpdateLayoutModeButtons()
         {
             string ModeLabel(LayoutMode mode)
@@ -500,9 +487,8 @@ namespace ADDGH
         private static string _finalVisualReviewSourceInput = null;
         private static List<AttachmentItem> _finalVisualReviewSourceImages = new List<AttachmentItem>();
         private static string _queuedImmediateSendVisionSourceInputOverride = null;
+        private static string _queuedImmediateSendDisplayTextOverride = null;
         private static string _visualReviewPreviewComponentId = null;
-
-        private static readonly HttpClient _httpClient = new HttpClient() { Timeout = TimeSpan.FromMinutes(5) };
 
         static ChatWindow()
         {
@@ -554,6 +540,7 @@ namespace ADDGH
             catch (Exception ex) { AddGhLog.Warn("ShutdownPlugin timer: " + ex.Message); }
 
             TeardownGrasshopperCodeSurfaceHooks();
+            DisposeCanvasWorkbench();
 
             _pendingAttachments.Clear();
             _thinkingBubble = null;
@@ -1114,6 +1101,8 @@ namespace ADDGH
                 {
                     SyncCodeIssuesStripHeightToInputArea();
                     ScheduleCodeSurfaceRefreshFromCanvas();
+                    RefreshCanvasWorkbenchViewState();
+                    NotifyCanvasConversationChanged(true);
                 }));
                 return;
             }
@@ -1619,18 +1608,63 @@ namespace ADDGH
                 <Border Grid.Row=""1"" Grid.Column=""2"" Grid.RowSpan=""2"" x:Name=""CodeViewBorder"" Background=""#141414"" CornerRadius=""0"" BorderBrush=""#2A2A2A"" BorderThickness=""1,0,0,0"">
                     <Grid>
                         <Grid.RowDefinitions>
-                            <RowDefinition Height=""*""/>
                             <RowDefinition Height=""Auto""/>
+                            <RowDefinition Height=""*""/>
                         </Grid.RowDefinitions>
-                        <Border Grid.Row=""0"" Margin=""15,10,15,0"" Background=""Transparent""><RichTextBox x:Name=""RichCodeView"" Background=""Transparent"" Foreground=""#B8B8B8"" BorderThickness=""0"" FontSize=""12"" FontFamily=""Consolas, Monaco, Courier New"" IsReadOnly=""True"" IsDocumentEnabled=""True"" VerticalScrollBarVisibility=""Auto"" HorizontalScrollBarVisibility=""Disabled"" CaretBrush=""#888"" Padding=""0""/></Border>
-                        <Border Grid.Row=""1"" x:Name=""CodeCanvasIssuesHost"" Background=""#1E1E1E"" CornerRadius=""0"" BorderBrush=""#2A2A2A"" BorderThickness=""0,1,0,0"" MinHeight=""120""><DockPanel Margin=""15,10,15,12"" LastChildFill=""True""><TextBlock DockPanel.Dock=""Top"" Text=""画布诊断"" Foreground=""#888"" FontSize=""11"" FontWeight=""SemiBold"" Margin=""0,0,0,8""/><ScrollViewer VerticalScrollBarVisibility=""Auto"" HorizontalScrollBarVisibility=""Disabled""><TextBox x:Name=""TxtCanvasIssues"" IsReadOnly=""True"" TextWrapping=""Wrap"" AcceptsReturn=""True"" Background=""Transparent"" Foreground=""#C8C8C8"" BorderThickness=""0"" FontSize=""12"" Padding=""0"" CaretBrush=""#888""/></ScrollViewer></DockPanel></Border>
+
+                        <Border Grid.Row=""0"" Background=""#171A1F"" BorderBrush=""#232830"" BorderThickness=""0,0,0,1"" Padding=""14,10,14,10"">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width=""*""/>
+                                    <ColumnDefinition Width=""Auto""/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Orientation=""Horizontal"" VerticalAlignment=""Center"">
+                                    <TextBlock Text=""WORKBENCH"" Foreground=""#E5E7EB"" FontSize=""12"" FontWeight=""SemiBold"" VerticalAlignment=""Center""/>
+                                    <Button x:Name=""BtnCanvasPaneView"" Content=""Canvas"" Margin=""12,0,0,0"" Padding=""10,4"" Foreground=""#E5E7EB"" Background=""#2B313A"" BorderBrush=""#3A404A"" BorderThickness=""1"" Cursor=""Hand"">
+                                        <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""7""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
+                                    </Button>
+                                    <Button x:Name=""BtnInspectorPaneView"" Content=""Inspector"" Margin=""8,0,0,0"" Padding=""10,4"" Foreground=""#AEB4BD"" Background=""Transparent"" BorderBrush=""#323843"" BorderThickness=""1"" Cursor=""Hand"">
+                                        <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""7""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
+                                    </Button>
+                                </StackPanel>
+                                <StackPanel Grid.Column=""1"" Orientation=""Horizontal"" VerticalAlignment=""Center"">
+                                    <Button x:Name=""BtnCanvasSync"" Content=""Sync"" Foreground=""#D0D4DB"" Background=""Transparent"" BorderBrush=""#323843"" BorderThickness=""1"" FontSize=""10"" Padding=""8,4"" Cursor=""Hand"" Margin=""0,0,8,0"">
+                                        <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""7""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
+                                    </Button>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <Grid Grid.Row=""1"">
+                            <Grid x:Name=""CanvasPane"" Background=""#141414"">
+                                <Border Margin=""15,12,15,15"" Background=""#12161C"" BorderBrush=""#2A2F38"" BorderThickness=""1"" CornerRadius=""12"">
+                                    <Grid x:Name=""CanvasSurfaceHost"">
+                                        <Border x:Name=""CanvasStatusHost"" Background=""Transparent"" Padding=""22"">
+                                            <StackPanel VerticalAlignment=""Center"" HorizontalAlignment=""Center"" Width=""280"">
+                                                <TextBlock Text=""Infinite Canvas"" Foreground=""#ECEFF4"" FontSize=""15"" FontWeight=""SemiBold"" HorizontalAlignment=""Center"" Margin=""0,0,0,8""/>
+                                                <TextBlock x:Name=""TxtCanvasStatus"" Text=""准备加载画布工作台..."" Foreground=""#AAB2BF"" FontSize=""12"" TextAlignment=""Center"" TextWrapping=""Wrap""/>
+                                            </StackPanel>
+                                        </Border>
+                                    </Grid>
+                                </Border>
+                            </Grid>
+
+                            <Grid x:Name=""InspectorPane"" Background=""#141414"" Visibility=""Collapsed"">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height=""*""/>
+                                    <RowDefinition Height=""Auto""/>
+                                </Grid.RowDefinitions>
+                                <Border Grid.Row=""0"" Margin=""15,10,15,0"" Background=""Transparent""><RichTextBox x:Name=""RichCodeView"" Background=""Transparent"" Foreground=""#B8B8B8"" BorderThickness=""0"" FontSize=""12"" FontFamily=""Consolas, Monaco, Courier New"" IsReadOnly=""True"" IsDocumentEnabled=""True"" VerticalScrollBarVisibility=""Auto"" HorizontalScrollBarVisibility=""Disabled"" CaretBrush=""#888"" Padding=""0""/></Border>
+                                <Border Grid.Row=""1"" x:Name=""CodeCanvasIssuesHost"" Background=""#1E1E1E"" CornerRadius=""0"" BorderBrush=""#2A2A2A"" BorderThickness=""0,1,0,0"" MinHeight=""120""><DockPanel Margin=""15,10,15,12"" LastChildFill=""True""><TextBlock DockPanel.Dock=""Top"" Text=""画布诊断"" Foreground=""#888"" FontSize=""11"" FontWeight=""SemiBold"" Margin=""0,0,0,8""/><ScrollViewer VerticalScrollBarVisibility=""Auto"" HorizontalScrollBarVisibility=""Disabled""><TextBox x:Name=""TxtCanvasIssues"" IsReadOnly=""True"" TextWrapping=""Wrap"" AcceptsReturn=""True"" Background=""Transparent"" Foreground=""#C8C8C8"" BorderThickness=""0"" FontSize=""12"" Padding=""0"" CaretBrush=""#888""/></ScrollViewer></DockPanel></Border>
+                            </Grid>
+                        </Grid>
                     </Grid>
                 </Border>
         </Grid> <!-- End MainLayout Grid -->
 
     <!-- 配置悬浮层 -->
             <Grid x:Name=""SettingsOverlay"" Grid.Column=""0"" Panel.ZIndex=""20"" Margin=""0"" Background=""#A5000000"" Visibility=""Collapsed"">
-            <Border Background=""#1E1E1E"" CornerRadius=""12"" Width=""380"" Height=""590"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"" Padding=""20"">
+            <Border Background=""#1E1E1E"" CornerRadius=""12"" Width=""380"" Height=""650"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"" Padding=""20"">
                 <StackPanel>
                     <TextBlock Text=""配置 API"" Foreground=""White"" FontSize=""16"" FontWeight=""SemiBold"" Margin=""0,0,0,15""/>
 
@@ -1654,6 +1688,12 @@ namespace ADDGH
                     <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
                         <TextBox x:Name=""TxtModel"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
                     </Border>
+
+                    <TextBlock Text=""HTTPS Proxy (可选)"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                    <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,4"">
+                        <TextBox x:Name=""TxtProxyUrl"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White"" ToolTip=""留空时自动尝试 ADDGH_HTTPS_PROXY / HTTPS_PROXY / HTTP_PROXY 和系统代理""/>
+                    </Border>
+                    <TextBlock Text=""留空时自动尝试环境变量和系统代理"" Foreground=""#777777"" FontSize=""11"" Margin=""0,0,0,10""/>
 
                     <TextBlock Text=""电池库存储路径"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
                     <Grid Margin=""0,0,0,20"">
@@ -1828,6 +1868,7 @@ namespace ADDGH
             if (_richCodeView != null)
                 _richCodeView.SizeChanged += (s, ev) => SyncFlowDocumentPageWidthToViewport(_richCodeView);
             _btnToggleViewMode = (Button)_window.FindName("BtnToggleViewMode");
+            InitializeCanvasWorkbenchBindings();
             _historyCol = (ColumnDefinition)_window.FindName("HistoryCol");
             _chatCol = (ColumnDefinition)_window.FindName("ChatCol");
             _codeCol = (ColumnDefinition)_window.FindName("CodeCol");
@@ -1875,6 +1916,7 @@ namespace ADDGH
                     StartGrasshopperCodeSurfaceHooks();
                     SyncCodeIssuesStripHeightToInputArea();
                     UpdateCodeView();
+                    RefreshCanvasWorkbenchViewState();
                 } else {
                     if (_btnToggleViewMode != null) _btnToggleViewMode.Visibility = Visibility.Collapsed;
                     UpdateToolbarDividerVisibility();
@@ -1908,6 +1950,7 @@ namespace ADDGH
                 UpdateChatBottomInset();
                 StartGrasshopperCodeSurfaceHooks();
                 SyncCodeIssuesStripHeightToInputArea();
+                RefreshCanvasWorkbenchViewState();
             };
 
             if (_btnToggleViewMode != null) {
@@ -1925,6 +1968,7 @@ namespace ADDGH
             _comboVisionProvider = (ComboBox)_window.FindName("ComboVisionProvider");
             _txtApiBaseUrl = (TextBox)_window.FindName("TxtApiBaseUrl");
             _txtModel = (TextBox)_window.FindName("TxtModel");
+            _txtProxyUrl = (TextBox)_window.FindName("TxtProxyUrl");
             _attachmentPreviewPanel = (WrapPanel)_window.FindName("AttachmentPreviewPanel");
             var txtLibraryPath = (TextBox)_window.FindName("TxtLibraryPath");
             PopulateProviderCombo();
@@ -2026,14 +2070,18 @@ namespace ADDGH
             if (btnNewChat != null) {
             btnNewChat.Click += (s, e) => {
                 _activeHistoryId = null;
+                ResetTransientConversationState();
                 _messages.Clear();
                 _messages.AddRange(BuildInitialSystemMessages());
                     if (_chatPanel != null) _chatPanel.Children.Clear();
                     _cachedCanvasState = null;
                     _canvasChanged = true;
                 if (_txtInput != null) _txtInput.Clear();
+                RefreshAttachmentPreview();
+                if (_btnClearImage != null) _btnClearImage.Visibility = Visibility.Collapsed;
                 UpdateEmptyChatLayout(true);
                 RefreshContextMeter();
+                NotifyCanvasConversationChanged(true);
                 if (_isHistorySidebarVisible) RefreshHistorySidebar();
             };
             }
@@ -2849,12 +2897,16 @@ namespace ADDGH
             string input = _txtInput.Text.Trim();
             var attachmentsToSend = _pendingAttachments.ToList();
             if (string.IsNullOrEmpty(input) && attachmentsToSend.Count == 0) return;
+            string displayInput = string.IsNullOrWhiteSpace(_queuedImmediateSendDisplayTextOverride)
+                ? input
+                : _queuedImmediateSendDisplayTextOverride.Trim();
             _thinkingStatusStep = 0;
             bool hasImageAttachments = attachmentsToSend.Any(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64));
             ResetVisualWorkflowState(input, attachmentsToSend);
             if (hasImageAttachments && !string.IsNullOrWhiteSpace(_queuedImmediateSendVisionSourceInputOverride))
                 _finalVisualReviewSourceInput = _queuedImmediateSendVisionSourceInputOverride;
             _queuedImmediateSendVisionSourceInputOverride = null;
+            _queuedImmediateSendDisplayTextOverride = null;
 
             _isGenerating = true;
             ApplySendButtonGeneratingState();
@@ -2871,15 +2923,15 @@ namespace ADDGH
                     var contentArr = BuildUserMessageContent(input, attachmentsToSend);
                     _messages.Add(new { role = "user", content = contentArr });
                 }
-                AppendUserMessageWithAttachments(input, attachmentsToSend);
+                AppendUserMessageWithAttachments(displayInput, attachmentsToSend);
             } else {
                 _messages.Add(new { role = "user", content = input });
-                AppendBubble(input, true);
+                AppendBubble(displayInput, true);
             }
 
-            SyncActiveHistoryConversation(string.IsNullOrWhiteSpace(input)
+            SyncActiveHistoryConversation(string.IsNullOrWhiteSpace(displayInput)
                 ? (attachmentsToSend.FirstOrDefault()?.FileName ?? "附件对话")
-                : input);
+                : displayInput);
 
             EnforceChatHistoryLimit();
 
@@ -2912,7 +2964,7 @@ namespace ADDGH
             }
         }
 
-        private static void QueuePromptForImmediateSend(string prompt, List<AttachmentItem> carryoverAttachments = null, string visionSourceInputOverride = null)
+        private static void QueuePromptForImmediateSend(string prompt, List<AttachmentItem> carryoverAttachments = null, string visionSourceInputOverride = null, string displayTextOverride = null)
         {
             string text = (prompt ?? "").Trim();
             if (string.IsNullOrWhiteSpace(text) || _txtInput == null || _isGenerating) return;
@@ -2926,6 +2978,9 @@ namespace ADDGH
             _queuedImmediateSendVisionSourceInputOverride = string.IsNullOrWhiteSpace(visionSourceInputOverride)
                 ? null
                 : visionSourceInputOverride.Trim();
+            _queuedImmediateSendDisplayTextOverride = string.IsNullOrWhiteSpace(displayTextOverride)
+                ? null
+                : displayTextOverride.Trim();
             _txtInput.Text = text;
             BtnSend_Click(null, null);
         }
@@ -3095,6 +3150,7 @@ namespace ADDGH
                 .ToList();
 
             SaveChatHistoryStore();
+            NotifyCanvasConversationChanged(false);
             if (_isHistorySidebarVisible) RefreshHistorySidebar();
         }
 
@@ -3119,6 +3175,7 @@ namespace ADDGH
                 if (_txtInput != null) _txtInput.Text = "";
                 RefreshContextMeter();
                 UpdateHistorySidebarSelection();
+                NotifyCanvasConversationChanged(true);
             }
             finally
             {
@@ -3147,6 +3204,8 @@ namespace ADDGH
             }
 
             SaveChatHistoryStore();
+            DeleteCanvasConversationState(conversationId);
+            NotifyCanvasConversationChanged(true);
             RefreshHistorySidebar();
         }
 
@@ -3717,7 +3776,7 @@ namespace ADDGH
                 }
 
                 await _window.Dispatcher.InvokeAsync(() => {
-                    if (!string.IsNullOrEmpty(fullReasoning))
+                    if (ChatMessageHelpers.ShouldDisplayReasoningBubble(fullReasoning, fullContent, fullToolCalls))
                     {
                         AppendCollapsibleBubble(fullReasoning, "已思考 " + Math.Round(durationSeconds, 1) + "s", "💭");
                     }
