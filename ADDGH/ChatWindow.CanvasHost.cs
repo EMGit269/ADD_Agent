@@ -137,7 +137,7 @@ namespace ADDGH
 
         private static async void EnsureCanvasWorkbench()
         {
-            if (_canvasRuntimeFailed || _canvasRuntimeInitializing || _canvasWebView != null || _canvasSurfaceHost == null)
+            if (_canvasRuntimeFailed || _canvasRuntimeInitializing || _canvasSurfaceHost == null)
                 return;
 
             string entryPath = ResolveCanvasEntrypointPath();
@@ -146,6 +146,12 @@ namespace ADDGH
                 _canvasRuntimeFailed = true;
                 SetCanvasStatus("未找到 Canvas 前端资源，已回退到 Inspector。", true);
                 SetWorkbenchPane(WorkbenchPane.Inspector);
+                return;
+            }
+
+            if (_canvasWebView != null)
+            {
+                ReloadCanvasWorkbenchIfOutdated(entryPath);
                 return;
             }
 
@@ -193,6 +199,30 @@ namespace ADDGH
             finally
             {
                 _canvasRuntimeInitializing = false;
+            }
+        }
+
+        private static void ReloadCanvasWorkbenchIfOutdated(string entryPath)
+        {
+            try
+            {
+                if (_canvasWebView?.CoreWebView2 == null || string.IsNullOrWhiteSpace(entryPath) || !File.Exists(entryPath))
+                    return;
+
+                Uri navigationUri = ConfigureCanvasContentMapping(_canvasWebView.CoreWebView2, entryPath)
+                    ?? new Uri(entryPath, UriKind.Absolute);
+                string current = _canvasWebView.Source?.ToString() ?? "";
+                string target = navigationUri.ToString();
+                if (string.Equals(current, target, StringComparison.OrdinalIgnoreCase))
+                    return;
+
+                _canvasRuntimeReady = false;
+                SetCanvasStatus("正在重新加载画布工作台...");
+                _canvasWebView.Source = navigationUri;
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Debug("ReloadCanvasWorkbenchIfOutdated failed: " + ex.Message);
             }
         }
 

@@ -514,6 +514,9 @@ export default function App() {
 function syncCardsIntoEditor(editor: any, messages: CanvasMessageItem[], metaBySourceRef: Record<string, any>) {
   if (!editor) return
 
+  const createShapes: any[] = []
+  const updateShapes: any[] = []
+
   messages.forEach((item, index) => {
     const existing = getShapeBySourceRef(editor, item.sourceRef)
     const userMeta = metaBySourceRef[item.sourceRef] ?? {}
@@ -536,32 +539,30 @@ function syncCardsIntoEditor(editor: any, messages: CanvasMessageItem[], metaByS
     const h = typeof userMeta.h === 'number' ? userMeta.h : (mergedMeta.collapsed ? 96 : 180)
 
     if (!existing) {
-      editor.createShapes?.([
-        {
-          id: `shape:${slugify(item.sourceRef)}`,
-          type: 'geo',
-          x,
-          y,
-          props: {
-            geo: 'rectangle',
-            w,
-            h,
-            richText: composeCardRichText(mergedMeta),
-            color: shapeColor(mergedMeta.role, mergedMeta.kind),
-            labelColor: 'black',
-            fill: 'semi',
-            dash: 'draw',
-            size: 's',
-            align: 'start',
-            verticalAlign: 'start',
-            font: 'draw',
-            url: '',
-            growY: 0,
-            scale: 1,
-          },
-          meta: mergedMeta,
+      createShapes.push({
+        id: `shape:${slugify(item.sourceRef)}`,
+        type: 'geo',
+        x,
+        y,
+        props: {
+          geo: 'rectangle',
+          w,
+          h,
+          richText: composeCardRichText(mergedMeta),
+          color: shapeColor(mergedMeta.role, mergedMeta.kind),
+          labelColor: 'black',
+          fill: 'semi',
+          dash: 'draw',
+          size: 's',
+          align: 'start',
+          verticalAlign: 'start',
+          font: 'draw',
+          url: '',
+          growY: 0,
+          scale: 1,
         },
-      ])
+        meta: mergedMeta,
+      })
       return
     }
 
@@ -574,20 +575,29 @@ function syncCardsIntoEditor(editor: any, messages: CanvasMessageItem[], metaByS
     }
 
     const { text: _legacyText, ...existingProps } = existing.props ?? {}
-    editor.updateShapes?.([
-      {
-        id: existing.id,
-        type: existing.type,
-        props: {
-          ...existingProps,
-          h,
-          richText: composeCardRichText(mergedMeta),
-          color: shapeColor(mergedMeta.role, mergedMeta.kind),
-        },
-        meta: mergedMeta,
+    updateShapes.push({
+      id: existing.id,
+      type: existing.type,
+      props: {
+        ...existingProps,
+        h,
+        richText: composeCardRichText(mergedMeta),
+        color: shapeColor(mergedMeta.role, mergedMeta.kind),
       },
-    ])
+      meta: mergedMeta,
+    })
   })
+
+  const flushChanges = () => {
+    if (createShapes.length) editor.createShapes?.(createShapes)
+    if (updateShapes.length) editor.updateShapes?.(updateShapes)
+  }
+
+  if (typeof editor.batch === 'function') {
+    editor.batch(flushChanges)
+  } else {
+    flushChanges()
+  }
 }
 
 function composeCardRichText(meta: any) {
