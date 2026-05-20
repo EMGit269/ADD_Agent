@@ -3073,15 +3073,18 @@ namespace ADDGH
             }
 
             if (attachmentsToSend.Count > 0) {
-                if (!hasImageAttachments)
-                {
-                    var contentArr = BuildUserMessageContent(input, attachmentsToSend);
-                    _messages.Add(new { role = "user", content = contentArr });
-                }
+                bool includeImagesInPrimaryMessage = ShouldIncludeImagesInPrimaryModelMessage(_activeImageIntentRoute);
+                string imageContextNote = includeImagesInPrimaryMessage
+                    ? null
+                    : BuildPrimaryModelImageContextNote(_activeImageIntentRoute, attachmentsToSend);
+                var contentArr = BuildUserMessageContent(input, attachmentsToSend, includeImagesInPrimaryMessage, imageContextNote);
+                _messages.Add(new { role = "user", content = contentArr });
                 AppendUserMessageWithAttachments(displayInput, attachmentsToSend);
+                SavePromptAndInputImagesToCanvasSnapshot(displayInput, attachmentsToSend);
             } else {
                 _messages.Add(new { role = "user", content = input });
                 AppendBubble(displayInput, true);
+                SavePromptAndInputImagesToCanvasSnapshot(displayInput, attachmentsToSend);
             }
 
             SyncActiveHistoryConversation(string.IsNullOrWhiteSpace(displayInput)
@@ -3165,7 +3168,8 @@ namespace ADDGH
             bool hasModelingIntent = ContainsAny(text,
                 "grasshopper", "gh ", " gh", "建模", "参数化", "电池", "搭定义", "定义", "还原几何", "节点网络", "画布");
             bool hasImageCreationIntent = ContainsAny(text,
-                "生成图片", "生成一张", "画一张", "出图", "渲染", "海报", "插画", "效果图", "改图", "换风格", "去背景", "替换", "重绘", "图生图", "文生图");
+                "生成图片", "生成一张", "帮我生成", "画一张", "出图", "渲染", "海报", "插画", "效果图", "改图", "换风格", "去背景", "替换", "重绘", "图生图", "文生图",
+                "按这张图", "按图生成", "参考这张图", "参考图生成", "照这张图", "基于这张图", "用这张图", "拿这张图", "同款", "同样风格", "参考风格", "保留构图");
             bool hasGeneralVisionIntent = ContainsAny(text,
                 "解释", "说明", "分析", "识别", "哪里有问题", "什么问题", "描述", "看一下");
 
@@ -3190,6 +3194,36 @@ namespace ADDGH
             }
 
             return false;
+        }
+
+        private static bool ShouldIncludeImagesInPrimaryModelMessage(ImageIntentRoute route)
+        {
+            if (route == ImageIntentRoute.AiImageCreation || route == ImageIntentRoute.VisualModeling)
+                return false;
+
+            if (route == ImageIntentRoute.GeneralMultimodal)
+                return GetProviderRuntimeSettings()?.Config?.SupportsVision ?? false;
+
+            return GetProviderRuntimeSettings()?.Config?.SupportsVision ?? false;
+        }
+
+        private static string BuildPrimaryModelImageContextNote(ImageIntentRoute route, List<AttachmentItem> attachments)
+        {
+            int imageCount = (attachments ?? new List<AttachmentItem>())
+                .Count(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64));
+            if (imageCount <= 0)
+                return null;
+
+            if (route == ImageIntentRoute.AiImageCreation)
+                return $"当前轮已上传 {imageCount} 张图片附件。它们将由图片生成工具直接作为参考图或编辑输入使用；如果用户要基于这些图片出图或改图，请调用 create_ai_image，并将 use_uploaded_images 设为 true。";
+
+            if (route == ImageIntentRoute.VisualModeling)
+                return $"当前轮已上传 {imageCount} 张图片附件。你不直接查看原图，请等待视觉预处理结果后再继续建模。";
+
+            if (route == ImageIntentRoute.GeneralMultimodal)
+                return $"当前轮已上传 {imageCount} 张图片附件。当前主模型链路不直接接收原图，请仅依据用户文字或后续视觉分析回答。";
+
+            return null;
         }
 
         private static string GetChatHistoryDirectory()

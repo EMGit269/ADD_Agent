@@ -30,6 +30,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Remove="obj_verify\**\*.cs" />
+    <EmbeddedResource Remove="obj_verify\**\*" />
+    <None Remove="obj_verify\**\*" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Include="..\CanvasWeb\dist\**\*" Condition="Exists('..\CanvasWeb\dist')">
       <Link>CanvasWeb\dist\%(RecursiveDir)%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

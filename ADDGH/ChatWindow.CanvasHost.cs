@@ -380,6 +380,12 @@ namespace ADDGH
         private static JObject BuildCanvasBootstrapPayload()
         {
             string conversationId = GetCurrentCanvasConversationId();
+            JObject envelope = LoadCanvasConversationEnvelope(conversationId) ?? new JObject();
+            JObject snapshot = envelope["snapshot"] as JObject ?? new JObject();
+            snapshot["kind"] = "addgh-lightweight-canvas-v1";
+            snapshot["nodes"] = BuildCanvasTypedNodesFromEnvelope(conversationId);
+            snapshot["connections"] = snapshot["connections"] as JArray ?? new JArray();
+            envelope["snapshot"] = snapshot;
             return new JObject
             {
                 ["conversationId"] = conversationId,
@@ -387,7 +393,7 @@ namespace ADDGH
                 ["messages"] = BuildCanvasMessageItems(),
                 ["toolEvents"] = BuildCanvasToolItems(),
                 ["inspectorSnapshot"] = BuildInspectorSnapshot(),
-                ["canvasSnapshot"] = LoadCanvasConversationEnvelope(conversationId) ?? new JObject()
+                ["canvasSnapshot"] = envelope
             };
         }
 
@@ -452,6 +458,36 @@ namespace ADDGH
             }
 
             return result;
+        }
+
+        private static bool IsCanvasTypedNodeSourceRef(string sourceRef)
+        {
+            if (string.IsNullOrWhiteSpace(sourceRef)) return false;
+            return sourceRef.StartsWith("input_prompt:", StringComparison.OrdinalIgnoreCase)
+                || sourceRef.StartsWith("input_image:", StringComparison.OrdinalIgnoreCase)
+                || sourceRef.StartsWith("generated_image:", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static JArray BuildCanvasTypedNodesFromEnvelope(string conversationId)
+        {
+            var nodes = new JArray();
+            try
+            {
+                JObject envelope = LoadCanvasConversationEnvelope(conversationId) ?? new JObject();
+                JObject snapshot = envelope["snapshot"] as JObject;
+                JArray existingNodes = snapshot?["nodes"] as JArray ?? new JArray();
+                foreach (var node in existingNodes.OfType<JObject>())
+                {
+                    string sourceRef = node["sourceRef"]?.ToString();
+                    if (IsCanvasTypedNodeSourceRef(sourceRef))
+                        nodes.Add(NormalizeCanvasImageNode((JObject)node.DeepClone()));
+                }
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Debug("BuildCanvasTypedNodesFromEnvelope failed: " + ex.Message);
+            }
+            return nodes;
         }
 
         private static JArray BuildCanvasToolItems()
@@ -686,7 +722,18 @@ namespace ADDGH
                 root["conversationId"] = conversationId;
                 root["updatedAtUtc"] = DateTime.UtcNow.ToString("o");
                 if (snapshot != null)
+                {
+                    JObject snapshotObject = snapshot as JObject;
+                    JArray nodes = snapshotObject?["nodes"] as JArray;
+                    if (nodes != null)
+                    {
+                        var normalizedNodes = new JArray();
+                        foreach (var node in nodes.OfType<JObject>())
+                            normalizedNodes.Add(NormalizeCanvasImageNode((JObject)node.DeepClone()));
+                        snapshotObject["nodes"] = normalizedNodes;
+                    }
                     root["snapshot"] = snapshot;
+                }
                 if (metaPatches != null)
                     root["cardMetaPatches"] = metaPatches;
                 File.WriteAllText(path, root.ToString(Formatting.Indented), Encoding.UTF8);

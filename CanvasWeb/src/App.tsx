@@ -175,6 +175,8 @@ function CanvasWorkbench() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null)
   const [inspectorSnapshot, setInspectorSnapshot] = useState<InspectorSnapshot | null>(null)
   const [interactionMode, setInteractionMode] = useState('idle')
+  const [imagePreviewSrc, setImagePreviewSrc] = useState<string | null>(null)
+  const [imagePreviewTitle, setImagePreviewTitle] = useState<string>('Image Preview')
   const surfaceRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<DragState>(null)
   const saveTimerRef = useRef<number | null>(null)
@@ -767,27 +769,39 @@ function CanvasWorkbench() {
           {nodes.map((node) => (
             <article
               key={node.id}
-              className={`canvas-node node-${nodeKind(node.meta)} type-${node.nodeType} ${selectedSourceRef === node.sourceRef ? 'selected' : ''}`}
+              className={`canvas-node node-${nodeKind(node.meta)} type-${node.nodeType} ${selectedSourceRef === node.sourceRef ? 'selected' : ''} ${node.nodeType === 'image' ? 'is-image-node' : ''}`}
               style={nodeStyle(node, viewport)}
               data-source-ref={node.sourceRef}
               onPointerDown={(event) => onNodePointerDown(event, node)}
               onDoubleClick={() => setDetailSourceRef(node.sourceRef)}
             >
-              <header className="node-header">
-                <span>{node.meta.title ?? 'Untitled'}</span>
-                <small>{node.nodeType}</small>
-              </header>
-              <p className="node-summary">{node.meta.summary || node.meta.sourceRef}</p>
-              {renderNodePreview(node)}
-              {renderPorts(node, pendingConnection, handlePortClick)}
-              {!node.meta.collapsed ? <pre className="node-body">{getNodePreviewText(node)}</pre> : null}
-              {Array.isArray(node.meta.tags) && node.meta.tags.length ? (
-                <div className="node-tags">
-                  {node.meta.tags.map((tag: string) => (
-                    <span key={tag}>#{tag}</span>
-                  ))}
-                </div>
-              ) : null}
+              {node.nodeType === 'image' ? (
+                renderImageNode(node, (src, title) => {
+                  setImagePreviewSrc(src)
+                  setImagePreviewTitle(title)
+                })
+              ) : (
+                <>
+                  <header className="node-header">
+                    <span>{node.meta.title ?? 'Untitled'}</span>
+                    <small>{node.nodeType}</small>
+                  </header>
+                  <p className="node-summary">{node.meta.summary || node.meta.sourceRef}</p>
+                  {renderNodePreview(node, (src, title) => {
+                    setImagePreviewSrc(src)
+                    setImagePreviewTitle(title)
+                  })}
+                  {renderPorts(node, pendingConnection, handlePortClick)}
+                  {!node.meta.collapsed ? <pre className="node-body">{getNodePreviewText(node)}</pre> : null}
+                  {Array.isArray(node.meta.tags) && node.meta.tags.length ? (
+                    <div className="node-tags">
+                      {node.meta.tags.map((tag: string) => (
+                        <span key={tag}>#{tag}</span>
+                      ))}
+                    </div>
+                  ) : null}
+                </>
+              )}
             </article>
           ))}
         </div>
@@ -831,7 +845,10 @@ function CanvasWorkbench() {
                   })}
               />
             </label>
-            {detailNode ? renderNodeBody(detailNode, updateNodeMeta) : null}
+            {detailNode ? renderNodeBody(detailNode, updateNodeMeta, (src, title) => {
+              setImagePreviewSrc(src)
+              setImagePreviewTitle(title)
+            }) : null}
             <label>
               <span>Body</span>
               <textarea
@@ -870,6 +887,18 @@ function CanvasWorkbench() {
           )}
         </div>
       ) : null}
+
+      {imagePreviewSrc ? (
+        <div className="image-preview-overlay" onClick={() => setImagePreviewSrc(null)}>
+          <div className="image-preview-dialog" onClick={(event) => event.stopPropagation()}>
+            <div className="image-preview-header">
+              <span>{imagePreviewTitle}</span>
+              <button type="button" onClick={() => setImagePreviewSrc(null)}>Close</button>
+            </div>
+            <img src={imagePreviewSrc} alt={imagePreviewTitle} />
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -889,7 +918,12 @@ function reconcileNodes(
   _existingConnections: CanvasConnection[] = [],
 ) {
   const bySourceRef = new Map(existingNodes.map((node) => [node.sourceRef, node]))
+  const hasTypedNodes = existingNodes.some((node) => node.nodeType !== 'message')
   const nextNodes = [...existingNodes.filter((node) => node.nodeType !== 'message')]
+
+  if (hasTypedNodes) {
+    return dedupeNodes(nextNodes)
+  }
 
   messages.forEach((item, index) => {
     const existing = bySourceRef.get(item.sourceRef)
@@ -925,6 +959,9 @@ function reconcileTypedNodes(existingNodes: CanvasNode[]) {
   return dedupeNodes(existingNodes.map((node) => {
     if (node.nodeType === 'message' || node.nodeType === 'note') return node
     const meta = { ...node.meta }
+    if (node.nodeType === 'image' && !meta.imageDataUrl && meta.imagePath) {
+      meta.imageDataUrl = meta.imagePath
+    }
     const { w, h } = resolveNodeSize(meta, node.nodeType, node)
     return {
       ...node,
@@ -1123,7 +1160,11 @@ function renderPorts(
   )
 }
 
-function renderNodeBody(node: CanvasNode, updateMeta: (sourceRef: string, patch: Record<string, unknown>) => void) {
+function renderNodeBody(
+  node: CanvasNode,
+  updateMeta: (sourceRef: string, patch: Record<string, unknown>) => void,
+  onPreviewImage: (src: string, title: string) => void,
+) {
   if (node.nodeType === 'prompt') {
     return (
       <label className="node-field">
@@ -1164,11 +1205,11 @@ function renderNodeBody(node: CanvasNode, updateMeta: (sourceRef: string, patch:
     )
   }
   if (node.nodeType === 'image') {
-    const imageSrc = resolveCanvasImageSource(node.meta.imagePath)
+    const imageSrc = resolveCanvasImageSource(node.meta.imageDataUrl ?? node.meta.imagePath)
     return (
       <div className="node-image-field">
         {imageSrc ? (
-          <button type="button" className="node-image-preview" onClick={() => window.open(imageSrc, '_blank', 'noopener,noreferrer')}>
+          <button type="button" className="node-image-preview" onClick={() => onPreviewImage(imageSrc, String(node.meta.title ?? 'Image'))}>
             <img src={imageSrc} alt={String(node.meta.title ?? 'Image')} />
           </button>
         ) : (
@@ -1184,7 +1225,20 @@ function renderNodeBody(node: CanvasNode, updateMeta: (sourceRef: string, patch:
   return null
 }
 
-function renderNodePreview(node: CanvasNode) {
+function renderImageNode(node: CanvasNode, onPreviewImage: (src: string, title: string) => void) {
+  const imageSrc = resolveCanvasImageSource(node.meta.imageDataUrl ?? node.meta.imagePath)
+  if (!imageSrc) {
+    return <div className="node-image-empty node-image-plain-empty">No image</div>
+  }
+
+  return (
+    <button type="button" className="node-image-plain" onClick={() => onPreviewImage(imageSrc, String(node.meta.title ?? 'Image'))}>
+      <img src={imageSrc} alt={String(node.meta.title ?? 'Image')} />
+    </button>
+  )
+}
+
+function renderNodePreview(node: CanvasNode, onPreviewImage: (src: string, title: string) => void) {
   if (node.nodeType === 'slider') {
     return <div className="node-preview-chip">Value {Number(node.meta.value ?? 0).toFixed(2)}</div>
   }
@@ -1192,9 +1246,9 @@ function renderNodePreview(node: CanvasNode) {
     return <div className="node-preview-chip">{String(node.meta.filePath)}</div>
   }
   if (node.nodeType === 'image' && node.meta.imagePath) {
-    const imageSrc = resolveCanvasImageSource(node.meta.imagePath)
+    const imageSrc = resolveCanvasImageSource(node.meta.imageDataUrl ?? node.meta.imagePath)
     return imageSrc ? (
-      <button type="button" className="node-image-chip" onClick={() => window.open(imageSrc, '_blank', 'noopener,noreferrer')}>
+      <button type="button" className="node-image-chip" onClick={() => onPreviewImage(imageSrc, String(node.meta.title ?? 'Image'))}>
         <img src={imageSrc} alt={String(node.meta.title ?? 'Image')} />
       </button>
     ) : (
@@ -1331,7 +1385,10 @@ function resolveCanvasImageSource(value: any) {
   if (/^(data:|https?:|file:)/i.test(raw)) return raw
   if (/^[a-zA-Z]:[\\/]/.test(raw) || raw.startsWith('\\\\')) {
     const normalized = raw.replace(/\\/g, '/')
-    return normalized.startsWith('//') ? `file:${encodeURI(normalized)}` : `file:///${encodeURI(normalized)}`
+    if (normalized.startsWith('//')) {
+      return encodeURI(`file:${normalized}`)
+    }
+    return encodeURI(`file:///${normalized}`)
   }
   return raw
 }

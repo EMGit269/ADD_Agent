@@ -503,11 +503,35 @@ namespace ADDGH
             return ext.Length > 4 ? ext.Substring(0, 4) : ext;
         }
 
-        private static List<object> BuildUserMessageContent(string input, List<AttachmentItem> attachments)
+        private static string BuildImageDataUrl(string path, string mimeType)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                    return "";
+                byte[] bytes = File.ReadAllBytes(path);
+                if (bytes.Length == 0)
+                    return "";
+                string mime = string.IsNullOrWhiteSpace(mimeType) ? "image/png" : mimeType;
+                return $"data:{mime};base64,{Convert.ToBase64String(bytes)}";
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Debug("BuildImageDataUrl failed: " + ex.Message);
+                return "";
+            }
+        }
+
+        private static List<object> BuildUserMessageContent(string input, List<AttachmentItem> attachments, bool includeImages = true, string imageContextNote = null)
         {
             var contentArr = new List<object>();
             var textBuilder = new StringBuilder();
             if (!string.IsNullOrWhiteSpace(input)) textBuilder.AppendLine(input);
+            if (!string.IsNullOrWhiteSpace(imageContextNote))
+            {
+                if (textBuilder.Length > 0) textBuilder.AppendLine();
+                textBuilder.AppendLine(imageContextNote.Trim());
+            }
 
             foreach (var attachment in attachments.Where(a => a.Kind != AttachmentKind.Image))
             {
@@ -522,7 +546,7 @@ namespace ADDGH
                 contentArr.Add(new { type = "text", text = text });
             }
 
-            foreach (var attachment in attachments.Where(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64)))
+            foreach (var attachment in attachments.Where(a => includeImages && a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64)))
             {
                 contentArr.Add(new
                 {

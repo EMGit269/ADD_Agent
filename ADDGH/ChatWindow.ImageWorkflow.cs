@@ -33,6 +33,27 @@ namespace ADDGH
             public List<GeneratedImageRecord> Images { get; set; } = new List<GeneratedImageRecord>();
         }
 
+        private static JObject NormalizeCanvasImageNode(JObject node)
+        {
+            if (node == null)
+                return null;
+
+            string nodeType = node["nodeType"]?.ToString();
+            if (!string.Equals(nodeType, "image", StringComparison.OrdinalIgnoreCase))
+                return node;
+
+            JObject meta = node["meta"] as JObject ?? new JObject();
+            string imagePath = meta["imagePath"]?.ToString() ?? "";
+            string imageDataUrl = meta["imageDataUrl"]?.ToString() ?? "";
+            string mimeType = meta["mimeType"]?.ToString() ?? node["mimeType"]?.ToString() ?? "image/png";
+
+            if (string.IsNullOrWhiteSpace(imageDataUrl) && !string.IsNullOrWhiteSpace(imagePath) && File.Exists(imagePath))
+                meta["imageDataUrl"] = BuildImageDataUrl(imagePath, mimeType);
+
+            node["meta"] = meta;
+            return node;
+        }
+
         private static async Task<string> ExecuteCreateAiImageAsync(string prompt, string intent, bool useUploadedImages, string aspectRatio, System.Threading.CancellationToken ct)
         {
             AiImageExecutionResult result = await RunAiImageGenerationAsync(prompt, intent, useUploadedImages, aspectRatio, ct).ConfigureAwait(false);
@@ -431,6 +452,16 @@ namespace ADDGH
             snapshot["viewport"] = snapshot["viewport"] as JObject ?? new JObject { ["x"] = 80, ["y"] = 90, ["z"] = 1.0 };
             var nodes = snapshot["nodes"] as JArray ?? new JArray();
             var connections = snapshot["connections"] as JArray ?? new JArray();
+            var typedNodes = new JArray();
+
+            foreach (var node in nodes.OfType<JObject>())
+            {
+                string sourceRef = node["sourceRef"]?.ToString() ?? "";
+                if (sourceRef.StartsWith("input_prompt:", StringComparison.OrdinalIgnoreCase)
+                    || sourceRef.StartsWith("input_image:", StringComparison.OrdinalIgnoreCase)
+                    || sourceRef.StartsWith("generated_image:", StringComparison.OrdinalIgnoreCase))
+                    typedNodes.Add(NormalizeCanvasImageNode((JObject)node.DeepClone()));
+            }
 
             double centerX = 160;
             double centerY = 120;
@@ -444,7 +475,7 @@ namespace ADDGH
             {
                 var item = generated[i];
                 string sourceRef = $"generated_image:{conversationId}:{DateTime.UtcNow.Ticks}:{i}";
-                nodes.Add(new JObject
+                typedNodes.Add(NormalizeCanvasImageNode(new JObject
                 {
                     ["id"] = "node:" + sourceRef.Replace(":", "_"),
                     ["sourceRef"] = sourceRef,
@@ -461,6 +492,7 @@ namespace ADDGH
                         ["summary"] = "AI image result",
                         ["body"] = item.Prompt ?? "",
                         ["imagePath"] = item.Path,
+                        ["imageDataUrl"] = BuildImageDataUrl(item.Path, item.MimeType),
                         ["prompt"] = item.Prompt ?? "",
                         ["provider"] = item.Provider ?? "",
                         ["model"] = item.Model ?? "",
@@ -473,10 +505,109 @@ namespace ADDGH
                         ["w"] = 360,
                         ["h"] = 260
                     }
-                });
+                }));
             }
 
-            snapshot["nodes"] = nodes;
+            snapshot["nodes"] = typedNodes;
+            snapshot["connections"] = connections;
+            SaveCanvasConversationSnapshot(conversationId, snapshot, envelope["cardMetaPatches"]);
+            NotifyCanvasConversationChanged(true);
+        }
+
+        private static void SavePromptAndInputImagesToCanvasSnapshot(string promptText, List<AttachmentItem> attachments)
+        {
+            string conversationId = GetCurrentCanvasConversationId();
+            JObject envelope = LoadCanvasConversationEnvelope(conversationId) ?? new JObject();
+            JObject snapshot = envelope["snapshot"] as JObject ?? new JObject();
+            snapshot["kind"] = "addgh-lightweight-canvas-v1";
+            snapshot["viewport"] = snapshot["viewport"] as JObject ?? new JObject { ["x"] = 80, ["y"] = 90, ["z"] = 1.0 };
+
+            var nodes = snapshot["nodes"] as JArray ?? new JArray();
+            var connections = snapshot["connections"] as JArray ?? new JArray();
+            var freshNodes = new JArray();
+
+            foreach (var node in nodes.OfType<JObject>())
+            {
+                string sourceRef = node["sourceRef"]?.ToString() ?? "";
+                if (!sourceRef.StartsWith("input_prompt:", StringComparison.OrdinalIgnoreCase)
+                    && !sourceRef.StartsWith("input_image:", StringComparison.OrdinalIgnoreCase)
+                    && !sourceRef.StartsWith("generated_image:", StringComparison.OrdinalIgnoreCase))
+                    continue;
+            }
+
+            double originX = 120;
+            double originY = 100;
+
+            if (!string.IsNullOrWhiteSpace(promptText))
+            {
+                string promptSourceRef = "input_prompt:" + conversationId;
+                freshNodes.Add(NormalizeCanvasImageNode(new JObject
+                {
+                    ["id"] = "node:" + promptSourceRef.Replace(":", "_"),
+                    ["sourceRef"] = promptSourceRef,
+                    ["nodeType"] = "prompt",
+                    ["x"] = originX,
+                    ["y"] = originY,
+                    ["w"] = 320,
+                    ["h"] = 180,
+                    ["meta"] = new JObject
+                    {
+                        ["sourceRef"] = promptSourceRef,
+                        ["nodeType"] = "prompt",
+                        ["title"] = "Prompt",
+                        ["summary"] = "User prompt",
+                        ["body"] = promptText ?? "",
+                        ["prompt"] = promptText ?? "",
+                        ["ports"] = new JArray
+                        {
+                            new JObject { ["id"] = "out", ["label"] = "Prompt", ["direction"] = "output", ["dataType"] = "text", ["slot"] = 0 }
+                        },
+                        ["w"] = 320,
+                        ["h"] = 180
+                    }
+                }));
+            }
+
+            var imageAttachments = (attachments ?? new List<AttachmentItem>())
+                .Where(a => a != null && a.Kind == AttachmentKind.Image && !string.IsNullOrWhiteSpace(a.Path) && File.Exists(a.Path))
+                .ToList();
+
+            for (int i = 0; i < imageAttachments.Count; i++)
+            {
+                var item = imageAttachments[i];
+                string sourceRef = $"input_image:{conversationId}:{i}";
+                freshNodes.Add(NormalizeCanvasImageNode(new JObject
+                {
+                    ["id"] = "node:" + sourceRef.Replace(":", "_"),
+                    ["sourceRef"] = sourceRef,
+                    ["nodeType"] = "image",
+                    ["x"] = originX + i * 380,
+                    ["y"] = originY + 230,
+                    ["w"] = 360,
+                    ["h"] = 260,
+                    ["meta"] = new JObject
+                    {
+                        ["sourceRef"] = sourceRef,
+                        ["nodeType"] = "image",
+                        ["title"] = "Input Image",
+                        ["summary"] = "User reference image",
+                        ["body"] = promptText ?? "",
+                        ["imagePath"] = item.Path,
+                        ["imageDataUrl"] = BuildImageDataUrl(item.Path, item.MimeType),
+                        ["prompt"] = promptText ?? "",
+                        ["intent"] = "input",
+                        ["ports"] = new JArray
+                        {
+                            new JObject { ["id"] = "in", ["label"] = "Input", ["direction"] = "input", ["dataType"] = "image", ["slot"] = 0 },
+                            new JObject { ["id"] = "out", ["label"] = "Output", ["direction"] = "output", ["dataType"] = "image", ["slot"] = 1 }
+                        },
+                        ["w"] = 360,
+                        ["h"] = 260
+                    }
+                }));
+            }
+
+            snapshot["nodes"] = freshNodes;
             snapshot["connections"] = connections;
             SaveCanvasConversationSnapshot(conversationId, snapshot, envelope["cardMetaPatches"]);
             NotifyCanvasConversationChanged(true);

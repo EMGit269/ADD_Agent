@@ -101,6 +101,7 @@ namespace ADDGH
                     DisplayName = "DeepSeek",
                     DefaultBaseUrl = "https://api.deepseek.com/chat/completions",
                     DefaultModel = "deepseek-v4-flash",
+                    SupportsVision = false,
                     EnableThinking = true,
                     DefaultReasoningEffort = "high"
                 },
