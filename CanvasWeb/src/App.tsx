@@ -72,8 +72,9 @@ type LightweightSnapshot = {
 }
 
 type DragState =
-  | { mode: 'pan'; pointerId: number; startX: number; startY: number; startViewport: Viewport }
-  | { mode: 'node'; pointerId: number; sourceRef: string; startX: number; startY: number; startNodeX: number; startNodeY: number }
+  | { mode: 'pan'; pointerId: number; startX: number; startY: number; startViewport: Viewport; moved: boolean }
+  | { mode: 'node'; pointerId: number; sourceRef: string; startX: number; startY: number; startNodeX: number; startNodeY: number; moved: boolean }
+  | { mode: 'select'; pointerId: number; startX: number; startY: number; currentX: number; currentY: number }
   | null
 
 type PendingConnection = {
@@ -86,6 +87,7 @@ type CanvasSnapshotState = {
   connections: CanvasConnection[]
   viewport: Viewport
   selectedSourceRef: string | null
+  selectedSourceRefs: string[]
 }
 
 type CanvasHistoryState = {
@@ -159,9 +161,10 @@ class CanvasErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySta
 }
 
 function CanvasWorkbench() {
-  const [isDarkMode, setIsDarkMode] = useState(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
-    return window.matchMedia('(prefers-color-scheme: dark)').matches
+  const [themeMode, setThemeMode] = useState<'light' | 'dark'>(() => {
+    if (typeof window === 'undefined') return 'dark'
+    const saved = window.localStorage.getItem('addgh-canvas-theme')
+    return saved === 'light' ? 'light' : 'dark'
   })
   const [conversationId, setConversationId] = useState('draft')
   const [conversationTitle, setConversationTitle] = useState('Canvas')
@@ -170,6 +173,7 @@ function CanvasWorkbench() {
   const [connections, setConnections] = useState<CanvasConnection[]>([])
   const [viewport, setViewport] = useState<Viewport>({ x: 80, y: 90, z: 1 })
   const [selectedSourceRef, setSelectedSourceRef] = useState<string | null>(null)
+  const [selectedSourceRefs, setSelectedSourceRefs] = useState<string[]>([])
   const [pendingConnection, setPendingConnection] = useState<PendingConnection | null>(null)
   const [detailSourceRef, setDetailSourceRef] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null)
@@ -177,6 +181,7 @@ function CanvasWorkbench() {
   const [interactionMode, setInteractionMode] = useState('idle')
   const [imagePreviewSrc, setImagePreviewSrc] = useState<string | null>(null)
   const [imagePreviewTitle, setImagePreviewTitle] = useState<string>('Image Preview')
+  const [marqueeRect, setMarqueeRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
   const surfaceRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<DragState>(null)
   const saveTimerRef = useRef<number | null>(null)
@@ -184,11 +189,14 @@ function CanvasWorkbench() {
   const connectionsRef = useRef(connections)
   const viewportRef = useRef(viewport)
   const selectedSourceRefRef = useRef<string | null>(selectedSourceRef)
+  const selectedSourceRefsRef = useRef<string[]>(selectedSourceRefs)
   const cardMetaRef = useRef<Record<string, any>>({})
   const historyRef = useRef<CanvasHistoryState>({ past: [], future: [] })
   const lastMessagesSignatureRef = useRef('')
   const currentConversationIdRef = useRef('draft')
   const currentConversationTitleRef = useRef('Canvas')
+  const suppressNextContextMenuRef = useRef(false)
+  const isDarkMode = themeMode === 'dark'
 
   useEffect(() => {
     nodesRef.current = nodes
@@ -205,6 +213,10 @@ function CanvasWorkbench() {
   useEffect(() => {
     selectedSourceRefRef.current = selectedSourceRef
   }, [selectedSourceRef])
+
+  useEffect(() => {
+    selectedSourceRefsRef.current = selectedSourceRefs
+  }, [selectedSourceRefs])
 
   useEffect(() => {
     currentConversationIdRef.current = conversationId
@@ -233,24 +245,11 @@ function CanvasWorkbench() {
   }, [])
 
   useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
-
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-    const handleChange = () => setIsDarkMode(mediaQuery.matches)
-    handleChange()
-
-    if (typeof mediaQuery.addEventListener === 'function') {
-      mediaQuery.addEventListener('change', handleChange)
-      return () => mediaQuery.removeEventListener('change', handleChange)
-    }
-
-    mediaQuery.addListener(handleChange)
-    return () => mediaQuery.removeListener(handleChange)
-  }, [])
-
-  useEffect(() => {
     document.documentElement.dataset.theme = isDarkMode ? 'dark' : 'light'
-  }, [isDarkMode])
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('addgh-canvas-theme', themeMode)
+    }
+  }, [isDarkMode, themeMode])
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -283,9 +282,9 @@ function CanvasWorkbench() {
 
       if (isTyping) return
 
-      if (event.key === 'Delete' && selectedSourceRefRef.current) {
+      if (event.key === 'Delete' && selectedSourceRefsRef.current.length) {
         event.preventDefault()
-        deleteNodeBySourceRef(selectedSourceRefRef.current)
+        deleteNodesBySourceRefs(selectedSourceRefsRef.current)
       }
     }
 
@@ -398,6 +397,7 @@ function CanvasWorkbench() {
       connections: cloneConnections(override.connections ?? connectionsRef.current),
       viewport: { ...(override.viewport ?? viewportRef.current) },
       selectedSourceRef: override.selectedSourceRef ?? selectedSourceRefRef.current,
+      selectedSourceRefs: [...(override.selectedSourceRefs ?? selectedSourceRefsRef.current)],
     }
   }
 
@@ -406,10 +406,12 @@ function CanvasWorkbench() {
     connectionsRef.current = cloneConnections(snapshot.connections)
     viewportRef.current = { ...snapshot.viewport }
     selectedSourceRefRef.current = snapshot.selectedSourceRef
+    selectedSourceRefsRef.current = [...snapshot.selectedSourceRefs]
     setNodes(nodesRef.current)
     setConnections(connectionsRef.current)
     setViewport(viewportRef.current)
     setSelectedSourceRef(snapshot.selectedSourceRef)
+    setSelectedSourceRefs([...snapshot.selectedSourceRefs])
     if (shouldSave) scheduleSave()
   }
 
@@ -491,8 +493,14 @@ function CanvasWorkbench() {
   }
 
   function deleteNodeBySourceRef(sourceRef: string) {
+    deleteNodesBySourceRefs([sourceRef])
+  }
+
+  function deleteNodesBySourceRefs(sourceRefs: string[]) {
+    const set = new Set((sourceRefs ?? []).filter(Boolean))
+    if (!set.size) return
     commitMutation((snapshot) => {
-      const remainingNodes = snapshot.nodes.filter((node) => node.sourceRef !== sourceRef)
+      const remainingNodes = snapshot.nodes.filter((node) => !set.has(node.sourceRef))
       const remainingNodeIds = new Set(remainingNodes.map((node) => node.id))
       const remainingConnections = snapshot.connections.filter(
         (connection) => remainingNodeIds.has(connection.fromNodeId) && remainingNodeIds.has(connection.toNodeId),
@@ -501,10 +509,11 @@ function CanvasWorkbench() {
         ...snapshot,
         nodes: remainingNodes,
         connections: remainingConnections,
-        selectedSourceRef: snapshot.selectedSourceRef === sourceRef ? null : snapshot.selectedSourceRef,
+        selectedSourceRef: snapshot.selectedSourceRef && set.has(snapshot.selectedSourceRef) ? null : snapshot.selectedSourceRef,
+        selectedSourceRefs: snapshot.selectedSourceRefs.filter((item) => !set.has(item)),
       }
     })
-    setDetailSourceRef((current) => (current === sourceRef ? null : current))
+    setDetailSourceRef((current) => (current && set.has(current) ? null : current))
     setContextMenu(null)
   }
 
@@ -517,34 +526,54 @@ function CanvasWorkbench() {
       ...snapshot,
       nodes: [...snapshot.nodes, node],
       selectedSourceRef: sourceRef,
+      selectedSourceRefs: [sourceRef],
     }))
     setContextMenu(null)
   }
 
   function onSurfacePointerDown(event: React.PointerEvent<HTMLDivElement>) {
-    if (event.button !== 0) return
+    const target = event.target as HTMLElement
+    if (target.closest('.canvas-node')) return
+    if (event.button !== 0 && event.button !== 2) return
+    event.preventDefault()
     if ((event.target as HTMLElement).closest('.canvas-node')) return
     setContextMenu(null)
     if (pendingConnection) setPendingConnection(null)
-    dragRef.current = {
-      mode: 'pan',
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      startViewport: viewportRef.current,
+    if (event.button === 2) {
+      dragRef.current = {
+        mode: 'pan',
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        startViewport: viewportRef.current,
+        moved: false,
+      }
+      setInteractionMode('pan')
+    } else {
+      dragRef.current = {
+        mode: 'select',
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        currentX: event.clientX,
+        currentY: event.clientY,
+      }
+      setMarqueeRect({ left: event.clientX, top: event.clientY, width: 0, height: 0 })
+      setSelectedSourceRef(null)
+      setSelectedSourceRefs([])
+      setInteractionMode('select')
     }
-    setSelectedSourceRef(null)
-    setInteractionMode('pan')
     event.currentTarget.setPointerCapture(event.pointerId)
   }
 
   function onNodePointerDown(event: React.PointerEvent<HTMLElement>, node: CanvasNode) {
     if (event.button !== 0) return
     const target = event.target as HTMLElement
-    if (target.closest('button,input,textarea,select')) return
+    if (target.closest('input,textarea,select,[data-port-id]')) return
     setContextMenu(null)
     event.stopPropagation()
     setSelectedSourceRef(node.sourceRef)
+    setSelectedSourceRefs([node.sourceRef])
     dragRef.current = {
       mode: 'node',
       pointerId: event.pointerId,
@@ -553,6 +582,7 @@ function CanvasWorkbench() {
       startY: event.clientY,
       startNodeX: node.x,
       startNodeY: node.y,
+      moved: false,
     }
     setInteractionMode('drag')
     surfaceRef.current?.setPointerCapture(event.pointerId)
@@ -596,6 +626,9 @@ function CanvasWorkbench() {
     if (!drag || drag.pointerId !== event.pointerId) return
 
     if (drag.mode === 'pan') {
+      const moved = Math.abs(event.clientX - drag.startX) > 3 || Math.abs(event.clientY - drag.startY) > 3
+      drag.moved = drag.moved || moved
+      if (drag.moved) suppressNextContextMenuRef.current = true
       updateViewport({
         ...drag.startViewport,
         x: drag.startViewport.x + event.clientX - drag.startX,
@@ -604,9 +637,21 @@ function CanvasWorkbench() {
       return
     }
 
+    if (drag.mode === 'select') {
+      const left = Math.min(drag.startX, event.clientX)
+      const top = Math.min(drag.startY, event.clientY)
+      const width = Math.abs(event.clientX - drag.startX)
+      const height = Math.abs(event.clientY - drag.startY)
+      drag.currentX = event.clientX
+      drag.currentY = event.clientY
+      setMarqueeRect({ left, top, width, height })
+      return
+    }
+
     const zoom = viewportRef.current.z
     const dx = (event.clientX - drag.startX) / zoom
     const dy = (event.clientY - drag.startY) / zoom
+    drag.moved = drag.moved || Math.abs(dx) > 1 || Math.abs(dy) > 1
     updateNodes((current) =>
       current.map((node) =>
         node.sourceRef === drag.sourceRef
@@ -627,6 +672,7 @@ function CanvasWorkbench() {
 
   function onPointerUp(event: React.PointerEvent<HTMLDivElement>) {
     if (dragRef.current?.pointerId !== event.pointerId) return
+    const drag = dragRef.current
     dragRef.current = null
     setInteractionMode('idle')
     try {
@@ -634,6 +680,18 @@ function CanvasWorkbench() {
     } catch {
       // The pointer may have already been released by the browser.
     }
+    if (drag?.mode === 'select') {
+      const selected = nodesRef.current
+        .filter((node) => intersectsSelection(node, viewportRef.current, drag.startX, drag.startY, drag.currentX, drag.currentY))
+        .map((node) => node.sourceRef)
+      setSelectedSourceRefs(selected)
+      setSelectedSourceRef(selected[0] ?? null)
+      selectedSourceRefsRef.current = [...selected]
+      selectedSourceRefRef.current = selected[0] ?? null
+      setMarqueeRect(null)
+      return
+    }
+    setMarqueeRect(null)
     syncNodeLayoutsToMeta()
     scheduleSave()
   }
@@ -723,10 +781,15 @@ function CanvasWorkbench() {
 
   function onCanvasContextMenu(event: React.MouseEvent<HTMLDivElement>) {
     event.preventDefault()
+    if (suppressNextContextMenuRef.current) {
+      suppressNextContextMenuRef.current = false
+      return
+    }
     const target = event.target as HTMLElement
     const nodeHost = target.closest('.canvas-node') as HTMLElement | null
     if (nodeHost?.dataset.sourceRef) {
       setSelectedSourceRef(nodeHost.dataset.sourceRef)
+      setSelectedSourceRefs([nodeHost.dataset.sourceRef])
       setContextMenu({
         x: event.clientX,
         y: event.clientY,
@@ -762,6 +825,17 @@ function CanvasWorkbench() {
         onPointerCancel={onPointerUp}
         onWheel={onWheel}
       >
+        {marqueeRect ? (
+          <div
+            className="selection-marquee"
+            style={{
+              left: marqueeRect.left,
+              top: marqueeRect.top,
+              width: marqueeRect.width,
+              height: marqueeRect.height,
+            }}
+          />
+        ) : null}
         <div className="canvas-content">
           <svg className="connection-layer" width="100%" height="100%">
             {connections.map((connection) => renderConnection(connection, nodes, viewport))}
@@ -769,11 +843,13 @@ function CanvasWorkbench() {
           {nodes.map((node) => (
             <article
               key={node.id}
-              className={`canvas-node node-${nodeKind(node.meta)} type-${node.nodeType} ${selectedSourceRef === node.sourceRef ? 'selected' : ''} ${node.nodeType === 'image' ? 'is-image-node' : ''}`}
+              className={`canvas-node node-${nodeKind(node.meta)} type-${node.nodeType} ${selectedSourceRefs.includes(node.sourceRef) ? 'selected' : ''} ${node.nodeType === 'image' ? 'is-image-node' : ''}`}
               style={nodeStyle(node, viewport)}
               data-source-ref={node.sourceRef}
               onPointerDown={(event) => onNodePointerDown(event, node)}
-              onDoubleClick={() => setDetailSourceRef(node.sourceRef)}
+              onDoubleClick={() => {
+                if (node.nodeType !== 'image') setDetailSourceRef(node.sourceRef)
+              }}
             >
               {node.nodeType === 'image' ? (
                 renderImageNode(node, (src, title) => {
@@ -808,6 +884,9 @@ function CanvasWorkbench() {
       </div>
 
       <div className="floating-toolbar">
+        <button onClick={() => setThemeMode((current) => current === 'dark' ? 'light' : 'dark')}>
+          {isDarkMode ? 'Light' : 'Dark'}
+        </button>
         <button onClick={onFit}>Fit</button>
         <button onClick={onNewNote}>Note</button>
         <button onClick={() => detailSourceRef ? setDetailSourceRef(null) : setDetailSourceRef(selectedSourceRef)}>Details</button>
@@ -1232,10 +1311,25 @@ function renderImageNode(node: CanvasNode, onPreviewImage: (src: string, title: 
   }
 
   return (
-    <button type="button" className="node-image-plain" onClick={() => onPreviewImage(imageSrc, String(node.meta.title ?? 'Image'))}>
+    <div className="node-image-plain" onDoubleClick={(event) => {
+      event.stopPropagation()
+      onPreviewImage(imageSrc, String(node.meta.title ?? 'Image'))
+    }}>
       <img src={imageSrc} alt={String(node.meta.title ?? 'Image')} />
-    </button>
+    </div>
   )
+}
+
+function intersectsSelection(node: CanvasNode, viewport: Viewport, x1: number, y1: number, x2: number, y2: number) {
+  const left = Math.min(x1, x2)
+  const right = Math.max(x1, x2)
+  const top = Math.min(y1, y2)
+  const bottom = Math.max(y1, y2)
+  const nodeLeft = viewport.x + node.x * viewport.z
+  const nodeTop = viewport.y + node.y * viewport.z
+  const nodeRight = nodeLeft + node.w * viewport.z
+  const nodeBottom = nodeTop + node.h * viewport.z
+  return nodeLeft < right && nodeRight > left && nodeTop < bottom && nodeBottom > top
 }
 
 function renderNodePreview(node: CanvasNode, onPreviewImage: (src: string, title: string) => void) {

@@ -1723,7 +1723,7 @@ namespace ADDGH
         </Grid> <!-- End MainLayout Grid -->
 
     <!-- 配置悬浮层 -->
-            <Grid x:Name=""SettingsOverlay"" Grid.Column=""0"" Panel.ZIndex=""20"" Margin=""0"" Background=""#A5000000"" Visibility=""Collapsed"">
+            <Grid x:Name=""SettingsOverlay"" Grid.ColumnSpan=""2"" Panel.ZIndex=""999"" Margin=""0"" Background=""#A5000000"" Visibility=""Collapsed"">
             <Border Background=""#1E1E1E"" CornerRadius=""12"" Width=""410"" Height=""680"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"" Padding=""18"">
                 <Grid>
                     <Grid.RowDefinitions>
@@ -3147,7 +3147,14 @@ namespace ADDGH
 
         private static void SetSettingsOverlayVisible(bool visible)
         {
-            if (_settingsOverlay != null) _settingsOverlay.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+            if (_settingsOverlay != null)
+            {
+                Panel.SetZIndex(_settingsOverlay, visible ? 999 : 20);
+                _settingsOverlay.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+            }
+
+            if (_canvasWebView != null)
+                _canvasWebView.Visibility = visible ? Visibility.Hidden : Visibility.Visible;
 
             // Keep the header available for dragging, but block actions that would mutate chat state.
             string[] headerActionNames = { "BtnNewChat", "BtnToggleCode", "BtnToggleHistory", "BtnSettings" };
