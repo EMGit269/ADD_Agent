@@ -243,6 +243,15 @@ namespace ADDGH
                     rootPanel.Children.Add(BuildStepRow(i + 1, payload.Steps[i]));
                 }
 
+                rootPanel.Children.Add(new TextBlock
+                {
+                    Text = "点击后会切换到 Create 模式，并按以上步骤连续执行。",
+                    Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 150)),
+                    FontSize = 10.5,
+                    Margin = new Thickness(0, 2, 0, 0),
+                    TextWrapping = TextWrapping.Wrap
+                });
+
                 var executeButton = new Button
                 {
                     Content = payload.ExecuteLabel,
@@ -255,7 +264,6 @@ namespace ADDGH
                     BorderBrush = new SolidColorBrush(Color.FromRgb(210, 210, 210)),
                     BorderThickness = new Thickness(1),
                     Cursor = Cursors.Hand,
-                    ToolTip = payload.ExecutePrompt,
                     FontSize = 11,
                     FontWeight = FontWeights.SemiBold
                 };
@@ -328,7 +336,11 @@ namespace ADDGH
                     var carryoverImages = CloneAttachments(_finalVisualReviewSourceImages);
                     string originalVisionSourceInput = _finalVisualReviewSourceInput;
                     SetAgentMode(AgentMode.Create);
-                    QueuePromptForImmediateSend(executePrompt, carryoverImages, originalVisionSourceInput);
+                    QueuePromptForImmediateSend(
+                        executePrompt,
+                        carryoverImages,
+                        originalVisionSourceInput,
+                        "执行已选方案");
                 }));
             }
         }

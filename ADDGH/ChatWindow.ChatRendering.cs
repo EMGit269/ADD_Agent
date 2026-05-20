@@ -31,17 +31,25 @@ namespace ADDGH
 
                     if (role == "user")
                     {
-                        AppendBubble(m["content"]?.ToString(), true);
+                        var contentToken = m["content"];
+                        if (TryParseUserMessageAttachments(contentToken, out var userText, out var attachments))
+                            AppendUserMessageWithAttachments(userText, attachments);
+                        else
+                            AppendBubble(contentToken?.ToString(), true);
                     }
                     else if (role == "assistant")
                     {
                         string reasoning = m["reasoning_content"]?.ToString();
                         string content = m["content"]?.ToString();
+                        var toolCalls = m["tool_calls"] as JArray;
+                        var generatedImages = m["generated_images"] as JArray;
 
-                        if (!string.IsNullOrEmpty(reasoning))
+                        if (ChatMessageHelpers.ShouldDisplayReasoningBubble(reasoning, content, toolCalls))
                             AppendCollapsibleBubble(reasoning, "已思考", "💭");
                         if (!string.IsNullOrEmpty(content))
                             AppendBubble(content, false, false);
+                        if (generatedImages != null && generatedImages.Count > 0)
+                            AppendAssistantImageMessage(m);
                     }
                 }
                 UpdateEmptyChatLayout();
@@ -108,12 +116,18 @@ namespace ADDGH
                     bubbleContent.Children.Add(bubble);
                 }
 
-                var cards = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 8, 0, 0) };
-                foreach (var attachment in attachments)
+                var imageStrip = CreateChatImageStrip(attachments);
+                if (imageStrip != null)
+                    bubbleContent.Children.Add(imageStrip);
+
+                var nonImageAttachments = attachments?.Where(a => a != null && a.Kind != AttachmentKind.Image).ToList() ?? new List<AttachmentItem>();
+                if (nonImageAttachments.Count > 0)
                 {
-                    cards.Children.Add(CreateAttachmentCard(attachment, false));
+                    var cards = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 8, 0, 0) };
+                    foreach (var attachment in nonImageAttachments)
+                        cards.Children.Add(CreateAttachmentCard(attachment, false));
+                    bubbleContent.Children.Add(cards);
                 }
-                bubbleContent.Children.Add(cards);
                 container.Children.Add(bubbleContent);
 
                 if (_thinkingBubble != null) {
@@ -127,6 +141,101 @@ namespace ADDGH
                 container.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromSeconds(0.3)));
                 _chatScroll.ScrollToEnd();
             }));
+        }
+
+        private static void AppendAssistantImageMessage(JObject messageNode)
+        {
+            var generatedImages = messageNode?["generated_images"] as JArray;
+            if (generatedImages == null || generatedImages.Count == 0)
+                return;
+
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                var container = new StackPanel {
+                    Margin = new Thickness(0, 0, 0, 20),
+                    HorizontalAlignment = HorizontalAlignment.Left
+                };
+
+                var attachments = new List<AttachmentItem>();
+                foreach (var token in generatedImages.OfType<JObject>())
+                {
+                    string path = token["path"]?.ToString();
+                    if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path))
+                        continue;
+
+                    attachments.Add(new AttachmentItem
+                    {
+                        Path = path,
+                        FileName = System.IO.Path.GetFileName(path),
+                        Kind = AttachmentKind.Image,
+                        MimeType = token["mimeType"]?.ToString() ?? "image/png",
+                        SizeBytes = new System.IO.FileInfo(path).Length
+                    });
+                }
+
+                var imageStrip = CreateChatImageStrip(attachments);
+                if (imageStrip == null)
+                    return;
+
+                container.Children.Add(imageStrip);
+
+                if (_thinkingBubble != null) {
+                    _chatPanel.Children.Remove(_thinkingBubble);
+                    _chatPanel.Children.Add(container);
+                    _chatPanel.Children.Add(_thinkingBubble);
+                } else {
+                    _chatPanel.Children.Add(container);
+                }
+
+                container.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromSeconds(0.3)));
+                _chatScroll.ScrollToEnd();
+            }));
+        }
+
+        private static bool TryParseUserMessageAttachments(JToken contentToken, out string text, out List<AttachmentItem> attachments)
+        {
+            text = contentToken?.ToString() ?? string.Empty;
+            attachments = new List<AttachmentItem>();
+
+            var contentArray = contentToken as JArray;
+            if (contentArray == null || contentArray.Count == 0)
+                return false;
+
+            var textParts = new List<string>();
+            foreach (var item in contentArray.OfType<JObject>())
+            {
+                string type = item["type"]?.ToString();
+                if (string.Equals(type, "text", StringComparison.OrdinalIgnoreCase))
+                {
+                    var part = item["text"]?.ToString();
+                    if (!string.IsNullOrWhiteSpace(part))
+                        textParts.Add(part.Trim());
+                    continue;
+                }
+
+                if (!string.Equals(type, "image_url", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                string url = item["image_url"]?["url"]?.ToString();
+                if (string.IsNullOrWhiteSpace(url) || !url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                try
+                {
+                    var attachment = CreateAttachmentItemFromDataUrl(url);
+                    if (attachment != null)
+                        attachments.Add(attachment);
+                }
+                catch (Exception ex)
+                {
+                    AddGhLog.Debug("Restore user image attachment: " + ex.Message);
+                }
+            }
+
+            if (attachments.Count == 0)
+                return false;
+
+            text = string.Join(Environment.NewLine + Environment.NewLine, textParts.Where(part => !string.IsNullOrWhiteSpace(part))).Trim();
+            return true;
         }
 
         private static void AppendCollapsibleBubble(string text, string title, string icon)

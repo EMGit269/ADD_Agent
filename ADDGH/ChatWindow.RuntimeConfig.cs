@@ -82,6 +82,7 @@ namespace ADDGH
             public string ApiKey { get; set; }
             public string BaseUrl { get; set; }
             public string ModelName { get; set; }
+            public string ProxyUrl { get; set; }
         }
 
         private class EndpointCandidate
@@ -152,6 +153,15 @@ namespace ADDGH
                     DisplayName = "Custom",
                     DefaultBaseUrl = "https://api.deepseek.com/chat/completions",
                     DefaultModel = "deepseek-v4-flash"
+                },
+                new ModelProviderConfig
+                {
+                    ProviderId = "nanobanana-relay",
+                    DisplayName = "Nano-banana / Relay",
+                    DefaultBaseUrl = "https://your-relay-host/v1",
+                    DefaultModel = "Nano-banana-3.1-Flash",
+                    SupportsTools = false,
+                    SupportsVision = true
                 }
             };
         }
@@ -172,9 +182,93 @@ namespace ADDGH
             return Grasshopper.Instances.Settings.GetValue("AI_VisionProvider", "qwen");
         }
 
+        private static string GetCurrentImageProviderId()
+        {
+            return Grasshopper.Instances.Settings.GetValue("AI_ImageProvider", "nanobanana-relay");
+        }
+
         private static string GetProviderSettingKey(string providerId, string name)
         {
             return $"AI_{providerId}_{name}";
+        }
+
+        private static string GetImageProviderSettingKey(string providerId, string name)
+        {
+            return $"AI_Image_{providerId}_{name}";
+        }
+
+        private static string ReadFirstNonEmptyEnvironmentVariable(params string[] names)
+        {
+            if (names == null) return "";
+            foreach (string name in names)
+            {
+                if (string.IsNullOrWhiteSpace(name)) continue;
+                string value = Environment.GetEnvironmentVariable(name);
+                if (!string.IsNullOrWhiteSpace(value))
+                    return value.Trim();
+            }
+            return "";
+        }
+
+        private static string NormalizeProxyUrl(string raw)
+        {
+            string value = (raw ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(value))
+                return "";
+
+            // Guard against users pasting an API endpoint into the proxy field.
+            string lowered = value.Replace('\\', '/').ToLowerInvariant();
+            if (lowered.Contains("/chat/completions") ||
+                lowered.Contains("/responses") ||
+                lowered.Contains("/embeddings") ||
+                lowered.Contains("/images") ||
+                lowered.Contains("/audio") ||
+                lowered.Contains("/v1beta/openai/") ||
+                lowered.Contains("/compatible-mode/") ||
+                lowered.Contains("/api/v3/"))
+            {
+                AddGhLog.Warn("Ignoring proxy-like field because it looks like an API endpoint: " + value);
+                return "";
+            }
+
+            if (!value.Contains("://"))
+                value = "http://" + value;
+
+            return value;
+        }
+
+        private static string ReadResolvedProxyUrl(string providerId)
+        {
+            string perProvider = Grasshopper.Instances.Settings.GetValue(GetProviderSettingKey(providerId, "ProxyUrl"), "");
+            if (!string.IsNullOrWhiteSpace(perProvider))
+                return NormalizeProxyUrl(perProvider);
+
+            string shared = Grasshopper.Instances.Settings.GetValue("AI_ProxyUrl", "");
+            if (!string.IsNullOrWhiteSpace(shared))
+                return NormalizeProxyUrl(shared);
+
+            return NormalizeProxyUrl(ReadFirstNonEmptyEnvironmentVariable(
+                "ADDGH_HTTPS_PROXY",
+                "ADDGH_HTTP_PROXY",
+                "HTTPS_PROXY",
+                "https_proxy",
+                "HTTP_PROXY",
+                "http_proxy"));
+        }
+
+        private static string ReadResolvedImageProxyUrl(string providerId)
+        {
+            string perProvider = Grasshopper.Instances.Settings.GetValue(GetImageProviderSettingKey(providerId, "ProxyUrl"), "");
+            if (!string.IsNullOrWhiteSpace(perProvider))
+                return NormalizeProxyUrl(perProvider);
+
+            return NormalizeProxyUrl(ReadFirstNonEmptyEnvironmentVariable(
+                "ADDGH_HTTPS_PROXY",
+                "ADDGH_HTTP_PROXY",
+                "HTTPS_PROXY",
+                "https_proxy",
+                "HTTP_PROXY",
+                "http_proxy"));
         }
 
         private static string ReadResolvedApiKey(string providerId)
@@ -188,6 +282,15 @@ namespace ADDGH
                 ? Grasshopper.Instances.Settings.GetValue("AI_API_Key", "")
                 : "";
             return string.IsNullOrWhiteSpace(per) ? legacy : per;
+        }
+
+        private static string ReadResolvedImageApiKey(string providerId)
+        {
+            string dpapiEnc = Grasshopper.Instances.Settings.GetValue(GetImageProviderSettingKey(providerId, "API_Key_DPAPI"), "");
+            if (!string.IsNullOrWhiteSpace(dpapiEnc) && ApiCredentialStore.TryUnprotectFromBase64(dpapiEnc, out string dec) && dec != null)
+                return dec;
+
+            return Grasshopper.Instances.Settings.GetValue(GetImageProviderSettingKey(providerId, "API_Key"), "");
         }
 
         private static void PersistApiKey(string providerId, string apiKeyPlain)
@@ -223,9 +326,40 @@ namespace ADDGH
                 Grasshopper.Instances.Settings.SetValue("AI_API_Key", key);
         }
 
+        private static void PersistImageApiKey(string providerId, string apiKeyPlain)
+        {
+            string key = apiKeyPlain ?? "";
+            if (string.IsNullOrEmpty(key))
+            {
+                Grasshopper.Instances.Settings.SetValue(GetImageProviderSettingKey(providerId, "API_Key_DPAPI"), "");
+                Grasshopper.Instances.Settings.SetValue(GetImageProviderSettingKey(providerId, "API_Key"), "");
+                return;
+            }
+
+            if (DeploymentOptions.UseDpapiForApiKeys)
+            {
+                if (ApiCredentialStore.TryProtectToBase64(key, out string enc))
+                {
+                    Grasshopper.Instances.Settings.SetValue(GetImageProviderSettingKey(providerId, "API_Key_DPAPI"), enc);
+                    Grasshopper.Instances.Settings.SetValue(GetImageProviderSettingKey(providerId, "API_Key"), "");
+                    return;
+                }
+
+                AddGhLog.Warn("ADDGH: DPAPI protect failed; storing image API key as plaintext for provider " + providerId);
+            }
+
+            Grasshopper.Instances.Settings.SetValue(GetImageProviderSettingKey(providerId, "API_Key_DPAPI"), "");
+            Grasshopper.Instances.Settings.SetValue(GetImageProviderSettingKey(providerId, "API_Key"), key);
+        }
+
         private static ProviderRuntimeSettings GetProviderRuntimeSettings()
         {
             return GetProviderRuntimeSettings(GetCurrentProviderId());
+        }
+
+        private static ProviderRuntimeSettings GetImageProviderRuntimeSettings()
+        {
+            return GetImageProviderRuntimeSettings(GetCurrentImageProviderId());
         }
 
         private static ProviderRuntimeSettings GetProviderRuntimeSettings(string providerId)
@@ -242,7 +376,24 @@ namespace ADDGH
                 Config = config,
                 ApiKey = ReadResolvedApiKey(providerId),
                 BaseUrl = Grasshopper.Instances.Settings.GetValue(GetProviderSettingKey(providerId, "BaseUrl"), legacyBaseUrl),
-                ModelName = Grasshopper.Instances.Settings.GetValue(GetProviderSettingKey(providerId, "ModelName"), legacyModel)
+                ModelName = Grasshopper.Instances.Settings.GetValue(GetProviderSettingKey(providerId, "ModelName"), legacyModel),
+                ProxyUrl = ReadResolvedProxyUrl(providerId)
+            };
+        }
+
+        private static ProviderRuntimeSettings GetImageProviderRuntimeSettings(string providerId)
+        {
+            if (string.IsNullOrWhiteSpace(providerId))
+                providerId = GetCurrentImageProviderId();
+
+            var config = GetProviderConfig(providerId);
+            return new ProviderRuntimeSettings
+            {
+                Config = config,
+                ApiKey = ReadResolvedImageApiKey(providerId),
+                BaseUrl = Grasshopper.Instances.Settings.GetValue(GetImageProviderSettingKey(providerId, "BaseUrl"), config.DefaultBaseUrl),
+                ModelName = Grasshopper.Instances.Settings.GetValue(GetImageProviderSettingKey(providerId, "ModelName"), config.DefaultModel),
+                ProxyUrl = ReadResolvedImageProxyUrl(providerId)
             };
         }
 
@@ -262,6 +413,13 @@ namespace ADDGH
                 _comboVisionProvider.Items.Clear();
                 foreach (var provider in providers)
                     _comboVisionProvider.Items.Add(new ComboBoxItem { Content = provider.DisplayName, Tag = provider.ProviderId });
+            }
+
+            if (_comboImageProvider != null)
+            {
+                _comboImageProvider.Items.Clear();
+                foreach (var provider in providers)
+                    _comboImageProvider.Items.Add(new ComboBoxItem { Content = provider.DisplayName, Tag = provider.ProviderId });
             }
         }
 
@@ -318,9 +476,40 @@ namespace ADDGH
             if (_comboVisionProvider.Items.Count > 0) _comboVisionProvider.SelectedIndex = 0;
         }
 
+        private static string GetSelectedImageProviderId()
+        {
+            if (_comboImageProvider?.SelectedItem is ComboBoxItem item && item.Tag != null) return item.Tag.ToString();
+            return GetCurrentImageProviderId();
+        }
+
+        private static void SelectImageProviderComboItem(string providerId)
+        {
+            if (_comboImageProvider == null) return;
+
+            foreach (var item in _comboImageProvider.Items.OfType<ComboBoxItem>())
+            {
+                if ((item.Tag?.ToString() ?? "").Equals(providerId, StringComparison.OrdinalIgnoreCase))
+                {
+                    _comboImageProvider.SelectedItem = item;
+                    return;
+                }
+            }
+
+            foreach (var item in _comboImageProvider.Items.OfType<ComboBoxItem>())
+            {
+                if ((item.Tag?.ToString() ?? "").Equals("nanobanana-relay", StringComparison.OrdinalIgnoreCase))
+                {
+                    _comboImageProvider.SelectedItem = item;
+                    return;
+                }
+            }
+
+            if (_comboImageProvider.Items.Count > 0) _comboImageProvider.SelectedIndex = 0;
+        }
+
         private static void LoadProviderSettingsToUI(string providerId)
         {
-            if (_txtApiKey == null || _txtApiBaseUrl == null || _txtModel == null) return;
+            if (_txtApiKey == null || _txtApiBaseUrl == null || _txtModel == null || _txtProxyUrl == null) return;
 
             _isLoadingProviderSettings = true;
             try
@@ -328,10 +517,32 @@ namespace ADDGH
                 var config = GetProviderConfig(providerId);
                 string legacyBaseUrl = providerId == "deepseek" ? Grasshopper.Instances.Settings.GetValue("AI_API_BaseUrl", config.DefaultBaseUrl) : config.DefaultBaseUrl;
                 string legacyModel = providerId == "deepseek" ? Grasshopper.Instances.Settings.GetValue("AI_ModelName", config.DefaultModel) : config.DefaultModel;
+                string sharedProxy = Grasshopper.Instances.Settings.GetValue("AI_ProxyUrl", "");
 
                 _txtApiKey.Text = ReadResolvedApiKey(providerId);
                 _txtApiBaseUrl.Text = Grasshopper.Instances.Settings.GetValue(GetProviderSettingKey(providerId, "BaseUrl"), legacyBaseUrl);
                 _txtModel.Text = Grasshopper.Instances.Settings.GetValue(GetProviderSettingKey(providerId, "ModelName"), legacyModel);
+                _txtProxyUrl.Text = Grasshopper.Instances.Settings.GetValue(GetProviderSettingKey(providerId, "ProxyUrl"),
+                    !string.IsNullOrWhiteSpace(sharedProxy) ? NormalizeProxyUrl(sharedProxy) : ReadResolvedProxyUrl(providerId));
+            }
+            finally
+            {
+                _isLoadingProviderSettings = false;
+            }
+        }
+
+        private static void LoadImageProviderSettingsToUI(string providerId)
+        {
+            if (_txtImageApiKey == null || _txtImageApiBaseUrl == null || _txtImageModel == null || _txtImageProxyUrl == null) return;
+
+            _isLoadingProviderSettings = true;
+            try
+            {
+                var config = GetProviderConfig(providerId);
+                _txtImageApiKey.Text = ReadResolvedImageApiKey(providerId);
+                _txtImageApiBaseUrl.Text = Grasshopper.Instances.Settings.GetValue(GetImageProviderSettingKey(providerId, "BaseUrl"), config.DefaultBaseUrl);
+                _txtImageModel.Text = Grasshopper.Instances.Settings.GetValue(GetImageProviderSettingKey(providerId, "ModelName"), config.DefaultModel);
+                _txtImageProxyUrl.Text = Grasshopper.Instances.Settings.GetValue(GetImageProviderSettingKey(providerId, "ProxyUrl"), ReadResolvedImageProxyUrl(providerId));
             }
             finally
             {
@@ -346,10 +557,22 @@ namespace ADDGH
             PersistApiKey(providerId, _txtApiKey?.Text);
             if (_txtApiBaseUrl != null) Grasshopper.Instances.Settings.SetValue(GetProviderSettingKey(providerId, "BaseUrl"), _txtApiBaseUrl.Text);
             if (_txtModel != null) Grasshopper.Instances.Settings.SetValue(GetProviderSettingKey(providerId, "ModelName"), _txtModel.Text);
+            if (_txtProxyUrl != null) Grasshopper.Instances.Settings.SetValue(GetProviderSettingKey(providerId, "ProxyUrl"), NormalizeProxyUrl(_txtProxyUrl.Text));
 
             // Keep legacy URL/model keys populated so older builds can still read defaults for DeepSeek.
             if (_txtApiBaseUrl != null) Grasshopper.Instances.Settings.SetValue("AI_API_BaseUrl", _txtApiBaseUrl.Text);
             if (_txtModel != null) Grasshopper.Instances.Settings.SetValue("AI_ModelName", _txtModel.Text);
+            if (_txtProxyUrl != null) Grasshopper.Instances.Settings.SetValue("AI_ProxyUrl", NormalizeProxyUrl(_txtProxyUrl.Text));
+        }
+
+        private static void SaveSelectedImageProviderSettings()
+        {
+            string providerId = GetSelectedImageProviderId();
+            Grasshopper.Instances.Settings.SetValue("AI_ImageProvider", providerId);
+            PersistImageApiKey(providerId, _txtImageApiKey?.Text);
+            if (_txtImageApiBaseUrl != null) Grasshopper.Instances.Settings.SetValue(GetImageProviderSettingKey(providerId, "BaseUrl"), _txtImageApiBaseUrl.Text);
+            if (_txtImageModel != null) Grasshopper.Instances.Settings.SetValue(GetImageProviderSettingKey(providerId, "ModelName"), _txtImageModel.Text);
+            if (_txtImageProxyUrl != null) Grasshopper.Instances.Settings.SetValue(GetImageProviderSettingKey(providerId, "ProxyUrl"), NormalizeProxyUrl(_txtImageProxyUrl.Text));
         }
 
         private static void SaveSelectedVisionProviderSetting()

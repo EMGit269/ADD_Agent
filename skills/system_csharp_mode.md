@@ -44,7 +44,7 @@ Not allowed as core-logic substitutes:
 - Do not include `using`, class declarations, full templates, or a custom `RunScript` signature in body-only output.
 - Match input names and port order exactly. For outputs, keep the requested business labels aligned with the declared ports, but assign values in the body to the actual generated output variables (`b`, `c`, `d`...) rather than inventing custom output variable names.
 - Prefer strongly typed inputs such as `double`, `int`, `bool`, `string`, `Point3d`, `Vector3d`, `Curve`, `Brep`, `Mesh`, and `Plane`.
-- Validate and clamp risky inputs early.
+- Validate and clamp invalid or extreme inputs early.
 - Assign every output explicitly.
 - Prefer simple, deterministic code over clever or fragmented code.
 - Keep the number of script components low; split only when the logic is genuinely clearer.

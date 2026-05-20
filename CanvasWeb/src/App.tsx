@@ -1,6 +1,4 @@
 import React, { Component, ReactNode, useEffect, useMemo, useRef, useState } from 'react'
-import { Tldraw, getSnapshot, loadSnapshot } from '@tldraw/tldraw'
-import '@tldraw/tldraw/tldraw.css'
 
 type HostEnvelope = {
   type: string
@@ -27,6 +25,83 @@ type InspectorSnapshot = {
   generatedAtUtc?: string
 }
 
+type Viewport = {
+  x: number
+  y: number
+  z: number
+}
+
+type CanvasNodeType = 'message' | 'note' | 'image' | 'prompt' | 'file_upload' | 'slider' | 'code'
+
+type PortDirection = 'input' | 'output'
+
+type PortDataType = 'any' | 'image' | 'text' | 'path' | 'number' | 'code'
+
+type NodePort = {
+  id: string
+  label: string
+  direction: PortDirection
+  dataType: PortDataType
+  slot: number
+}
+
+type CanvasConnection = {
+  id: string
+  fromNodeId: string
+  fromPortId: string
+  toNodeId: string
+  toPortId: string
+}
+
+type CanvasNode = {
+  id: string
+  sourceRef: string
+  nodeType: CanvasNodeType
+  x: number
+  y: number
+  w: number
+  h: number
+  meta: Record<string, any>
+}
+
+type LightweightSnapshot = {
+  kind: 'addgh-lightweight-canvas-v1'
+  viewport: Viewport
+  nodes: CanvasNode[]
+  connections?: CanvasConnection[]
+}
+
+type DragState =
+  | { mode: 'pan'; pointerId: number; startX: number; startY: number; startViewport: Viewport }
+  | { mode: 'node'; pointerId: number; sourceRef: string; startX: number; startY: number; startNodeX: number; startNodeY: number }
+  | null
+
+type PendingConnection = {
+  nodeId: string
+  portId: string
+}
+
+type CanvasSnapshotState = {
+  nodes: CanvasNode[]
+  connections: CanvasConnection[]
+  viewport: Viewport
+  selectedSourceRef: string | null
+}
+
+type CanvasHistoryState = {
+  past: CanvasSnapshotState[]
+  future: CanvasSnapshotState[]
+}
+
+type ContextMenuState = {
+  x: number
+  y: number
+  worldX: number
+  worldY: number
+  mode: 'canvas' | 'node'
+  sourceRef?: string
+} | null
+
 declare global {
   interface Window {
     chrome?: {
@@ -40,6 +115,7 @@ declare global {
 }
 
 const hostBridge = window.chrome?.webview ?? null
+const snapshotKind = 'addgh-lightweight-canvas-v1'
 
 function postHostMessage(type: string, payload: unknown = {}) {
   hostBridge?.postMessage?.({ type, payload })
@@ -82,56 +158,7 @@ class CanvasErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySta
   }
 }
 
-function clampText(text: string | undefined, maxLen: number) {
-  const normalized = (text ?? '').replace(/\s+/g, ' ').trim()
-  if (normalized.length <= maxLen) return normalized
-  return normalized.slice(0, maxLen) + '...'
-}
-
-function slugify(text: string) {
-  return String(text)
-    .replace(/[^a-zA-Z0-9:_-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-    .toLowerCase()
-}
-
-function shapeColor(role?: string, kind?: string) {
-  if (kind === 'note') return 'green'
-  if (kind === 'tool_result' || role === 'tool') return 'light-green'
-  if (role === 'assistant') return 'blue'
-  return 'yellow'
-}
-
-function composeCardText(meta: any) {
-  const title = meta.title || 'Untitled'
-  const summary = clampText(meta.summary || '', 120)
-  const body = clampText(meta.body || '', 500)
-  const tags = Array.isArray(meta.tags) && meta.tags.length ? `#${meta.tags.join(' #')}` : ''
-
-  if (meta.collapsed) {
-    return [title, clampText(meta.summary || '', 60), meta.sourceRef || ''].filter(Boolean).join('\n')
-  }
-
-  return [title, summary, '', body, '', tags].filter(Boolean).join('\n')
-}
-
-function extractShapeMeta(shape: any) {
-  return shape?.meta ?? {}
-}
-
-function getShapeBySourceRef(editor: any, sourceRef: string) {
-  const shapes = Array.from(editor?.getCurrentPageShapes?.() ?? [])
-  return shapes.find((shape: any) => extractShapeMeta(shape).sourceRef === sourceRef) ?? null
-}
-
-function asArray<T>(value: Iterable<T> | T[] | null | undefined) {
-  if (!value) return [] as T[]
-  return Array.isArray(value) ? value : Array.from(value)
-}
-
 function CanvasWorkbench() {
-  const [editor, setEditor] = useState<any>(null)
   const [isDarkMode, setIsDarkMode] = useState(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
     return window.matchMedia('(prefers-color-scheme: dark)').matches
@@ -139,17 +166,48 @@ function CanvasWorkbench() {
   const [conversationId, setConversationId] = useState('draft')
   const [conversationTitle, setConversationTitle] = useState('Canvas')
   const [messages, setMessages] = useState<CanvasMessageItem[]>([])
+  const [nodes, setNodes] = useState<CanvasNode[]>([])
+  const [connections, setConnections] = useState<CanvasConnection[]>([])
+  const [viewport, setViewport] = useState<Viewport>({ x: 80, y: 90, z: 1 })
+  const [selectedSourceRef, setSelectedSourceRef] = useState<string | null>(null)
+  const [pendingConnection, setPendingConnection] = useState<PendingConnection | null>(null)
+  const [detailSourceRef, setDetailSourceRef] = useState<string | null>(null)
+  const [contextMenu, setContextMenu] = useState<ContextMenuState>(null)
   const [inspectorSnapshot, setInspectorSnapshot] = useState<InspectorSnapshot | null>(null)
-  const [selectionVersion, setSelectionVersion] = useState(0)
-  const [cameraVersion, setCameraVersion] = useState(0)
-  const cardMetaRef = useRef<Record<string, any>>({})
-  const loadedConversationRef = useRef<string | null>(null)
+  const [interactionMode, setInteractionMode] = useState('idle')
+  const surfaceRef = useRef<HTMLDivElement | null>(null)
+  const dragRef = useRef<DragState>(null)
   const saveTimerRef = useRef<number | null>(null)
-  const selectionPollTimerRef = useRef<number | null>(null)
-  const lastSelectionKeyRef = useRef('')
-  const lastCameraKeyRef = useRef('')
-  const gridCanvasRef = useRef<HTMLCanvasElement | null>(null)
-  const hostRef = useRef<HTMLDivElement | null>(null)
+  const nodesRef = useRef(nodes)
+  const connectionsRef = useRef(connections)
+  const viewportRef = useRef(viewport)
+  const selectedSourceRefRef = useRef<string | null>(selectedSourceRef)
+  const cardMetaRef = useRef<Record<string, any>>({})
+  const historyRef = useRef<CanvasHistoryState>({ past: [], future: [] })
+  const lastMessagesSignatureRef = useRef('')
+  const currentConversationIdRef = useRef('draft')
+  const currentConversationTitleRef = useRef('Canvas')
+
+  useEffect(() => {
+    nodesRef.current = nodes
+  }, [nodes])
+
+  useEffect(() => {
+    connectionsRef.current = connections
+  }, [connections])
+
+  useEffect(() => {
+    viewportRef.current = viewport
+  }, [viewport])
+
+  useEffect(() => {
+    selectedSourceRefRef.current = selectedSourceRef
+  }, [selectedSourceRef])
+
+  useEffect(() => {
+    currentConversationIdRef.current = conversationId
+    currentConversationTitleRef.current = conversationTitle
+  }, [conversationId, conversationTitle])
 
   useEffect(() => {
     const reportError = (kind: string, detail: unknown) => {
@@ -172,116 +230,6 @@ function CanvasWorkbench() {
     }
   }, [])
 
-  const selectedShape = useMemo(() => {
-    if (!editor) return null
-    const ids = asArray<string>(editor.getSelectedShapeIds?.())
-    if (!ids.length) return null
-    return editor.getShape?.(ids[0]) ?? null
-  }, [editor, selectionVersion, messages])
-
-  const selectedMeta = selectedShape ? extractShapeMeta(selectedShape) : null
-
-  useEffect(() => {
-    if (!editor) return
-
-    const stopDocument = editor.store.listen(
-      () => {
-        syncShapeLayoutIntoMeta(editor, cardMetaRef.current)
-        scheduleSave()
-      },
-      { scope: 'document', source: 'user' },
-    )
-
-    const pollEditorState = () => {
-      const selectionKey = asArray<string>(editor.getSelectedShapeIds?.()).join('|')
-      if (selectionKey !== lastSelectionKeyRef.current) {
-        lastSelectionKeyRef.current = selectionKey
-        setSelectionVersion((value) => value + 1)
-      }
-
-      const camera = normalizeCamera(editor.getCamera?.())
-      const cameraKey = `${camera.x.toFixed(3)}|${camera.y.toFixed(3)}|${camera.z.toFixed(4)}`
-      if (cameraKey !== lastCameraKeyRef.current) {
-        lastCameraKeyRef.current = cameraKey
-        setCameraVersion((value) => value + 1)
-      }
-    }
-
-    pollEditorState()
-    selectionPollTimerRef.current = window.setInterval(pollEditorState, 120)
-
-    return () => {
-      stopDocument?.()
-      if (selectionPollTimerRef.current !== null) {
-        window.clearInterval(selectionPollTimerRef.current)
-        selectionPollTimerRef.current = null
-      }
-    }
-  }, [editor])
-
-  useEffect(() => {
-    return () => {
-      if (saveTimerRef.current !== null) {
-        window.clearTimeout(saveTimerRef.current)
-        saveTimerRef.current = null
-      }
-      if (selectionPollTimerRef.current !== null) {
-        window.clearInterval(selectionPollTimerRef.current)
-        selectionPollTimerRef.current = null
-      }
-    }
-  }, [])
-
-  useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
-      const envelope = event.data as HostEnvelope
-      if (!envelope?.type) return
-
-      if (envelope.type === 'bootstrap') {
-        const payload = envelope.payload ?? {}
-        setConversationId(payload.conversationId ?? 'draft')
-        setConversationTitle(payload.conversationTitle ?? 'Canvas')
-        setMessages(Array.isArray(payload.messages) ? payload.messages : [])
-        setInspectorSnapshot(payload.inspectorSnapshot ?? null)
-        cardMetaRef.current = {
-          ...(payload.canvasSnapshot?.cardMetaPatches ?? {}),
-        }
-
-        const snapshot = payload.canvasSnapshot?.snapshot
-        if (editor && payload.conversationId !== loadedConversationRef.current) {
-          resetEditorDocument(editor)
-          if (snapshot) {
-            try {
-              loadSnapshot(editor.store, sanitizeCanvasSnapshot(snapshot))
-            } catch {
-              resetEditorDocument(editor)
-            }
-          }
-          loadedConversationRef.current = payload.conversationId ?? 'draft'
-        }
-      }
-
-      if (envelope.type === 'conversation_delta') {
-        const payload = envelope.payload ?? {}
-        setConversationId(payload.conversationId ?? conversationId)
-        setConversationTitle(payload.conversationTitle ?? conversationTitle)
-        setMessages(Array.isArray(payload.messages) ? payload.messages : [])
-      }
-
-      if (envelope.type === 'inspector_update') {
-        setInspectorSnapshot((envelope.payload ?? null) as InspectorSnapshot | null)
-      }
-    }
-
-    hostBridge?.addEventListener?.('message', handleMessage)
-    return () => hostBridge?.removeEventListener?.('message', handleMessage)
-  }, [editor, conversationId, conversationTitle])
-
-  useEffect(() => {
-    if (!editor) return
-    syncCardsIntoEditor(editor, messages, cardMetaRef.current)
-  }, [editor, messages])
-
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
 
@@ -299,229 +247,629 @@ function CanvasWorkbench() {
   }, [])
 
   useEffect(() => {
-    if (!editor || !hostRef.current || !gridCanvasRef.current) return
-    drawGridOverlay(gridCanvasRef.current, hostRef.current, editor, isDarkMode)
-  }, [editor, cameraVersion, isDarkMode])
-
-  useEffect(() => {
     document.documentElement.dataset.theme = isDarkMode ? 'dark' : 'light'
   }, [isDarkMode])
 
-  function resetEditorDocument(targetEditor: any) {
-    try {
-      const ids = asArray<string>(targetEditor.getCurrentPageShapeIds?.())
-      if (ids.length) targetEditor.deleteShapes(ids)
-      targetEditor.setCamera?.({ x: 0, y: 0, z: 1 })
-    } catch {
-      // ignore and let next bootstrap rebuild from scratch
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      const isTyping = Boolean(target?.closest('input,textarea,[contenteditable="true"]'))
+
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'z') {
+        event.preventDefault()
+        const last = historyRef.current.past[historyRef.current.past.length - 1]
+        if (!last) return
+        historyRef.current = {
+          past: historyRef.current.past.slice(0, -1),
+          future: [createSnapshotState(), ...historyRef.current.future],
+        }
+        applySnapshotState(last)
+        return
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y') {
+        event.preventDefault()
+        const next = historyRef.current.future[0]
+        if (!next) return
+        historyRef.current = {
+          past: [...historyRef.current.past, createSnapshotState()],
+          future: historyRef.current.future.slice(1),
+        }
+        applySnapshotState(next)
+        return
+      }
+
+      if (isTyping) return
+
+      if (event.key === 'Delete' && selectedSourceRefRef.current) {
+        event.preventDefault()
+        deleteNodeBySourceRef(selectedSourceRefRef.current)
+      }
     }
-  }
 
-  function scheduleSave() {
-    if (!editor) return
-    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = window.setTimeout(() => {
-      const snapshot = getSnapshot(editor.store)
-      postHostMessage('document_snapshot_save', { snapshot })
-    }, 500)
-  }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
 
-  function updateCardMeta(sourceRef: string, patch: Record<string, unknown>) {
-    if (editor) syncShapeLayoutIntoMeta(editor, cardMetaRef.current, sourceRef)
-    cardMetaRef.current[sourceRef] = { ...(cardMetaRef.current[sourceRef] ?? {}), ...patch }
-    postHostMessage('card_meta_patch', { sourceRef, ...cardMetaRef.current[sourceRef] })
-    syncCardsIntoEditor(editor, messages, cardMetaRef.current)
-    scheduleSave()
-  }
+  useEffect(() => {
+    const applyEnvelope = (envelope: HostEnvelope) => {
+      if (!envelope?.type) return
 
-  function handleMount(nextEditor: any) {
-    setEditor(nextEditor)
-    loadedConversationRef.current = null
-    postHostMessage('canvas_ready', { version: 'tldraw-formal-v1' })
+      if (envelope.type === 'bootstrap') {
+        const payload = envelope.payload ?? {}
+        const nextConversationId = payload.conversationId ?? 'draft'
+        const nextConversationTitle = payload.conversationTitle ?? 'Canvas'
+        const nextMessages = Array.isArray(payload.messages) ? payload.messages : []
+        const nextSignature = computeMessagesSignature(nextMessages)
+        const savedSnapshot = parseSnapshot(payload.canvasSnapshot?.snapshot)
+        const savedMeta = payload.canvasSnapshot?.cardMetaPatches ?? {}
+
+        currentConversationIdRef.current = nextConversationId
+        currentConversationTitleRef.current = nextConversationTitle
+        setConversationId(nextConversationId)
+        setConversationTitle(nextConversationTitle)
+        setInspectorSnapshot(payload.inspectorSnapshot ?? null)
+        cardMetaRef.current = { ...savedMeta }
+        if (savedSnapshot?.viewport) setViewport(normalizeViewport(savedSnapshot.viewport))
+        if (Array.isArray(savedSnapshot?.connections)) setConnections(savedSnapshot.connections.map(normalizeConnection))
+
+        setNodes((previous) => {
+          const baseNodes = savedSnapshot?.nodes?.length ? savedSnapshot.nodes : previous
+          return reconcileNodes(nextMessages, cardMetaRef.current, baseNodes, savedSnapshot?.connections ?? connectionsRef.current)
+        })
+
+        if (nextSignature !== lastMessagesSignatureRef.current) {
+          lastMessagesSignatureRef.current = nextSignature
+          setMessages(nextMessages)
+        }
+      }
+
+      if (envelope.type === 'conversation_delta') {
+        const payload = envelope.payload ?? {}
+        const nextConversationId = payload.conversationId ?? currentConversationIdRef.current
+        const nextConversationTitle = payload.conversationTitle ?? currentConversationTitleRef.current
+        const nextMessages = Array.isArray(payload.messages) ? payload.messages : []
+        const nextSignature = computeMessagesSignature(nextMessages)
+
+        currentConversationIdRef.current = nextConversationId
+        currentConversationTitleRef.current = nextConversationTitle
+        setConversationId(nextConversationId)
+        setConversationTitle(nextConversationTitle)
+        if (nextSignature !== lastMessagesSignatureRef.current) {
+          lastMessagesSignatureRef.current = nextSignature
+          setMessages(nextMessages)
+          setNodes((previous) => reconcileNodes(nextMessages, cardMetaRef.current, previous, connectionsRef.current))
+        }
+      }
+
+      if (envelope.type === 'inspector_update') {
+        setInspectorSnapshot((envelope.payload ?? null) as InspectorSnapshot | null)
+      }
+    }
+
+    const handleMessage = (event: MessageEvent) => applyEnvelope(event.data as HostEnvelope)
+    hostBridge?.addEventListener?.('message', handleMessage)
+
+    postHostMessage('canvas_ready', { version: 'lightweight-canvas-v1' })
     if (!hostBridge) {
-      setMessages([
+      const demoMessages = [
         {
           sourceRef: 'note:demo-1',
           role: 'assistant',
           kind: 'assistant_message',
           title: 'Canvas Demo',
-          summary: 'Standalone mode without Rhino host bridge.',
-          body: 'This is the formal tldraw workbench. Open inside Rhino to receive live conversation cards.',
+          summary: 'Standalone lightweight canvas.',
+          body: 'This canvas uses plain DOM nodes instead of tldraw. Drag nodes, pan the background, and zoom with the wheel.',
           tags: ['demo'],
           collapsed: false,
           pinned: false,
         },
-      ])
+      ]
+      setMessages(demoMessages)
+      setNodes(reconcileNodes(demoMessages, {}, []))
+    }
+
+    return () => {
+      hostBridge?.removeEventListener?.('message', handleMessage)
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+      }
+    }
+  }, [])
+
+  const selectedNode = useMemo(
+    () => nodes.find((node) => node.sourceRef === selectedSourceRef) ?? null,
+    [nodes, selectedSourceRef],
+  )
+  const detailNode = useMemo(
+    () => nodes.find((node) => node.sourceRef === detailSourceRef) ?? null,
+    [nodes, detailSourceRef],
+  )
+  const detailMeta = detailNode?.meta ?? null
+
+  function createSnapshotState(
+    override: Partial<CanvasSnapshotState> = {},
+  ): CanvasSnapshotState {
+    return {
+      nodes: cloneNodes(override.nodes ?? nodesRef.current),
+      connections: cloneConnections(override.connections ?? connectionsRef.current),
+      viewport: { ...(override.viewport ?? viewportRef.current) },
+      selectedSourceRef: override.selectedSourceRef ?? selectedSourceRefRef.current,
+    }
+  }
+
+  function applySnapshotState(snapshot: CanvasSnapshotState, shouldSave = true) {
+    nodesRef.current = cloneNodes(snapshot.nodes)
+    connectionsRef.current = cloneConnections(snapshot.connections)
+    viewportRef.current = { ...snapshot.viewport }
+    selectedSourceRefRef.current = snapshot.selectedSourceRef
+    setNodes(nodesRef.current)
+    setConnections(connectionsRef.current)
+    setViewport(viewportRef.current)
+    setSelectedSourceRef(snapshot.selectedSourceRef)
+    if (shouldSave) scheduleSave()
+  }
+
+  function pushHistorySnapshot(snapshot: CanvasSnapshotState) {
+    historyRef.current = {
+      past: [...historyRef.current.past, snapshot],
+      future: [],
+    }
+  }
+
+  function commitMutation(mutator: (snapshot: CanvasSnapshotState) => CanvasSnapshotState) {
+    const before = createSnapshotState()
+    const after = mutator(before)
+    pushHistorySnapshot(before)
+    applySnapshotState(after)
+  }
+
+  function scheduleSave() {
+    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null
+      const snapshot: LightweightSnapshot = {
+        kind: snapshotKind,
+        viewport: viewportRef.current,
+        nodes: nodesRef.current,
+        connections: connectionsRef.current,
+      }
+      postHostMessage('document_snapshot_save', { snapshot })
+    }, 350)
+  }
+
+  function updateNodes(next: CanvasNode[] | ((current: CanvasNode[]) => CanvasNode[]), shouldSave = true) {
+    setNodes((current) => {
+      const resolved = typeof next === 'function' ? next(current) : next
+      nodesRef.current = resolved
+      if (shouldSave) scheduleSave()
+      return resolved
+    })
+  }
+
+  function updateConnections(
+    next: CanvasConnection[] | ((current: CanvasConnection[]) => CanvasConnection[]),
+    shouldSave = true,
+  ) {
+    setConnections((current) => {
+      const resolved = dedupeConnections(typeof next === 'function' ? next(current) : next)
+      connectionsRef.current = resolved
+      if (shouldSave) scheduleSave()
+      return resolved
+    })
+  }
+
+  function updateViewport(next: Viewport | ((current: Viewport) => Viewport), shouldSave = true) {
+    setViewport((current) => {
+      const resolved = normalizeViewport(typeof next === 'function' ? next(current) : next)
+      viewportRef.current = resolved
+      if (shouldSave) scheduleSave()
+      return resolved
+    })
+  }
+
+  function updateNodeMeta(sourceRef: string, patch: Record<string, unknown>) {
+    cardMetaRef.current[sourceRef] = { ...(cardMetaRef.current[sourceRef] ?? {}), ...patch }
+    updateNodes((current) =>
+      current.map((node) => {
+        if (node.sourceRef !== sourceRef) return node
+        const nextMeta = { ...node.meta, ...patch }
+        nextMeta.ports = getNodePorts(node.nodeType, nextMeta)
+        const { w, h } = resolveNodeSize(nextMeta, node.nodeType, node)
+        return {
+          ...node,
+          w,
+          h,
+          meta: nextMeta,
+        }
+      }),
+    )
+    postHostMessage('card_meta_patch', { sourceRef, ...cardMetaRef.current[sourceRef] })
+  }
+
+  function deleteNodeBySourceRef(sourceRef: string) {
+    commitMutation((snapshot) => {
+      const remainingNodes = snapshot.nodes.filter((node) => node.sourceRef !== sourceRef)
+      const remainingNodeIds = new Set(remainingNodes.map((node) => node.id))
+      const remainingConnections = snapshot.connections.filter(
+        (connection) => remainingNodeIds.has(connection.fromNodeId) && remainingNodeIds.has(connection.toNodeId),
+      )
+      return {
+        ...snapshot,
+        nodes: remainingNodes,
+        connections: remainingConnections,
+        selectedSourceRef: snapshot.selectedSourceRef === sourceRef ? null : snapshot.selectedSourceRef,
+      }
+    })
+    setDetailSourceRef((current) => (current === sourceRef ? null : current))
+    setContextMenu(null)
+  }
+
+  function createTypedNodeAt(nodeType: CanvasNodeType, x: number, y: number) {
+    const sourceRef = `${nodeType}:${Date.now()}`
+    const meta = buildDefaultNodeMeta(nodeType, sourceRef)
+    const node = createNode(meta, nodesRef.current.length, x, y, nodeType)
+    cardMetaRef.current[sourceRef] = meta
+    commitMutation((snapshot) => ({
+      ...snapshot,
+      nodes: [...snapshot.nodes, node],
+      selectedSourceRef: sourceRef,
+    }))
+    setContextMenu(null)
+  }
+
+  function onSurfacePointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return
+    if ((event.target as HTMLElement).closest('.canvas-node')) return
+    setContextMenu(null)
+    if (pendingConnection) setPendingConnection(null)
+    dragRef.current = {
+      mode: 'pan',
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startViewport: viewportRef.current,
+    }
+    setSelectedSourceRef(null)
+    setInteractionMode('pan')
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  function onNodePointerDown(event: React.PointerEvent<HTMLElement>, node: CanvasNode) {
+    if (event.button !== 0) return
+    const target = event.target as HTMLElement
+    if (target.closest('button,input,textarea,select')) return
+    setContextMenu(null)
+    event.stopPropagation()
+    setSelectedSourceRef(node.sourceRef)
+    dragRef.current = {
+      mode: 'node',
+      pointerId: event.pointerId,
+      sourceRef: node.sourceRef,
+      startX: event.clientX,
+      startY: event.clientY,
+      startNodeX: node.x,
+      startNodeY: node.y,
+    }
+    setInteractionMode('drag')
+    surfaceRef.current?.setPointerCapture(event.pointerId)
+  }
+
+  function handlePortClick(node: CanvasNode, port: NodePort) {
+    setContextMenu(null)
+    setSelectedSourceRef(node.sourceRef)
+    if (port.direction === 'output') {
+      setPendingConnection({ nodeId: node.id, portId: port.id })
+      setInteractionMode('connect')
+      return
+    }
+    if (!pendingConnection) return
+    if (pendingConnection.nodeId === node.id && pendingConnection.portId === port.id) {
+      setPendingConnection(null)
+      setInteractionMode('idle')
+      return
+    }
+    connectNodes(pendingConnection, { nodeId: node.id, portId: port.id })
+    setInteractionMode('idle')
+  }
+
+  function connectNodes(from: PendingConnection, to: PendingConnection) {
+    if (from.nodeId === to.nodeId && from.portId === to.portId) return
+    updateConnections((current) => [
+      ...current,
+      {
+        id: `conn:${from.nodeId}:${from.portId}->${to.nodeId}:${to.portId}`,
+        fromNodeId: from.nodeId,
+        fromPortId: from.portId,
+        toNodeId: to.nodeId,
+        toPortId: to.portId,
+      },
+    ])
+    setPendingConnection(null)
+  }
+
+  function onPointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+
+    if (drag.mode === 'pan') {
+      updateViewport({
+        ...drag.startViewport,
+        x: drag.startViewport.x + event.clientX - drag.startX,
+        y: drag.startViewport.y + event.clientY - drag.startY,
+      })
+      return
+    }
+
+    const zoom = viewportRef.current.z
+    const dx = (event.clientX - drag.startX) / zoom
+    const dy = (event.clientY - drag.startY) / zoom
+    updateNodes((current) =>
+      current.map((node) =>
+        node.sourceRef === drag.sourceRef
+          ? {
+              ...node,
+              x: drag.startNodeX + dx,
+              y: drag.startNodeY + dy,
+              meta: {
+                ...node.meta,
+                x: drag.startNodeX + dx,
+                y: drag.startNodeY + dy,
+              },
+            }
+          : node,
+      ),
+    )
+  }
+
+  function onPointerUp(event: React.PointerEvent<HTMLDivElement>) {
+    if (dragRef.current?.pointerId !== event.pointerId) return
+    dragRef.current = null
+    setInteractionMode('idle')
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    } catch {
+      // The pointer may have already been released by the browser.
+    }
+    syncNodeLayoutsToMeta()
+    scheduleSave()
+  }
+
+  function onWheel(event: React.WheelEvent<HTMLDivElement>) {
+    setContextMenu(null)
+    event.preventDefault()
+    const rect = event.currentTarget.getBoundingClientRect()
+    const point = {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+    }
+    const current = viewportRef.current
+
+    if (!event.ctrlKey && !event.metaKey) {
+      updateViewport({
+        ...current,
+        x: current.x - event.deltaX,
+        y: current.y - event.deltaY,
+      })
+      return
+    }
+
+    const nextZoom = clamp(current.z * Math.exp(-event.deltaY * 0.0012), 0.25, 2.8)
+    const worldX = (point.x - current.x) / current.z
+    const worldY = (point.y - current.y) / current.z
+    updateViewport({
+      x: point.x - worldX * nextZoom,
+      y: point.y - worldY * nextZoom,
+      z: nextZoom,
+    })
+  }
+
+  function syncNodeLayoutsToMeta() {
+    for (const node of nodesRef.current) {
+      cardMetaRef.current[node.sourceRef] = {
+        ...(cardMetaRef.current[node.sourceRef] ?? {}),
+        x: node.x,
+        y: node.y,
+        w: node.w,
+        h: node.h,
+      }
     }
   }
 
   function onFit() {
-    editor?.zoomToFit?.()
+    if (!nodes.length || !surfaceRef.current) return
+    const rect = surfaceRef.current.getBoundingClientRect()
+    const bounds = getNodesBounds(nodes)
+    const padding = 90
+    const z = clamp(Math.min((rect.width - padding * 2) / bounds.w, (rect.height - padding * 2) / bounds.h), 0.35, 1.3)
+    updateViewport({
+      z,
+      x: rect.width / 2 - (bounds.x + bounds.w / 2) * z,
+      y: rect.height / 2 - (bounds.y + bounds.h / 2) * z,
+    })
   }
 
   function onNewNote() {
-    if (!editor) return
-    const sourceRef = `note:${Date.now()}`
-    const shapeId = `shape:${slugify(sourceRef)}`
-    const nextMeta = {
-      sourceRef,
-      title: 'New Note',
-      summary: 'Manual canvas note',
-      body: '',
-      tags: [],
-      collapsed: false,
-      pinned: false,
-      kind: 'note',
-      role: 'note',
-      userEditedTitle: true,
-    }
-    cardMetaRef.current[sourceRef] = nextMeta
-    editor.createShapes?.([
-      {
-        id: shapeId,
-        type: 'geo',
-        x: 80,
-        y: 80,
-        props: {
-          geo: 'rectangle',
-          w: 300,
-          h: 180,
-          richText: composeCardRichText(nextMeta),
-          color: 'green',
-          labelColor: 'black',
-          fill: 'semi',
-          dash: 'draw',
-          size: 's',
-          align: 'start',
-          verticalAlign: 'start',
-          font: 'draw',
-          url: '',
-          growY: 0,
-          scale: 1,
-        },
-        meta: nextMeta,
-      },
-    ])
-    editor.select?.(shapeId)
-    updateCardMeta(sourceRef, nextMeta)
+    const center = screenToWorld(
+      surfaceRef.current?.clientWidth ? surfaceRef.current.clientWidth / 2 : 300,
+      surfaceRef.current?.clientHeight ? surfaceRef.current.clientHeight / 2 : 220,
+      viewportRef.current,
+    )
+    createTypedNodeAt('note', center.x - 160, center.y - 90)
   }
 
-  function onGroup() {
-    if (!editor) return
-    const bounds = editor.getSelectionPageBounds?.()
-    const selectedIds = asArray<string>(editor.getSelectedShapeIds?.())
-    if (!bounds || selectedIds.length < 2) return
-
-    const sourceRef = `group:${Date.now()}`
-    const frameId = `shape:${slugify(sourceRef)}`
-    editor.createShapes?.([
-      {
-        id: frameId,
-        type: 'frame',
-        x: bounds.x - 24,
-        y: bounds.y - 44,
-        props: {
-          w: bounds.w + 48,
-          h: bounds.h + 68,
-          name: 'Group',
-        },
-        meta: {
-          sourceRef,
-          groupId: frameId,
-          title: 'Group',
-          memberIds: selectedIds,
-          addghType: 'addgh-group',
-        },
-      },
-    ])
-    editor.select?.(frameId)
-    scheduleSave()
+  function onAddTypedNode(nodeType: CanvasNodeType) {
+    const center = screenToWorld(
+      surfaceRef.current?.clientWidth ? surfaceRef.current.clientWidth / 2 : 300,
+      surfaceRef.current?.clientHeight ? surfaceRef.current.clientHeight / 2 : 220,
+      viewportRef.current,
+    )
+    createTypedNodeAt(nodeType, center.x - 180, center.y - 120)
   }
 
   function onCollapse() {
-    if (!editor || !selectedShape) return
-    const meta = extractShapeMeta(selectedShape)
-    if (!meta?.sourceRef) return
-    const nextCollapsed = !Boolean(meta.collapsed)
-    updateCardMeta(meta.sourceRef, { collapsed: nextCollapsed })
-  }
-
-  function onInspector() {
-    if (!selectedMeta?.sourceRef) return
-    postHostMessage('open_inspector_for_source', { sourceRef: selectedMeta.sourceRef })
+    if (!selectedNode) return
+    updateNodeMeta(selectedNode.sourceRef, { collapsed: !Boolean(selectedNode.meta.collapsed) })
   }
 
   function onSync() {
-    postHostMessage('canvas_ready', { reason: 'manual-sync' })
+    syncNodeLayoutsToMeta()
     scheduleSave()
+    postHostMessage('canvas_ready', { reason: 'manual-sync' })
+  }
+
+  function onCanvasContextMenu(event: React.MouseEvent<HTMLDivElement>) {
+    event.preventDefault()
+    const target = event.target as HTMLElement
+    const nodeHost = target.closest('.canvas-node') as HTMLElement | null
+    if (nodeHost?.dataset.sourceRef) {
+      setSelectedSourceRef(nodeHost.dataset.sourceRef)
+      setContextMenu({
+        x: event.clientX,
+        y: event.clientY,
+        worldX: 0,
+        worldY: 0,
+        mode: 'node',
+        sourceRef: nodeHost.dataset.sourceRef,
+      })
+      return
+    }
+
+    const rect = event.currentTarget.getBoundingClientRect()
+    const point = screenToWorld(event.clientX - rect.left, event.clientY - rect.top, viewportRef.current)
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      worldX: point.x,
+      worldY: point.y,
+      mode: 'canvas',
+    })
   }
 
   return (
-    <div className={`app-shell ${isDarkMode ? 'theme-dark' : 'theme-light'}`} ref={hostRef}>
-      <div className="tldraw-host">
-        <Tldraw hideUi colorScheme="system" onMount={handleMount} />
-        <canvas ref={gridCanvasRef} className="grid-overlay" />
+    <div className={`app-shell ${isDarkMode ? 'theme-dark' : 'theme-light'}`}>
+      <div
+        ref={surfaceRef}
+        className={`light-canvas ${interactionMode !== 'idle' ? `is-${interactionMode}` : ''}`}
+        style={gridStyle(viewport, isDarkMode)}
+        onContextMenu={onCanvasContextMenu}
+        onPointerDown={onSurfacePointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onWheel={onWheel}
+      >
+        <div className="canvas-content">
+          <svg className="connection-layer" width="100%" height="100%">
+            {connections.map((connection) => renderConnection(connection, nodes, viewport))}
+          </svg>
+          {nodes.map((node) => (
+            <article
+              key={node.id}
+              className={`canvas-node node-${nodeKind(node.meta)} type-${node.nodeType} ${selectedSourceRef === node.sourceRef ? 'selected' : ''}`}
+              style={nodeStyle(node, viewport)}
+              data-source-ref={node.sourceRef}
+              onPointerDown={(event) => onNodePointerDown(event, node)}
+              onDoubleClick={() => setDetailSourceRef(node.sourceRef)}
+            >
+              <header className="node-header">
+                <span>{node.meta.title ?? 'Untitled'}</span>
+                <small>{node.nodeType}</small>
+              </header>
+              <p className="node-summary">{node.meta.summary || node.meta.sourceRef}</p>
+              {renderNodePreview(node)}
+              {renderPorts(node, pendingConnection, handlePortClick)}
+              {!node.meta.collapsed ? <pre className="node-body">{getNodePreviewText(node)}</pre> : null}
+              {Array.isArray(node.meta.tags) && node.meta.tags.length ? (
+                <div className="node-tags">
+                  {node.meta.tags.map((tag: string) => (
+                    <span key={tag}>#{tag}</span>
+                  ))}
+                </div>
+              ) : null}
+            </article>
+          ))}
+        </div>
       </div>
 
-      <div className="toolbar">
+      <div className="floating-toolbar">
         <button onClick={onFit}>Fit</button>
-        <button onClick={onNewNote}>New Note</button>
-        <button onClick={onGroup}>Group</button>
-        <button onClick={onCollapse}>Collapse</button>
-        <button className="secondary" onClick={onInspector}>Inspector</button>
-        <button className="secondary" onClick={onSync}>Sync</button>
+        <button onClick={onNewNote}>Note</button>
+        <button onClick={() => detailSourceRef ? setDetailSourceRef(null) : setDetailSourceRef(selectedSourceRef)}>Details</button>
+        <button onClick={onCollapse} disabled={!selectedNode}>Collapse</button>
+        <button onClick={onSync}>Sync</button>
       </div>
 
       <div className="status-pill">
         <span>{conversationTitle}</span>
-        <span>{messages.length} cards</span>
-        <span>{editor ? `${editor.getCamera?.().z?.toFixed?.(2) ?? '1.00'}x` : '1.00x'}</span>
+        <span>{nodes.length} nodes</span>
+        <span>{viewport.z.toFixed(2)}x</span>
       </div>
 
-      {selectedMeta?.sourceRef ? (
-        <aside className="inspector-panel">
-          <h3>Card</h3>
-          <label>
-            <span>Title</span>
-            <input
-              value={selectedMeta.title ?? ''}
-              onChange={(event) => updateCardMeta(selectedMeta.sourceRef, { title: event.target.value, userEditedTitle: true })}
-            />
-          </label>
-          <label>
-            <span>Tags</span>
-            <input
-              value={Array.isArray(selectedMeta.tags) ? selectedMeta.tags.join(', ') : ''}
-              onChange={(event) =>
-                updateCardMeta(selectedMeta.sourceRef, {
-                  tags: event.target.value.split(',').map((tag) => tag.trim()).filter(Boolean),
-                })}
-            />
-          </label>
-          <label>
-            <span>Body</span>
-            <textarea
-              value={selectedMeta.body ?? ''}
-              onChange={(event) => updateCardMeta(selectedMeta.sourceRef, { body: event.target.value })}
-            />
-          </label>
-          <label className="checkbox-row">
-            <input
-              type="checkbox"
-              checked={Boolean(selectedMeta.collapsed)}
-              onChange={(event) => updateCardMeta(selectedMeta.sourceRef, { collapsed: event.target.checked })}
-            />
-            <span>Collapsed</span>
-          </label>
-          <p className="meta-line">{selectedMeta.sourceRef}</p>
-        </aside>
-      ) : (
-        <aside className="inspector-panel muted">
-          <h3>Inspector</h3>
-          <p>Select a card to edit its metadata.</p>
-          {inspectorSnapshot?.canvasIssues ? <pre>{inspectorSnapshot.canvasIssues}</pre> : null}
-        </aside>
-      )}
+      {detailMeta?.sourceRef ? (
+        <div className="detail-modal-backdrop" onClick={() => setDetailSourceRef(null)}>
+          <aside className="detail-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="detail-header">
+              <h3>{detailNode?.meta.title ?? 'Node'}</h3>
+              <button type="button" onClick={() => setDetailSourceRef(null)}>Close</button>
+            </div>
+            <label>
+              <span>Title</span>
+              <input
+                value={detailMeta.title ?? ''}
+                onChange={(event) => updateNodeMeta(detailMeta.sourceRef, { title: event.target.value, userEditedTitle: true })}
+              />
+            </label>
+            <label>
+              <span>Tags</span>
+              <input
+                value={Array.isArray(detailMeta.tags) ? detailMeta.tags.join(', ') : ''}
+                onChange={(event) =>
+                  updateNodeMeta(detailMeta.sourceRef, {
+                    tags: event.target.value.split(',').map((tag) => tag.trim()).filter(Boolean),
+                  })}
+              />
+            </label>
+            {detailNode ? renderNodeBody(detailNode, updateNodeMeta) : null}
+            <label>
+              <span>Body</span>
+              <textarea
+                value={detailMeta.body ?? ''}
+                onChange={(event) => updateNodeMeta(detailMeta.sourceRef, { body: event.target.value })}
+              />
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={Boolean(detailMeta.collapsed)}
+                onChange={(event) => updateNodeMeta(detailMeta.sourceRef, { collapsed: event.target.checked })}
+              />
+              <span>Collapsed</span>
+            </label>
+          </aside>
+        </div>
+      ) : null}
+
+      {contextMenu ? (
+        <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
+          {contextMenu.mode === 'canvas' ? (
+            <>
+              <button onClick={() => createTypedNodeAt('note', contextMenu.worldX, contextMenu.worldY)}>New Note</button>
+              <button onClick={() => createTypedNodeAt('image', contextMenu.worldX, contextMenu.worldY)}>Image Node</button>
+              <button onClick={() => createTypedNodeAt('prompt', contextMenu.worldX, contextMenu.worldY)}>Prompt Node</button>
+              <button onClick={() => createTypedNodeAt('file_upload', contextMenu.worldX, contextMenu.worldY)}>File Node</button>
+              <button onClick={() => createTypedNodeAt('slider', contextMenu.worldX, contextMenu.worldY)}>Slider Node</button>
+              <button onClick={() => createTypedNodeAt('code', contextMenu.worldX, contextMenu.worldY)}>Code Node</button>
+            </>
+          ) : (
+            <>
+              <button onClick={() => contextMenu.sourceRef ? setDetailSourceRef(contextMenu.sourceRef) : null}>Edit Details</button>
+              <button onClick={() => contextMenu.sourceRef ? deleteNodeBySourceRef(contextMenu.sourceRef) : null}>Delete</button>
+            </>
+          )}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -534,234 +882,565 @@ export default function App() {
   )
 }
 
-function syncCardsIntoEditor(editor: any, messages: CanvasMessageItem[], metaBySourceRef: Record<string, any>) {
-  if (!editor) return
-
-  const createShapes: any[] = []
-  const updateShapes: any[] = []
+function reconcileNodes(
+  messages: CanvasMessageItem[],
+  metaBySourceRef: Record<string, any>,
+  existingNodes: CanvasNode[],
+  _existingConnections: CanvasConnection[] = [],
+) {
+  const bySourceRef = new Map(existingNodes.map((node) => [node.sourceRef, node]))
+  const nextNodes = [...existingNodes.filter((node) => node.nodeType !== 'message')]
 
   messages.forEach((item, index) => {
-    const existing = getShapeBySourceRef(editor, item.sourceRef)
+    const existing = bySourceRef.get(item.sourceRef)
     const userMeta = metaBySourceRef[item.sourceRef] ?? {}
-    const mergedMeta = {
+    const meta = mergeMessageMeta(item, userMeta)
+    const x = numberOr(existing?.x, userMeta.x, 70 + (index % 3) * 350)
+    const y = numberOr(existing?.y, userMeta.y, 90 + Math.floor(index / 3) * 250)
+    const w = numberOr(existing?.w, userMeta.w, 320)
+    const h = meta.collapsed ? 112 : numberOr(existing?.h, userMeta.h, 205)
+
+    nextNodes.push({
+      id: existing?.id ?? `node:${slugify(item.sourceRef)}`,
       sourceRef: item.sourceRef,
-      role: item.role ?? '',
-      kind: item.kind ?? 'message',
-      title: userMeta.userEditedTitle ? userMeta.title : (userMeta.title ?? item.title ?? 'Card'),
-      summary: item.summary ?? '',
-      body: typeof userMeta.body === 'string' ? userMeta.body : (item.body ?? ''),
-      tags: Array.isArray(userMeta.tags) ? userMeta.tags : (item.tags ?? []),
-      collapsed: Boolean(userMeta.collapsed ?? item.collapsed),
-      pinned: Boolean(userMeta.pinned ?? item.pinned),
-      userEditedTitle: Boolean(userMeta.userEditedTitle),
-    }
-
-    const x = typeof userMeta.x === 'number' ? userMeta.x : (60 + (index % 3) * 332)
-    const y = typeof userMeta.y === 'number' ? userMeta.y : (80 + Math.floor(index / 3) * 220)
-    const w = typeof userMeta.w === 'number' ? userMeta.w : 300
-    const h = typeof userMeta.h === 'number' ? userMeta.h : (mergedMeta.collapsed ? 96 : 180)
-    const richText = composeCardRichText(mergedMeta)
-    const color = shapeColor(mergedMeta.role, mergedMeta.kind)
-
-    if (!existing) {
-      createShapes.push({
-        id: `shape:${slugify(item.sourceRef)}`,
-        type: 'geo',
-        x,
-        y,
-        props: {
-          geo: 'rectangle',
-          w,
-          h,
-          richText,
-          color,
-          labelColor: 'black',
-          fill: 'semi',
-          dash: 'draw',
-          size: 's',
-          align: 'start',
-          verticalAlign: 'start',
-          font: 'draw',
-          url: '',
-          growY: 0,
-          scale: 1,
-        },
-        meta: mergedMeta,
-      })
-      return
-    }
-
-    metaBySourceRef[item.sourceRef] = {
-      ...metaBySourceRef[item.sourceRef],
-      x: existing.x,
-      y: existing.y,
-      w: existing.props?.w ?? w,
-      h: existing.props?.h ?? h,
-    }
-
-    const { text: _legacyText, ...existingProps } = existing.props ?? {}
-    const nextProps = {
-      ...existingProps,
-      h,
-      richText,
-      color,
-    }
-
-    if (existing.x === x && existing.y === y && shallowJsonEqual(existing.meta, mergedMeta) && shallowJsonEqual(existingProps, nextProps)) {
-      return
-    }
-
-    updateShapes.push({
-      id: existing.id,
-      type: existing.type,
+      nodeType: 'message',
       x,
       y,
-      props: nextProps,
-      meta: mergedMeta,
+      w,
+      h,
+      meta: {
+        ...meta,
+        x,
+        y,
+        w,
+        h,
+      },
     })
   })
 
-  const flushChanges = () => {
-    if (createShapes.length) editor.createShapes?.(createShapes)
-    if (updateShapes.length) editor.updateShapes?.(updateShapes)
-  }
-
-  if (typeof editor.batch === 'function') {
-    editor.batch(flushChanges)
-  } else {
-    flushChanges()
-  }
+  return dedupeNodes(nextNodes)
 }
 
-function shallowJsonEqual(left: any, right: any) {
-  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null)
-}
-
-function syncShapeLayoutIntoMeta(editor: any, metaBySourceRef: Record<string, any>, onlySourceRef?: string) {
-  const shapes = asArray<any>(editor?.getCurrentPageShapes?.())
-  for (const shape of shapes) {
-    const meta = extractShapeMeta(shape)
-    const sourceRef = meta.sourceRef
-    if (!sourceRef) continue
-    if (onlySourceRef && sourceRef !== onlySourceRef) continue
-
-    metaBySourceRef[sourceRef] = {
-      ...(metaBySourceRef[sourceRef] ?? {}),
-      x: typeof shape.x === 'number' ? shape.x : metaBySourceRef[sourceRef]?.x,
-      y: typeof shape.y === 'number' ? shape.y : metaBySourceRef[sourceRef]?.y,
-      w: typeof shape.props?.w === 'number' ? shape.props.w : metaBySourceRef[sourceRef]?.w,
-      h: typeof shape.props?.h === 'number' ? shape.props.h : metaBySourceRef[sourceRef]?.h,
+function reconcileTypedNodes(existingNodes: CanvasNode[]) {
+  return dedupeNodes(existingNodes.map((node) => {
+    if (node.nodeType === 'message' || node.nodeType === 'note') return node
+    const meta = { ...node.meta }
+    const { w, h } = resolveNodeSize(meta, node.nodeType, node)
+    return {
+      ...node,
+      w,
+      h,
+      meta: {
+        ...meta,
+        w,
+        h,
+      },
     }
-  }
+  }))
 }
 
-function composeCardRichText(meta: any) {
-  return toTldrawRichText(composeCardText(meta))
-}
-
-function toTldrawRichText(text: string) {
+function mergeMessageMeta(item: CanvasMessageItem, userMeta: Record<string, any>) {
   return {
-    type: 'doc',
-    content: String(text ?? '').split('\n').map((line) => {
-      if (!line) return { type: 'paragraph' }
-      return {
-        type: 'paragraph',
-        content: [{ type: 'text', text: line }],
-      }
-    }),
+    sourceRef: item.sourceRef,
+    role: item.role ?? '',
+    kind: item.kind ?? 'message',
+    title: userMeta.userEditedTitle ? userMeta.title : (userMeta.title ?? item.title ?? 'Card'),
+    summary: item.summary ?? userMeta.summary ?? '',
+    body: typeof userMeta.body === 'string' ? userMeta.body : (item.body ?? ''),
+    tags: Array.isArray(userMeta.tags) ? userMeta.tags : (item.tags ?? []),
+    collapsed: Boolean(userMeta.collapsed ?? item.collapsed),
+    pinned: Boolean(userMeta.pinned ?? item.pinned),
+    userEditedTitle: Boolean(userMeta.userEditedTitle),
   }
 }
 
-function sanitizeCanvasSnapshot(snapshot: any): any {
-  if (!snapshot || typeof snapshot !== 'object') return snapshot
-  if (Array.isArray(snapshot)) return snapshot.map(sanitizeCanvasSnapshot)
-
-  const next: Record<string, any> = {}
-  for (const [key, value] of Object.entries(snapshot)) {
-    next[key] = sanitizeCanvasSnapshot(value)
+function createNode(meta: Record<string, any>, index: number, x?: number, y?: number, nodeType: CanvasNodeType = 'message'): CanvasNode {
+  const size = resolveNodeSize(meta, nodeType)
+  const ports = getNodePorts(nodeType, meta)
+  return {
+    id: `node:${slugify(meta.sourceRef ?? `manual-${index}`)}`,
+    sourceRef: meta.sourceRef,
+    nodeType,
+    x: typeof x === 'number' ? x : 70 + (index % 3) * 350,
+    y: typeof y === 'number' ? y : 90 + Math.floor(index / 3) * 250,
+    w: size.w,
+    h: size.h,
+    meta: {
+      ...meta,
+      nodeType,
+      ports,
+      w: size.w,
+      h: size.h,
+    },
   }
+}
 
-  if (next.type === 'geo' && next.props && typeof next.props === 'object' && 'text' in next.props) {
-    const { text, ...props } = next.props
-    next.props = {
-      ...props,
-      richText: props.richText ?? toTldrawRichText(String(text ?? '')),
+function parseSnapshot(value: any): LightweightSnapshot | null {
+  if (!value || typeof value !== 'object') return null
+  if (value.kind !== snapshotKind) return null
+  const nodes = Array.isArray(value.nodes)
+    ? value.nodes.filter((node: any) => node?.sourceRef).map(normalizeNode)
+    : []
+  return {
+    kind: snapshotKind,
+    viewport: normalizeViewport(value.viewport),
+    nodes,
+    connections: Array.isArray(value.connections) ? value.connections.map(normalizeConnection) : [],
+  }
+}
+
+function normalizeNode(node: any): CanvasNode {
+  const sourceRef = String(node.sourceRef)
+  const meta = typeof node.meta === 'object' && node.meta ? node.meta : {}
+  const nodeType = normalizeNodeType(node.nodeType ?? meta.nodeType ?? meta.kind)
+  const resolvedMeta = { ...meta, sourceRef, nodeType }
+  const size = resolveNodeSize(resolvedMeta, nodeType, node)
+  return {
+    id: String(node.id ?? `node:${slugify(sourceRef)}`),
+    sourceRef,
+    nodeType,
+    x: numberOr(node.x, meta.x, 80),
+    y: numberOr(node.y, meta.y, 80),
+    w: size.w,
+    h: size.h,
+    meta: {
+      ...resolvedMeta,
+      ports: Array.isArray(meta.ports) ? meta.ports.map(normalizePort) : getNodePorts(nodeType, resolvedMeta),
+      w: size.w,
+      h: size.h,
+    },
+  }
+}
+
+function normalizeConnection(connection: any): CanvasConnection {
+  return {
+    id: String(connection?.id ?? `conn:${connection?.fromNodeId ?? 'a'}:${connection?.fromPortId ?? 'x'}->${connection?.toNodeId ?? 'b'}:${connection?.toPortId ?? 'y'}`),
+    fromNodeId: String(connection?.fromNodeId ?? ''),
+    fromPortId: String(connection?.fromPortId ?? ''),
+    toNodeId: String(connection?.toNodeId ?? ''),
+    toPortId: String(connection?.toPortId ?? ''),
+  }
+}
+
+function dedupeConnections(connections: CanvasConnection[]) {
+  const seen = new Set<string>()
+  return connections.filter((connection) => {
+    if (seen.has(connection.id)) return false
+    seen.add(connection.id)
+    return Boolean(connection.fromNodeId && connection.fromPortId && connection.toNodeId && connection.toPortId)
+  })
+}
+
+function normalizePort(port: any): NodePort {
+  return {
+    id: String(port?.id ?? 'port'),
+    label: String(port?.label ?? 'Port'),
+    direction: port?.direction === 'input' ? 'input' : 'output',
+    dataType: normalizePortDataType(port?.dataType),
+    slot: numberOr(port?.slot, undefined, 0),
+  }
+}
+
+function normalizePortDataType(value: any): PortDataType {
+  if (value === 'image' || value === 'text' || value === 'path' || value === 'number' || value === 'code') return value
+  return 'any'
+}
+
+function resolveNodeSize(meta: Record<string, any>, nodeType: CanvasNodeType, fallback?: Partial<CanvasNode>) {
+  if (nodeType === 'prompt') return { w: 300, h: 180 }
+  if (nodeType === 'file_upload') return { w: 340, h: 210 }
+  if (nodeType === 'slider') return { w: 290, h: 170 }
+  if (nodeType === 'code') return { w: 420, h: 260 }
+  if (nodeType === 'image') return { w: 360, h: 260 }
+  if (meta.collapsed) return { w: numberOr(fallback?.w, meta.w, 320), h: 112 }
+  return { w: numberOr(fallback?.w, meta.w, 320), h: numberOr(fallback?.h, meta.h, 205) }
+}
+
+function normalizeNodeType(value: any): CanvasNodeType {
+  if (value === 'image' || value === 'prompt' || value === 'file_upload' || value === 'slider' || value === 'code' || value === 'note') {
+    return value
+  }
+  return 'message'
+}
+
+function getNodePorts(nodeType: CanvasNodeType, meta: Record<string, any>): NodePort[] {
+  if (nodeType === 'message') return []
+  if (nodeType === 'image') {
+    return [
+      { id: 'in', label: 'Input', direction: 'input', dataType: 'image', slot: 0 },
+      { id: 'out', label: 'Output', direction: 'output', dataType: 'image', slot: 1 },
+    ]
+  }
+  if (nodeType === 'prompt') {
+    return [{ id: 'out', label: 'Prompt', direction: 'output', dataType: 'text', slot: 0 }]
+  }
+  if (nodeType === 'file_upload') {
+    return [{ id: 'out', label: 'File Path', direction: 'output', dataType: 'path', slot: 0 }]
+  }
+  if (nodeType === 'slider') {
+    return [{ id: 'out', label: 'Value', direction: 'output', dataType: 'number', slot: 0 }]
+  }
+  if (nodeType === 'code') {
+    const inputCount = Math.max(2, numberOr(meta.inputCount, meta.ports?.filter?.((port: any) => port.direction === 'input').length, 2))
+    const outputCount = Math.max(1, numberOr(meta.outputCount, meta.ports?.filter?.((port: any) => port.direction === 'output').length, 1))
+    const ports: NodePort[] = []
+    for (let i = 0; i < inputCount; i += 1) ports.push({ id: `in-${i}`, label: `In ${i + 1}`, direction: 'input', dataType: 'any', slot: i })
+    for (let i = 0; i < outputCount; i += 1) ports.push({ id: `out-${i}`, label: `Out ${i + 1}`, direction: 'output', dataType: 'any', slot: i })
+    return ports
+  }
+  if (nodeType === 'note') return []
+  return [
+    { id: 'in', label: 'Input', direction: 'input', dataType: 'any', slot: 0 },
+    { id: 'out', label: 'Output', direction: 'output', dataType: 'any', slot: 1 },
+  ]
+}
+
+function getNodePort(node: CanvasNode, portId: string) {
+  return (Array.isArray(node.meta.ports) ? node.meta.ports : getNodePorts(node.nodeType, node.meta)).find((port: NodePort) => port.id === portId) ?? null
+}
+
+function renderPorts(
+  node: CanvasNode,
+  pending: PendingConnection | null,
+  onPortClick: (node: CanvasNode, port: NodePort) => void,
+) {
+  const ports = Array.isArray(node.meta.ports) ? node.meta.ports : getNodePorts(node.nodeType, node.meta)
+  if (!ports.length) return null
+  return (
+    <div className="port-stack">
+      {ports.map((port) => (
+        <button
+          key={port.id}
+          type="button"
+          className={`port port-${port.direction} ${pending?.nodeId === node.id && pending.portId === port.id ? 'active' : ''}`}
+          data-port-id={port.id}
+          onClick={() => onPortClick(node, port)}
+        >
+          {port.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function renderNodeBody(node: CanvasNode, updateMeta: (sourceRef: string, patch: Record<string, unknown>) => void) {
+  if (node.nodeType === 'prompt') {
+    return (
+      <label className="node-field">
+        <span>Prompt</span>
+        <textarea value={node.meta.prompt ?? ''} onChange={(event) => updateMeta(node.sourceRef, { prompt: event.target.value })} />
+      </label>
+    )
+  }
+  if (node.nodeType === 'file_upload') {
+    return (
+      <label className="node-field">
+        <span>File Path</span>
+        <input value={node.meta.filePath ?? ''} onChange={(event) => updateMeta(node.sourceRef, { filePath: event.target.value })} />
+      </label>
+    )
+  }
+  if (node.nodeType === 'slider') {
+    return (
+      <label className="node-field">
+        <span>Value: {Number(node.meta.value ?? 0).toFixed(2)}</span>
+        <input
+          type="range"
+          min={Number(node.meta.min ?? 0)}
+          max={Number(node.meta.max ?? 1)}
+          step={Number(node.meta.step ?? 0.01)}
+          value={Number(node.meta.value ?? 0)}
+          onChange={(event) => updateMeta(node.sourceRef, { value: Number(event.target.value) })}
+        />
+      </label>
+    )
+  }
+  if (node.nodeType === 'code') {
+    return (
+      <label className="node-field">
+        <span>C# Body</span>
+        <textarea value={node.meta.body ?? ''} onChange={(event) => updateMeta(node.sourceRef, { body: event.target.value })} />
+      </label>
+    )
+  }
+  if (node.nodeType === 'image') {
+    const imageSrc = resolveCanvasImageSource(node.meta.imagePath)
+    return (
+      <div className="node-image-field">
+        {imageSrc ? (
+          <button type="button" className="node-image-preview" onClick={() => window.open(imageSrc, '_blank', 'noopener,noreferrer')}>
+            <img src={imageSrc} alt={String(node.meta.title ?? 'Image')} />
+          </button>
+        ) : (
+          <div className="node-image-preview node-image-empty">No image</div>
+        )}
+        <label className="node-field">
+          <span>Image Path</span>
+          <input value={node.meta.imagePath ?? ''} onChange={(event) => updateMeta(node.sourceRef, { imagePath: event.target.value })} />
+        </label>
+      </div>
+    )
+  }
+  return null
+}
+
+function renderNodePreview(node: CanvasNode) {
+  if (node.nodeType === 'slider') {
+    return <div className="node-preview-chip">Value {Number(node.meta.value ?? 0).toFixed(2)}</div>
+  }
+  if (node.nodeType === 'file_upload' && node.meta.filePath) {
+    return <div className="node-preview-chip">{String(node.meta.filePath)}</div>
+  }
+  if (node.nodeType === 'image' && node.meta.imagePath) {
+    const imageSrc = resolveCanvasImageSource(node.meta.imagePath)
+    return imageSrc ? (
+      <button type="button" className="node-image-chip" onClick={() => window.open(imageSrc, '_blank', 'noopener,noreferrer')}>
+        <img src={imageSrc} alt={String(node.meta.title ?? 'Image')} />
+      </button>
+    ) : (
+      <div className="node-preview-chip">{String(node.meta.imagePath)}</div>
+    )
+  }
+  if (node.nodeType === 'prompt' && node.meta.prompt) {
+    return <div className="node-preview-chip">{String(node.meta.prompt).slice(0, 40)}</div>
+  }
+  if (node.nodeType === 'code') {
+    return <div className="node-preview-chip">{`${node.meta.inputCount ?? 2} in / ${node.meta.outputCount ?? 1} out`}</div>
+  }
+  return null
+}
+
+function getNodePreviewText(node: CanvasNode) {
+  if (node.nodeType === 'prompt') return node.meta.prompt || node.meta.body || 'No prompt'
+  if (node.nodeType === 'file_upload') return node.meta.filePath || 'No file path'
+  if (node.nodeType === 'image') return node.meta.imagePath || 'No image path'
+  if (node.nodeType === 'slider') return `Range ${node.meta.min ?? 0} - ${node.meta.max ?? 1}`
+  return node.meta.body || 'No content'
+}
+
+function renderConnection(connection: CanvasConnection, nodes: CanvasNode[], viewport: Viewport) {
+  const fromNode = nodes.find((node) => node.id === connection.fromNodeId)
+  const toNode = nodes.find((node) => node.id === connection.toNodeId)
+  if (!fromNode || !toNode) return null
+  const from = getPortPosition(fromNode, connection.fromPortId, viewport)
+  const to = getPortPosition(toNode, connection.toPortId, viewport)
+  if (!from || !to) return null
+  const midX = (from.x + to.x) / 2
+  return (
+    <path
+      key={connection.id}
+      d={`M ${from.x} ${from.y} C ${midX} ${from.y}, ${midX} ${to.y}, ${to.x} ${to.y}`}
+      className="connection-path"
+    />
+  )
+}
+
+function getPortPosition(node: CanvasNode, portId: string, viewport: Viewport) {
+  const ports = Array.isArray(node.meta.ports) ? node.meta.ports : getNodePorts(node.nodeType, node.meta)
+  const port = ports.find((item) => item.id === portId)
+  if (!port) return null
+  const top = viewport.y + (node.y + 56 + port.slot * 22) * viewport.z
+  const left = viewport.x + (node.x + (port.direction === 'input' ? 0 : node.w)) * viewport.z
+  return { x: left, y: top }
+}
+
+function buildDefaultNodeMeta(nodeType: CanvasNodeType, sourceRef: string) {
+  if (nodeType === 'image') {
+    return {
+      sourceRef,
+      nodeType,
+      title: 'Image',
+      summary: 'Image input/output node',
+      body: 'Drag in an image reference or paste a path/URL.',
+      imagePath: '',
+      collapsed: false,
+      ports: getNodePorts(nodeType, {}),
     }
   }
-
-  return next
-}
-
-function drawGridOverlay(canvas: HTMLCanvasElement, host: HTMLDivElement, editor: any, isDarkMode: boolean) {
-  const rect = host.getBoundingClientRect()
-  const dpr = window.devicePixelRatio || 1
-  const ctx = canvas.getContext('2d')
-  if (!ctx || rect.width <= 0 || rect.height <= 0) return
-
-  canvas.width = Math.floor(rect.width * dpr)
-  canvas.height = Math.floor(rect.height * dpr)
-  canvas.style.width = `${rect.width}px`
-  canvas.style.height = `${rect.height}px`
-
-  ctx.clearRect(0, 0, canvas.width, canvas.height)
-  ctx.save()
-  ctx.scale(dpr, dpr)
-
-  const camera = normalizeCamera(editor.getCamera?.())
-  const minorStep = Math.max(12, 24 * camera.z)
-  const majorStep = minorStep * 5
-  const offsetX = camera.x * camera.z
-  const offsetY = camera.y * camera.z
-
-  if (!Number.isFinite(minorStep) || !Number.isFinite(majorStep) || minorStep <= 0 || majorStep <= 0) {
-    ctx.restore()
-    return
-  }
-
-  const minorColor = isDarkMode ? 'rgba(126, 144, 170, 0.18)' : 'rgba(126, 144, 170, 0.14)'
-  const majorColor = isDarkMode ? 'rgba(164, 198, 255, 0.34)' : 'rgba(152, 182, 235, 0.24)'
-  const crossColor = isDarkMode ? 'rgba(210, 232, 255, 0.68)' : 'rgba(124, 154, 207, 0.42)'
-
-  for (let x = offsetX % minorStep; x < rect.width; x += minorStep) {
-    const isMajor = Math.abs((x - offsetX) % majorStep) < 1 || Math.abs((x - offsetX) % majorStep - majorStep) < 1
-    ctx.beginPath()
-    ctx.moveTo(x, 0)
-    ctx.lineTo(x, rect.height)
-    ctx.strokeStyle = isMajor ? majorColor : minorColor
-    ctx.lineWidth = isMajor ? 1.15 : 1
-    ctx.stroke()
-  }
-
-  for (let y = offsetY % minorStep; y < rect.height; y += minorStep) {
-    const isMajor = Math.abs((y - offsetY) % majorStep) < 1 || Math.abs((y - offsetY) % majorStep - majorStep) < 1
-    ctx.beginPath()
-    ctx.moveTo(0, y)
-    ctx.lineTo(rect.width, y)
-    ctx.strokeStyle = isMajor ? majorColor : minorColor
-    ctx.lineWidth = isMajor ? 1.15 : 1
-    ctx.stroke()
-  }
-
-  for (let x = offsetX % majorStep; x < rect.width; x += majorStep) {
-    for (let y = offsetY % majorStep; y < rect.height; y += majorStep) {
-      ctx.beginPath()
-      ctx.moveTo(x - 5, y)
-      ctx.lineTo(x + 5, y)
-      ctx.moveTo(x, y - 5)
-      ctx.lineTo(x, y + 5)
-      ctx.strokeStyle = crossColor
-      ctx.lineWidth = 1.2
-      ctx.stroke()
+  if (nodeType === 'prompt') {
+    return {
+      sourceRef,
+      nodeType,
+      title: 'Prompt',
+      summary: 'Single output prompt node',
+      body: 'Write the prompt here.',
+      prompt: '',
+      collapsed: false,
+      ports: getNodePorts(nodeType, {}),
     }
   }
-
-  ctx.restore()
+  if (nodeType === 'file_upload') {
+    return {
+      sourceRef,
+      nodeType,
+      title: 'File Upload',
+      summary: 'Outputs a file path',
+      body: 'Paste a file path here.',
+      filePath: '',
+      collapsed: false,
+      ports: getNodePorts(nodeType, {}),
+    }
+  }
+  if (nodeType === 'slider') {
+    return {
+      sourceRef,
+      nodeType,
+      title: 'Slider',
+      summary: 'Single numeric output',
+      body: 'Use the value as a number input.',
+      value: 0.5,
+      min: 0,
+      max: 1,
+      step: 0.01,
+      collapsed: false,
+      ports: getNodePorts(nodeType, {}),
+    }
+  }
+  if (nodeType === 'code') {
+    return {
+      sourceRef,
+      nodeType,
+      title: 'C# Battery',
+      summary: 'Multi-port Grasshopper C# style node',
+      body: '// C# code here',
+      inputCount: 2,
+      outputCount: 1,
+      collapsed: false,
+      ports: getNodePorts(nodeType, { inputCount: 2, outputCount: 1 }),
+    }
+  }
+  return {
+    sourceRef,
+    nodeType: 'note',
+    title: 'New Note',
+    summary: 'Manual canvas note',
+    body: '',
+    tags: [],
+    collapsed: false,
+    pinned: false,
+    kind: 'note',
+    role: 'note',
+    userEditedTitle: true,
+    ports: [],
+  }
 }
 
-function normalizeCamera(camera: any) {
-  const x = Number.isFinite(camera?.x) ? camera.x : 0
-  const y = Number.isFinite(camera?.y) ? camera.y : 0
-  const zRaw = Number.isFinite(camera?.z) ? camera.z : 1
-  const z = Math.min(8, Math.max(0.25, zRaw))
-  return { x, y, z }
+function resolveCanvasImageSource(value: any) {
+  const raw = String(value ?? '').trim()
+  if (!raw) return ''
+  if (/^(data:|https?:|file:)/i.test(raw)) return raw
+  if (/^[a-zA-Z]:[\\/]/.test(raw) || raw.startsWith('\\\\')) {
+    const normalized = raw.replace(/\\/g, '/')
+    return normalized.startsWith('//') ? `file:${encodeURI(normalized)}` : `file:///${encodeURI(normalized)}`
+  }
+  return raw
+}
+
+function cloneNodes(nodes: CanvasNode[]) {
+  return nodes.map((node) => ({
+    ...node,
+    meta: { ...node.meta, ports: Array.isArray(node.meta.ports) ? node.meta.ports.map((port: NodePort) => ({ ...port })) : [] },
+  }))
+}
+
+function cloneConnections(connections: CanvasConnection[]) {
+  return connections.map((connection) => ({ ...connection }))
+}
+
+function normalizeViewport(value: any): Viewport {
+  return {
+    x: numberOr(value?.x, undefined, 80),
+    y: numberOr(value?.y, undefined, 90),
+    z: clamp(numberOr(value?.z, undefined, 1), 0.25, 2.8),
+  }
+}
+
+function dedupeNodes(nodes: CanvasNode[]) {
+  const seen = new Set<string>()
+  return nodes.filter((node) => {
+    if (seen.has(node.sourceRef)) return false
+    seen.add(node.sourceRef)
+    return true
+  })
+}
+
+function getNodesBounds(nodes: CanvasNode[]) {
+  const minX = Math.min(...nodes.map((node) => node.x))
+  const minY = Math.min(...nodes.map((node) => node.y))
+  const maxX = Math.max(...nodes.map((node) => node.x + node.w))
+  const maxY = Math.max(...nodes.map((node) => node.y + node.h))
+  return {
+    x: minX,
+    y: minY,
+    w: Math.max(1, maxX - minX),
+    h: Math.max(1, maxY - minY),
+  }
+}
+
+function screenToWorld(x: number, y: number, viewport: Viewport) {
+  return {
+    x: (x - viewport.x) / viewport.z,
+    y: (y - viewport.y) / viewport.z,
+  }
+}
+
+function gridStyle(viewport: Viewport, isDarkMode: boolean): React.CSSProperties {
+  const spacing = 22 * viewport.z
+  const dotColor = isDarkMode ? 'rgba(146,158,151,0.18)' : 'rgba(111,124,116,0.16)'
+  return {
+    backgroundColor: 'var(--app-bg)',
+    backgroundImage: `radial-gradient(circle, ${dotColor} 1px, transparent 1.2px)`,
+    backgroundSize: `${spacing}px ${spacing}px`,
+    backgroundPosition: `${viewport.x}px ${viewport.y}px`,
+  }
+}
+
+function nodeStyle(node: CanvasNode, viewport: Viewport): React.CSSProperties {
+  return {
+    width: node.w,
+    minHeight: node.h,
+    transform: `translate(${viewport.x + node.x * viewport.z}px, ${viewport.y + node.y * viewport.z}px) scale(${viewport.z})`,
+  }
+}
+
+function nodeKind(meta: Record<string, any>) {
+  if (meta.kind === 'note') return 'note'
+  if (meta.kind === 'tool_result' || meta.role === 'tool') return 'tool'
+  if (meta.role === 'assistant') return 'assistant'
+  if (meta.role === 'user') return 'user'
+  return 'default'
+}
+
+function computeMessagesSignature(messages: CanvasMessageItem[]) {
+  return JSON.stringify(
+    messages.map((item) => [
+      item.sourceRef ?? '',
+      item.role ?? '',
+      item.kind ?? '',
+      item.title ?? '',
+      item.summary ?? '',
+      item.body ?? '',
+      Array.isArray(item.tags) ? item.tags.join('|') : '',
+      Boolean(item.collapsed),
+      Boolean(item.pinned),
+    ]),
+  )
+}
+
+function slugify(text: string) {
+  return String(text)
+    .replace(/[^a-zA-Z0-9:_-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .toLowerCase()
+}
+
+function numberOr(primary: unknown, secondary: unknown, fallback: number) {
+  if (typeof primary === 'number' && Number.isFinite(primary)) return primary
+  if (typeof secondary === 'number' && Number.isFinite(secondary)) return secondary
+  return fallback
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value))
 }

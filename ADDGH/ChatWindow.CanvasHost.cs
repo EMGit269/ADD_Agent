@@ -293,6 +293,9 @@ namespace ADDGH
                             + "\n" + (payload?["stack"]?.ToString() ?? ""));
                         SetCanvasStatus("Canvas web error.\n" + (payload?["message"]?.ToString() ?? ""), true);
                         break;
+                    case "canvas_diag":
+                        AddGhLog.Debug("Canvas diag: " + payload?.ToString(Formatting.None));
+                        break;
                 }
             }
             catch (Exception ex)

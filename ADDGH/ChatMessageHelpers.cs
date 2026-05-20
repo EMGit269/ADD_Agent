@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -292,6 +293,111 @@ namespace ADDGH
             o.Remove("summary");
             o.Remove("summary_detail");
             return o;
+        }
+
+        public static bool ShouldDisplayReasoningBubble(string reasoning, string assistantContent, JArray toolCalls = null)
+        {
+            string normalized = NormalizeReasoning(reasoning);
+            if (string.IsNullOrWhiteSpace(normalized))
+                return false;
+
+            if (HasSubstantiveReasoningSignal(normalized))
+                return true;
+
+            bool hasToolCalls = toolCalls != null && toolCalls.Count > 0;
+            if (!hasToolCalls)
+                return true;
+
+            bool hasVisibleContent = !string.IsNullOrWhiteSpace(assistantContent);
+            bool isShortSingleLine = normalized.Length <= 48 && CountReasoningSentences(normalized) <= 1 && normalized.IndexOf('\n') < 0;
+
+            if (LooksLikeToolPreamble(normalized) && isShortSingleLine)
+                return false;
+
+            if (!hasVisibleContent && isShortSingleLine)
+                return false;
+
+            return true;
+        }
+
+        private static string NormalizeReasoning(string reasoning)
+        {
+            if (string.IsNullOrWhiteSpace(reasoning))
+                return "";
+            return Regex.Replace(reasoning.Trim(), @"[ \t]+", " ");
+        }
+
+        private static bool HasSubstantiveReasoningSignal(string reasoning)
+        {
+            if (reasoning.IndexOf('\n') >= 0)
+                return true;
+
+            if (reasoning.Length >= 70)
+                return true;
+
+            string[] keywords = {
+                "\u56E0\u4E3A", "\u6240\u4EE5", "\u56E0\u6B64", "\u7531\u4E8E", "\u9700\u8981", "\u4E3A\u4E86", "\u4EE5\u514D", "\u907F\u514D",
+                "\u5982\u679C", "\u5426\u5219", "\u4F46\u662F", "\u4E0D\u8FC7", "\u540C\u65F6", "\u5148\u786E\u8BA4", "\u518D\u5224\u65AD",
+                "\u98CE\u9669", "\u7EA6\u675F", "\u51B2\u7A81", "\u517C\u5BB9", "\u9694\u79BB", "\u4E0A\u4E0B\u6587", "\u72B6\u6001", "\u7EE7\u627F",
+                "\u62D3\u6251", "\u6570\u636E\u6D41", "\u7ED3\u6784", "\u65B9\u6848", "\u5EFA\u6A21", "\u5B9A\u4F4D", "\u6392\u67E5", "\u4FEE\u590D",
+                "\u62A5\u9519", "\u9519\u8BEF", "\u5F02\u5E38", "\u5931\u8D25", "\u9A8C\u8BC1", "\u6838\u5B9E", "\u9884\u671F", "\u4E0D\u4E00\u81F4",
+                "\u7A7A\u503C", "null", "\u8F93\u51FA", "\u8F93\u5165", "\u539F\u56E0", "\u4F9D\u8D56", "\u7B56\u7565"
+            };
+
+            for (int i = 0; i < keywords.Length; i++)
+            {
+                if (reasoning.IndexOf(keywords[i], StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+            }
+
+            return CountReasoningSentences(reasoning) >= 2;
+        }
+
+        private static bool LooksLikeToolPreamble(string reasoning)
+        {
+            string[] starts = {
+                "\u6211\u5148", "\u5148", "\u8BA9\u6211", "\u6211\u6765", "\u6211\u4F1A\u5148", "\u63A5\u4E0B\u6765", "\u73B0\u5728\u5148", "\u5148\u53BB", "\u5148\u7528"
+            };
+            string[] actions = {
+                "\u68C0\u67E5\u4E00\u4E0B", "\u770B\u4E00\u4E0B", "\u770B\u4E0B", "\u770B\u770B", "\u786E\u8BA4\u4E00\u4E0B", "\u8BFB\u53D6", "\u83B7\u53D6",
+                "\u8C03\u7528", "\u626B\u4E00\u904D", "\u8BD5\u4E00\u4E0B", "\u6253\u5F00", "\u5BF9\u7167\u4E00\u4E0B", "\u68C0\u67E5\u753B\u5E03", "\u8BFB\u53D6\u753B\u5E03"
+            };
+
+            bool startMatched = false;
+            for (int i = 0; i < starts.Length; i++)
+            {
+                if (reasoning.StartsWith(starts[i], StringComparison.OrdinalIgnoreCase))
+                {
+                    startMatched = true;
+                    break;
+                }
+            }
+
+            if (!startMatched)
+                return false;
+
+            for (int i = 0; i < actions.Length; i++)
+            {
+                if (reasoning.IndexOf(actions[i], StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static int CountReasoningSentences(string reasoning)
+        {
+            if (string.IsNullOrWhiteSpace(reasoning))
+                return 0;
+
+            int count = 1;
+            for (int i = 0; i < reasoning.Length; i++)
+            {
+                char c = reasoning[i];
+                if (c == '\u3002' || c == '\uFF01' || c == '\uFF1F' || c == ';' || c == '\uFF1B')
+                    count++;
+            }
+            return count;
         }
 
         private static int FindLastGetGhComponentsIndex(IList<object> fullMessages)

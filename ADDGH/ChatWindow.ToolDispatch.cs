@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 
 namespace ADDGH
@@ -71,6 +72,10 @@ namespace ADDGH
 
             try
             {
+                if (funcName == "create_ai_image")
+                {
+                    throw new InvalidOperationException("create_ai_image must be executed through the async tool dispatch path.");
+                }
                 if (funcName == "ensure_gh_canvas")
                 {
                     result.ToolResult = ExecuteEnsureGhCanvas();
@@ -356,6 +361,41 @@ namespace ADDGH
             {
                 result.ToolResult = "Error: " + ex.Message;
                 AddGhLog.Error("Tool dispatch failed: " + (funcName ?? "?"), ex);
+            }
+
+            return result;
+        }
+
+        private static async Task<ToolDispatchResult> ExecuteToolCallAsync(
+            string funcName,
+            JObject argsObj,
+            string argsJson,
+            string callId,
+            string fullContent,
+            string fullReasoning,
+            List<(string primary, string secondary)> operationCards,
+            System.Threading.CancellationToken ct)
+        {
+            if (!string.Equals(funcName, "create_ai_image", StringComparison.Ordinal))
+            {
+                return ExecuteToolCall(funcName, argsObj, argsJson, callId, fullContent, fullReasoning, operationCards);
+            }
+
+            var result = new ToolDispatchResult { ToolResult = "" };
+            try
+            {
+                result.ToolResult = await ExecuteCreateAiImageAsync(
+                    argsObj["prompt"]?.ToString(),
+                    argsObj["intent"]?.ToString(),
+                    ReadNullableBool(argsObj, "use_uploaded_images") ?? true,
+                    argsObj["aspect_ratio"]?.ToString(),
+                    ct);
+                Rhino.RhinoApp.InvokeOnUiThread((Action)(() => ApplyAiImageToolResult(result.ToolResult)));
+            }
+            catch (Exception ex)
+            {
+                result.ToolResult = "Error: " + ex.Message;
+                AddGhLog.Error("Async tool dispatch failed: " + (funcName ?? "?"), ex);
             }
 
             return result;

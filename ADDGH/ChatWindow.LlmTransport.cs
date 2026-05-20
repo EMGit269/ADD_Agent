@@ -6,6 +6,7 @@ using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
+using Microsoft.Win32;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -13,6 +14,9 @@ namespace ADDGH
 {
     public static partial class ChatWindow
     {
+        private static readonly object _httpClientCacheLock = new object();
+        private static readonly Dictionary<string, HttpClient> _httpClientCache = new Dictionary<string, HttpClient>(StringComparer.OrdinalIgnoreCase);
+
         private static JObject BuildChatRequestBody(ProviderRuntimeSettings providerSettings, List<object> messagesToSend, object[] toolDefinitions)
         {
             bool useStream = providerSettings?.Config?.ProviderId != null
@@ -128,6 +132,136 @@ namespace ADDGH
             request.Headers.TryAddWithoutValidation("Referer", uri.GetLeftPart(UriPartial.Authority) + "/");
         }
 
+        private static IWebProxy TryGetSystemProxy()
+        {
+            try
+            {
+                if (!IsSystemProxyConfigured())
+                    return null;
+
+                return WebRequest.DefaultWebProxy;
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("Read system proxy failed: " + ex.Message);
+                return null;
+            }
+        }
+
+        private static bool IsSystemProxyConfigured()
+        {
+            try
+            {
+                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Internet Settings", false))
+                {
+                    if (key == null) return false;
+
+                    bool proxyEnable = false;
+                    bool autoDetect = false;
+                    string proxyServer = "";
+                    string autoConfigUrl = "";
+
+                    object proxyEnableObj = key.GetValue("ProxyEnable");
+                    if (proxyEnableObj != null)
+                        proxyEnable = Convert.ToInt32(proxyEnableObj) != 0;
+
+                    object autoDetectObj = key.GetValue("AutoDetect");
+                    if (autoDetectObj != null)
+                        autoDetect = Convert.ToInt32(autoDetectObj) != 0;
+
+                    proxyServer = (key.GetValue("ProxyServer") as string ?? "").Trim();
+                    autoConfigUrl = (key.GetValue("AutoConfigURL") as string ?? "").Trim();
+
+                    if (proxyEnable && !string.IsNullOrWhiteSpace(proxyServer))
+                        return true;
+
+                    if (!string.IsNullOrWhiteSpace(autoConfigUrl))
+                        return true;
+
+                    if (autoDetect)
+                        return true;
+
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("Detect system proxy config failed: " + ex.Message);
+                return false;
+            }
+        }
+
+        private static string GetHttpTransportCacheKey(ProviderRuntimeSettings providerSettings)
+        {
+            string proxy = providerSettings?.ProxyUrl?.Trim() ?? "";
+            if (!string.IsNullOrWhiteSpace(proxy))
+                return "proxy:" + proxy.ToLowerInvariant();
+
+            return TryGetSystemProxy() != null ? "proxy:[system]" : "direct";
+        }
+
+        private static string DescribeTransport(ProviderRuntimeSettings providerSettings)
+        {
+            string proxy = providerSettings?.ProxyUrl?.Trim() ?? "";
+            if (!string.IsNullOrWhiteSpace(proxy))
+                return "custom proxy " + proxy;
+
+            return TryGetSystemProxy() != null ? "system proxy" : "direct";
+        }
+
+        private static HttpClient CreateConfiguredHttpClient(ProviderRuntimeSettings providerSettings)
+        {
+            var handler = new HttpClientHandler();
+            try
+            {
+                handler.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("Enable automatic decompression failed: " + ex.Message);
+            }
+
+            IWebProxy proxy = null;
+            if (!string.IsNullOrWhiteSpace(providerSettings?.ProxyUrl))
+                proxy = new WebProxy(providerSettings.ProxyUrl, false);
+            else
+                proxy = TryGetSystemProxy();
+
+            if (proxy != null)
+            {
+                handler.UseProxy = true;
+                handler.Proxy = proxy;
+                try
+                {
+                    handler.DefaultProxyCredentials = CredentialCache.DefaultCredentials;
+                }
+                catch (Exception ex)
+                {
+                    AddGhLog.Warn("Set proxy credentials failed: " + ex.Message);
+                }
+            }
+            else
+            {
+                handler.UseProxy = false;
+            }
+
+            return new HttpClient(handler, true) { Timeout = TimeSpan.FromMinutes(5) };
+        }
+
+        private static HttpClient GetConfiguredHttpClient(ProviderRuntimeSettings providerSettings)
+        {
+            string key = GetHttpTransportCacheKey(providerSettings);
+            lock (_httpClientCacheLock)
+            {
+                if (_httpClientCache.TryGetValue(key, out HttpClient existing))
+                    return existing;
+
+                var created = CreateConfiguredHttpClient(providerSettings);
+                _httpClientCache[key] = created;
+                return created;
+            }
+        }
+
         private static async Task<HttpResponseMessage> SendProviderRequestAsync(ProviderRuntimeSettings providerSettings, JObject requestBody, string url, System.Threading.CancellationToken ct)
         {
             var request = new HttpRequestMessage(HttpMethod.Post, url);
@@ -135,7 +269,7 @@ namespace ADDGH
             if (providerSettings?.Config?.ProviderId == "custom")
                 ApplyBrowserLikeHeaders(request, url, requestBody?["stream"]?.ToObject<bool>() ?? false);
             request.Content = new StringContent(JsonConvert.SerializeObject(requestBody), Encoding.UTF8, "application/json");
-            return await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+            return await GetConfiguredHttpClient(providerSettings).SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         }
 
         private static async Task<string> ReadResponseTextAsync(HttpResponseMessage response, System.Threading.CancellationToken ct)
@@ -389,6 +523,7 @@ namespace ADDGH
             sb.AppendLine("Provider: " + (providerSettings?.Config?.DisplayName ?? "(unknown)"));
             sb.AppendLine("Model: " + (providerSettings?.ModelName ?? "(empty)"));
             sb.AppendLine("Base URL: " + (providerSettings?.BaseUrl ?? "(empty)"));
+            sb.AppendLine("Transport: " + DescribeTransport(providerSettings));
             if (!string.IsNullOrWhiteSpace(usedUrl))
                 sb.AppendLine("Endpoint: " + usedUrl.Trim());
 

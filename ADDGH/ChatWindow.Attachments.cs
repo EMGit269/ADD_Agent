@@ -78,6 +78,45 @@ namespace ADDGH
             return item;
         }
 
+        private static AttachmentItem CreateAttachmentItemFromDataUrl(string dataUrl)
+        {
+            if (string.IsNullOrWhiteSpace(dataUrl) || !dataUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            int commaIndex = dataUrl.IndexOf(',');
+            if (commaIndex <= 5)
+                return null;
+
+            string header = dataUrl.Substring(5, commaIndex - 5);
+            string base64 = dataUrl.Substring(commaIndex + 1);
+            if (string.IsNullOrWhiteSpace(base64))
+                return null;
+
+            string mimeType = "image/png";
+            int semicolonIndex = header.IndexOf(';');
+            if (semicolonIndex > 0)
+                mimeType = header.Substring(0, semicolonIndex);
+            else if (!string.IsNullOrWhiteSpace(header))
+                mimeType = header;
+
+            byte[] bytes = Convert.FromBase64String(base64);
+            string extension = MimeTypeToImageExtension(mimeType);
+            string tempPath = Path.Combine(
+                Path.GetTempPath(),
+                "ADDGH_restore_" + DateTime.UtcNow.Ticks + "_" + Guid.NewGuid().ToString("n").Substring(0, 8) + extension);
+            File.WriteAllBytes(tempPath, bytes);
+
+            return new AttachmentItem
+            {
+                Path = tempPath,
+                FileName = Path.GetFileName(tempPath),
+                MimeType = mimeType,
+                Kind = AttachmentKind.Image,
+                Base64 = base64,
+                SizeBytes = bytes.LongLength
+            };
+        }
+
         private static bool IsImageExtension(string ext)
         {
             return new[] { ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp" }.Contains(ext);
@@ -108,6 +147,24 @@ namespace ADDGH
                 case ".xlsx": return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
                 case ".pptx": return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
                 default: return "text/plain";
+            }
+        }
+
+        private static string MimeTypeToImageExtension(string mimeType)
+        {
+            switch ((mimeType ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "image/jpeg":
+                case "image/jpg":
+                    return ".jpg";
+                case "image/bmp":
+                    return ".bmp";
+                case "image/gif":
+                    return ".gif";
+                case "image/webp":
+                    return ".webp";
+                default:
+                    return ".png";
             }
         }
 
@@ -322,13 +379,118 @@ namespace ADDGH
             return border;
         }
 
-        private static BitmapImage LoadBitmapImage(string path)
+        private static FrameworkElement CreateChatImageThumbnail(AttachmentItem attachment, double size = 120)
+        {
+            if (attachment == null || string.IsNullOrWhiteSpace(attachment.Path) || !System.IO.File.Exists(attachment.Path))
+                return new Border();
+
+            var thumbnailBorder = new Border
+            {
+                Width = size,
+                Height = size,
+                Margin = new Thickness(0, 0, 8, 8),
+                CornerRadius = new CornerRadius(14),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(38, 255, 255, 255)),
+                BorderThickness = new Thickness(1),
+                Background = new SolidColorBrush(Color.FromRgb(22, 22, 22)),
+                ClipToBounds = true,
+                Cursor = Cursors.Hand
+            };
+
+            thumbnailBorder.Child = new Image
+            {
+                Source = LoadBitmapImage(attachment.Path, 320),
+                Stretch = Stretch.UniformToFill,
+                SnapsToDevicePixels = true
+            };
+
+            thumbnailBorder.MouseLeftButtonUp += (s, e) =>
+            {
+                e.Handled = true;
+                ShowImagePreviewWindow(attachment.Path, attachment.FileName);
+            };
+
+            return thumbnailBorder;
+        }
+
+        private static FrameworkElement CreateChatImageStrip(IEnumerable<AttachmentItem> attachments)
+        {
+            var imageItems = (attachments ?? Enumerable.Empty<AttachmentItem>())
+                .Where(a => a != null && a.Kind == AttachmentKind.Image && !string.IsNullOrWhiteSpace(a.Path) && System.IO.File.Exists(a.Path))
+                .ToList();
+            if (imageItems.Count == 0)
+                return null;
+
+            var wrap = new WrapPanel
+            {
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(0, 8, 0, 0)
+            };
+
+            foreach (var attachment in imageItems)
+                wrap.Children.Add(CreateChatImageThumbnail(attachment));
+
+            return wrap;
+        }
+
+        private static void ShowImagePreviewWindow(string path, string title = null)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path))
+                return;
+
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                try
+                {
+                    var preview = new Window
+                    {
+                        Title = string.IsNullOrWhiteSpace(title) ? System.IO.Path.GetFileName(path) : title,
+                        Width = 980,
+                        Height = 760,
+                        MinWidth = 520,
+                        MinHeight = 420,
+                        Background = new SolidColorBrush(Color.FromRgb(10, 10, 10)),
+                        WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                        Owner = _window
+                    };
+
+                    preview.Content = new Grid
+                    {
+                        Background = new SolidColorBrush(Color.FromRgb(10, 10, 10)),
+                        Children =
+                        {
+                            new ScrollViewer
+                            {
+                                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                                Padding = new Thickness(18),
+                                Content = new Image
+                                {
+                                    Source = LoadBitmapImage(path, null),
+                                    Stretch = Stretch.Uniform,
+                                    SnapsToDevicePixels = true
+                                }
+                            }
+                        }
+                    };
+
+                    preview.Show();
+                }
+                catch (Exception ex)
+                {
+                    AddGhLog.Warn("ShowImagePreviewWindow: " + ex.Message);
+                }
+            }));
+        }
+
+        private static BitmapImage LoadBitmapImage(string path, int? decodePixelWidth = 120)
         {
             var bitmap = new BitmapImage();
             bitmap.BeginInit();
             bitmap.CacheOption = BitmapCacheOption.OnLoad;
             bitmap.UriSource = new Uri(path);
-            bitmap.DecodePixelWidth = 120;
+            if (decodePixelWidth.HasValue && decodePixelWidth.Value > 0)
+                bitmap.DecodePixelWidth = decodePixelWidth.Value;
             bitmap.EndInit();
             bitmap.Freeze();
             return bitmap;

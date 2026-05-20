@@ -17,11 +17,12 @@ namespace ADDGH
         private static void ResetVisualWorkflowState(string input, List<AttachmentItem> attachmentsToSend)
         {
             bool hasImageAttachments = attachmentsToSend.Any(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64));
+            bool enableVisualFlow = _activeImageIntentRoute == ImageIntentRoute.VisualModeling;
             _currentTurnHadToolExecution = false;
             _finalVisualReviewCompleted = false;
             _finalVisualReviewAttempted = false;
-            _hasActiveVisionInputContext = hasImageAttachments;
-            _pendingFinalVisualReview = hasImageAttachments && _agentMode == AgentMode.Create;
+            _hasActiveVisionInputContext = hasImageAttachments && enableVisualFlow;
+            _pendingFinalVisualReview = hasImageAttachments && enableVisualFlow && _agentMode == AgentMode.Create;
             _finalVisualReviewSourceInput = input;
             _finalVisualReviewSourceImages = hasImageAttachments
                 ? attachmentsToSend
@@ -46,6 +47,9 @@ namespace ADDGH
 
         private static async Task<bool> PrepareImageDrivenExecutionContextAsync(string input, List<AttachmentItem> attachmentsToSend, System.Threading.CancellationToken ct)
         {
+            if (_activeImageIntentRoute != ImageIntentRoute.VisualModeling)
+                return true;
+
             if (!attachmentsToSend.Any(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64)))
                 return true;
 

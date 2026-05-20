@@ -14,6 +14,25 @@ namespace ADDGH
                 new {
                     type = "function",
                     function = new {
+                        name = "create_ai_image",
+                        description = "当用户明确要求文生图、参考图生成、图片风格改写或编辑现有图片时，调用图片创作工具。",
+                        parameters = new {
+                            type = "object",
+                            properties = new {
+                                prompt = new { type = "string", description = "图片创作提示词" },
+                                intent = new { type = "string", description = "generate 或 edit" },
+                                use_uploaded_images = new { type = "boolean", description = "是否使用当前轮上传的图片作为参考或编辑输入" },
+                                aspect_ratio = new { type = "string", description = "可选宽高比，例如 1:1、16:9、3:4" },
+                                summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片" },
+                                summary_detail = new { type = "string", description = "可选：卡片右侧次要短语" }
+                            },
+                            required = new[] { "prompt", "intent", "summary" }
+                        }
+                    }
+                },
+                new {
+                    type = "function",
+                    function = new {
                         name = "ensure_gh_canvas",
                         description = "确保当前存在可用的 Grasshopper 画布。若未检测到可用画布，则新建一个空白 GH 画布并设为当前画布。",
                         parameters = new {
@@ -773,7 +792,14 @@ namespace ADDGH
 
         private static object[] FilterToolsForAgentMode(object[] toolDefinitions)
         {
-            if (toolDefinitions == null || _agentMode != AgentMode.Plan) return toolDefinitions;
+            if (toolDefinitions == null) return toolDefinitions;
+
+            if (_agentMode != AgentMode.Plan)
+            {
+                return toolDefinitions
+                    .Where(t => !string.Equals(GetToolDefinitionName(t), ShowPlanStepsTool.FunctionName, StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+            }
 
             var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {

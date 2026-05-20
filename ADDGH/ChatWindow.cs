@@ -62,9 +62,14 @@ namespace ADDGH
         private static TextBox _txtApiKey;
         private static ComboBox _comboProvider;
         private static ComboBox _comboVisionProvider;
+        private static ComboBox _comboImageProvider;
         private static TextBox _txtApiBaseUrl;
         private static TextBox _txtModel;
         private static TextBox _txtProxyUrl;
+        private static TextBox _txtImageApiKey;
+        private static TextBox _txtImageApiBaseUrl;
+        private static TextBox _txtImageModel;
+        private static TextBox _txtImageProxyUrl;
         private static bool _isLoadingProviderSettings = false;
         private static System.Threading.CancellationTokenSource _cts;
         private static List<AttachmentItem> _pendingAttachments = new List<AttachmentItem>();
@@ -124,6 +129,17 @@ namespace ADDGH
         private static MenuItem _menuModeCSharp;
         private static MenuItem _menuModeMixed;
 
+        private enum ImageIntentRoute
+        {
+            None,
+            VisualModeling,
+            AiImageCreation,
+            GeneralMultimodal
+        }
+
+        private static ImageIntentRoute _activeImageIntentRoute = ImageIntentRoute.None;
+        private static List<AttachmentItem> _currentTurnAttachments = new List<AttachmentItem>();
+
         private enum LayoutMode
         {
             Battery,
@@ -157,6 +173,10 @@ namespace ADDGH
 1. 你不是视觉模型，也看不到原图；当用户上传图片时，只能依据视觉预处理模型给出的图片分析、用户原始文字和当前上下文做判断。
 2. 用户发图不等于要求建模或画图。先判断图片意图，再决定是否执行 Grasshopper 操作。意图类型包括：建模参考、修改建议、问题诊断、内容解释、素材输入、错误上传、不明确。
 3. 只有当用户明确要求根据图片生成、建模、还原、复刻、设计或制作时，才进入建模/画图流程；否则按真实意图处理。
+3a. 图片相关任务分三类路由：`visual_modeling`（图片用于 GH 建模参考）、`ai_image_creation`（图片或文字用于 AI 创作图片/图生图/改图）、`general_multimodal`（只是解释、分析、答疑）。不要把“有图”直接等同于 `visual_modeling` 或 `ai_image_creation`。
+3b. 当用户明确提到建模、Grasshopper、GH、电池、参数化、还原几何、搭定义、生成节点网络时，优先按 `visual_modeling` 处理。
+3c. 当用户明确提到生成图片、画一张、出图、渲染、海报、插画、效果图、改图、换风格、去背景、替换材质、保留构图重绘时，优先按 `ai_image_creation` 处理。
+3d. 当用户只是要求描述图片、解释内容、分析截图、识别问题或回答视觉相关问题时，保持 `general_multimodal`，不要进入建模或出图工作流。
 4. 如果图片是修改建议，围绕已有画布或上一轮结果定位要改的对象与变化点，不要无故重做整套方案。
 5. 如果图片像截图、报错或界面异常，优先诊断问题与下一步操作，不要把截图当作设计参考。
 6. 如果图片可能误发、与当前任务无关或意图不明确，先提出一个简短澄清问题，不要擅自建模。
@@ -171,6 +191,8 @@ namespace ADDGH
 13b. `capture_rhino_viewport` 返回给你的路径、bbox、预览计数等都不是视觉事实，只是截图传输元数据。除非该截图随后被送入视觉模型，否则你不能根据这些元数据推断形态是否正确、分段是否合理、长度是否匹配，也不能把 bbox 尺寸当作曲线/曲面 UV 路径长度。
 14. 当用户要求检查模型形态、外观、轮廓、比例或整体效果，而数据级检查不足以判断时，若当前任务带有图片输入，可先做最小代价验证：优先检查报错、Null、空数据、Panel 与关键输出；仍无法确认时，再调用 `capture_rhino_viewport` 获取最小必要截图，并唤醒多模态模型做视觉复核。不要默认触发视觉复核，只在有图片输入且确有视觉判断必要时使用。
 15. 当用户提供了图像参考，或用图片指出当前结果存在问题时，最终完成前应进行一次截图级视觉复核：先完成数据级检查，再调用 `capture_rhino_viewport` 获取当前结果截图，并以该截图作为最终核验依据之一；不要仅凭无报错、非 Null 或局部 Panel 检查就宣称与图片要求一致。
+16. 当用户目标是 AI 创作图片而不是 GH 建模时，调用 `create_ai_image`，不要先进入 VisualWorkflow，也不要擅自把图片要求转成 GH 画布操作。
+16a. 当 `create_ai_image` 返回成功后，不要输出 Markdown 图片语法、模板变量、代码占位符或诸如 `${result.savedImages[0].path}` 之类的路径引用。图片展示由宿主界面负责；你只需用自然语言简短说明结果与可继续调整的方向。
 
 【工具调用效率】
 0. 画布对象对外默认使用短号 `01`、`02`、`03`… 作为 `id`；工具参数里优先使用这些短号，系统内部仍会映射到真实 GUID。若返回里同时出现 `guid`，那只是兼容与调试字段，不是首选引用方式。
@@ -236,6 +258,44 @@ namespace ADDGH
                 return raw;
 
             return normalized.Substring(end + 5).Replace("\n", Environment.NewLine);
+        }
+
+        private static string SanitizeAssistantDisplayContent(string content)
+        {
+            if (string.IsNullOrWhiteSpace(content))
+                return content ?? "";
+
+            string sanitized = content.Replace("\r\n", "\n");
+
+            sanitized = Regex.Replace(
+                sanitized,
+                @"^\s*!\[[^\]]*\]\(\s*\$\{[^)]*(savedImages|generated_images)[^)]*\}\s*\)\s*$",
+                "",
+                RegexOptions.Multiline | RegexOptions.IgnoreCase);
+
+            sanitized = Regex.Replace(
+                sanitized,
+                @"^\s*!\[[^\]]*\]\(\s*[^)]*(savedImages|generated_images)[^)]*\)\s*$",
+                "",
+                RegexOptions.Multiline | RegexOptions.IgnoreCase);
+
+            sanitized = Regex.Replace(
+                sanitized,
+                @"\$\{\s*result\.(savedImages|generated_images)\[[^\]]+\][^}]*\}",
+                "",
+                RegexOptions.IgnoreCase);
+
+            sanitized = Regex.Replace(
+                sanitized,
+                @"(?m)^[ \t]*\n",
+                "");
+
+            sanitized = Regex.Replace(
+                sanitized,
+                @"\n{3,}",
+                "\n\n");
+
+            return sanitized.Trim();
         }
 
         private static string BuildCSharpDedicatedToolPrompt()
@@ -1664,59 +1724,129 @@ namespace ADDGH
 
     <!-- 配置悬浮层 -->
             <Grid x:Name=""SettingsOverlay"" Grid.Column=""0"" Panel.ZIndex=""20"" Margin=""0"" Background=""#A5000000"" Visibility=""Collapsed"">
-            <Border Background=""#1E1E1E"" CornerRadius=""12"" Width=""380"" Height=""650"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"" Padding=""20"">
-                <StackPanel>
-                    <TextBlock Text=""配置 API"" Foreground=""White"" FontSize=""16"" FontWeight=""SemiBold"" Margin=""0,0,0,15""/>
+            <Border Background=""#1E1E1E"" CornerRadius=""12"" Width=""410"" Height=""680"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"" Padding=""18"">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height=""Auto""/>
+                        <RowDefinition Height=""*""/>
+                        <RowDefinition Height=""Auto""/>
+                    </Grid.RowDefinitions>
 
-                    <TextBlock Text=""提供商 (Provider)"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
-                    <ComboBox x:Name=""ComboProvider"" Height=""36"" Margin=""0,0,0,10"" Style=""{StaticResource DarkComboBoxStyle}""/>
+                    <StackPanel Grid.Row=""0"" Margin=""0,0,0,12"">
+                        <TextBlock Text=""配置 API"" Foreground=""White"" FontSize=""16"" FontWeight=""SemiBold""/>
+                        <TextBlock Text=""按用途分组显示，常用项优先展开。"" Foreground=""#8D96A5"" FontSize=""11"" Margin=""0,6,0,0""/>
+                    </StackPanel>
 
-                    <TextBlock Text=""图片理解模型"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
-                    <ComboBox x:Name=""ComboVisionProvider"" Height=""36"" Margin=""0,0,0,10"" Style=""{StaticResource DarkComboBoxStyle}""/>
+                    <ScrollViewer Grid.Row=""1"" VerticalScrollBarVisibility=""Auto"" HorizontalScrollBarVisibility=""Disabled"" Padding=""0,0,4,0"">
+                        <StackPanel>
+                            <Border Background=""#242424"" CornerRadius=""10"" Padding=""12"" Margin=""0,0,0,12"" BorderBrush=""#343434"" BorderThickness=""1"">
+                                <StackPanel>
+                                    <TextBlock Text=""模型分工"" Foreground=""#EAEAEA"" FontSize=""13"" FontWeight=""SemiBold"" Margin=""0,0,0,10""/>
 
-                    <TextBlock Text=""API Base URL"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
-                    <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
-                        <TextBox x:Name=""TxtApiBaseUrl"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
-                    </Border>
+                                    <TextBlock Text=""主对话模型"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                    <ComboBox x:Name=""ComboProvider"" Height=""36"" Margin=""0,0,0,10"" Style=""{StaticResource DarkComboBoxStyle}""/>
 
-                    <TextBlock Text=""API Key"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
-                    <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
-                        <TextBox x:Name=""TxtApiKey"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
-                    </Border>
+                                    <TextBlock Text=""图片理解模型"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                    <ComboBox x:Name=""ComboVisionProvider"" Height=""36"" Margin=""0,0,0,10"" Style=""{StaticResource DarkComboBoxStyle}""/>
 
-                    <TextBlock Text=""Model Name"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
-                    <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
-                        <TextBox x:Name=""TxtModel"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
-                    </Border>
+                                    <TextBlock Text=""图片生成模型"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                    <ComboBox x:Name=""ComboImageProvider"" Height=""36"" Margin=""0,0,0,0"" Style=""{StaticResource DarkComboBoxStyle}""/>
+                                </StackPanel>
+                            </Border>
 
-                    <TextBlock Text=""HTTPS Proxy (可选)"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
-                    <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,4"">
-                        <TextBox x:Name=""TxtProxyUrl"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White"" ToolTip=""留空时自动尝试 ADDGH_HTTPS_PROXY / HTTPS_PROXY / HTTP_PROXY 和系统代理""/>
-                    </Border>
-                    <TextBlock Text=""留空时自动尝试环境变量和系统代理"" Foreground=""#777777"" FontSize=""11"" Margin=""0,0,0,10""/>
+                            <Expander Header=""主对话模型连接参数"" IsExpanded=""True"" Foreground=""#ECECEC"" Background=""#242424"" Margin=""0,0,0,10"">
+                                <Border Background=""#242424"" CornerRadius=""10"" Padding=""12"" BorderBrush=""#343434"" BorderThickness=""1"">
+                                    <StackPanel>
+                                        <TextBlock Text=""API Base URL"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                        <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
+                                            <TextBox x:Name=""TxtApiBaseUrl"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
+                                        </Border>
 
-                    <TextBlock Text=""电池库存储路径"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
-                    <Grid Margin=""0,0,0,20"">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width=""*""/>
-                            <ColumnDefinition Width=""10""/>
-                            <ColumnDefinition Width=""Auto""/>
-                        </Grid.ColumnDefinitions>
-                        <Border Grid.Column=""0"" Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"">
-                            <TextBox x:Name=""TxtLibraryPath"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White"" IsReadOnly=""True""/>
-                        </Border>
-                        <Button x:Name=""BtnBrowseLibraryPath"" Grid.Column=""2"" Content=""浏览"" Background=""#444444"" Foreground=""White"" Width=""70"" Height=""32"" FontWeight=""SemiBold"">
-                            <Button.Template>
-                                <ControlTemplate TargetType=""Button"">
-                                    <Border Background=""{TemplateBinding Background}"" CornerRadius=""8"">
-                                        <ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/>
-                                    </Border>
-                                </ControlTemplate>
-                            </Button.Template>
-                        </Button>
-                    </Grid>
+                                        <TextBlock Text=""API Key"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                        <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
+                                            <TextBox x:Name=""TxtApiKey"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
+                                        </Border>
 
-                    <Grid Margin=""0,10,0,0"">
+                                        <TextBlock Text=""Model Name"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                        <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
+                                            <TextBox x:Name=""TxtModel"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
+                                        </Border>
+
+                                        <Expander Header=""代理与网络"" IsExpanded=""False"" Foreground=""#D6D6D6"" Background=""#242424"">
+                                            <StackPanel Margin=""0,10,0,0"">
+                                                <TextBlock Text=""HTTPS Proxy (可选)"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                                <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,4"">
+                                                    <TextBox x:Name=""TxtProxyUrl"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White"" ToolTip=""留空时自动尝试 ADDGH_HTTPS_PROXY / HTTPS_PROXY / HTTP_PROXY 和系统代理""/>
+                                                </Border>
+                                                <TextBlock Text=""留空时自动尝试环境变量和系统代理"" Foreground=""#777777"" FontSize=""11"" Margin=""0,0,0,0""/>
+                                            </StackPanel>
+                                        </Expander>
+                                    </StackPanel>
+                                </Border>
+                            </Expander>
+
+                            <Expander Header=""图片生成独立配置"" IsExpanded=""False"" Foreground=""#ECECEC"" Background=""#242424"" Margin=""0,0,0,10"">
+                                <Border Background=""#242424"" CornerRadius=""10"" Padding=""12"" BorderBrush=""#343434"" BorderThickness=""1"">
+                                    <StackPanel>
+                                        <TextBlock Text=""这部分只影响文生图 / 图生图 / 改图，不影响主对话模型。"" Foreground=""#8D96A5"" FontSize=""11"" Margin=""0,0,0,10"" TextWrapping=""Wrap""/>
+
+                                        <TextBlock Text=""Image API Base URL"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                        <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
+                                            <TextBox x:Name=""TxtImageApiBaseUrl"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
+                                        </Border>
+
+                                        <TextBlock Text=""Image API Key"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                        <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
+                                            <TextBox x:Name=""TxtImageApiKey"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
+                                        </Border>
+
+                                        <TextBlock Text=""Image Model Name"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                        <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
+                                            <TextBox x:Name=""TxtImageModel"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
+                                        </Border>
+
+                                        <Expander Header=""图片生成代理"" IsExpanded=""False"" Foreground=""#D6D6D6"" Background=""#242424"">
+                                            <StackPanel Margin=""0,10,0,0"">
+                                                <TextBlock Text=""Image HTTPS Proxy (可选)"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                                <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"">
+                                                    <TextBox x:Name=""TxtImageProxyUrl"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
+                                                </Border>
+                                            </StackPanel>
+                                        </Expander>
+                                    </StackPanel>
+                                </Border>
+                            </Expander>
+
+                            <Expander Header=""高级选项"" IsExpanded=""False"" Foreground=""#ECECEC"" Background=""#242424"" Margin=""0,0,0,4"">
+                                <Border Background=""#242424"" CornerRadius=""10"" Padding=""12"" BorderBrush=""#343434"" BorderThickness=""1"">
+                                    <StackPanel>
+                                        <TextBlock Text=""电池库存储路径"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                        <Grid Margin=""0,0,0,0"">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width=""*""/>
+                                                <ColumnDefinition Width=""10""/>
+                                                <ColumnDefinition Width=""Auto""/>
+                                            </Grid.ColumnDefinitions>
+                                            <Border Grid.Column=""0"" Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"">
+                                                <TextBox x:Name=""TxtLibraryPath"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White"" IsReadOnly=""True""/>
+                                            </Border>
+                                            <Button x:Name=""BtnBrowseLibraryPath"" Grid.Column=""2"" Content=""浏览"" Background=""#444444"" Foreground=""White"" Width=""70"" Height=""32"" FontWeight=""SemiBold"">
+                                                <Button.Template>
+                                                    <ControlTemplate TargetType=""Button"">
+                                                        <Border Background=""{TemplateBinding Background}"" CornerRadius=""8"">
+                                                            <ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/>
+                                                        </Border>
+                                                    </ControlTemplate>
+                                                </Button.Template>
+                                            </Button>
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
+                            </Expander>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <Grid Grid.Row=""2"" Margin=""0,14,0,0"">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width=""*""/>
                             <ColumnDefinition Width=""10""/>
@@ -1741,7 +1871,7 @@ namespace ADDGH
                             </Button.Template>
                         </Button>
                     </Grid>
-                </StackPanel>
+                </Grid>
             </Border>
             </Grid> <!-- End SettingsOverlay -->
         </Grid> <!-- End Root Wrapper -->
@@ -1966,9 +2096,14 @@ namespace ADDGH
             _txtApiKey = (TextBox)_window.FindName("TxtApiKey");
             _comboProvider = (ComboBox)_window.FindName("ComboProvider");
             _comboVisionProvider = (ComboBox)_window.FindName("ComboVisionProvider");
+            _comboImageProvider = (ComboBox)_window.FindName("ComboImageProvider");
             _txtApiBaseUrl = (TextBox)_window.FindName("TxtApiBaseUrl");
             _txtModel = (TextBox)_window.FindName("TxtModel");
             _txtProxyUrl = (TextBox)_window.FindName("TxtProxyUrl");
+            _txtImageApiKey = (TextBox)_window.FindName("TxtImageApiKey");
+            _txtImageApiBaseUrl = (TextBox)_window.FindName("TxtImageApiBaseUrl");
+            _txtImageModel = (TextBox)_window.FindName("TxtImageModel");
+            _txtImageProxyUrl = (TextBox)_window.FindName("TxtImageProxyUrl");
             _attachmentPreviewPanel = (WrapPanel)_window.FindName("AttachmentPreviewPanel");
             var txtLibraryPath = (TextBox)_window.FindName("TxtLibraryPath");
             PopulateProviderCombo();
@@ -1980,12 +2115,21 @@ namespace ADDGH
                 };
             }
 
+            if (_comboImageProvider != null) {
+                _comboImageProvider.SelectionChanged += (s, e) => {
+                    if (_isLoadingProviderSettings) return;
+                    LoadImageProviderSettingsToUI(GetSelectedImageProviderId());
+                };
+            }
+
             if (btnSettings != null) {
             btnSettings.Click += (s, e) => {
                     string providerId = GetCurrentProviderId();
                     SelectProviderComboItem(providerId);
                     SelectVisionProviderComboItem(GetCurrentVisionProviderId());
+                    SelectImageProviderComboItem(GetCurrentImageProviderId());
                     LoadProviderSettingsToUI(providerId);
+                    LoadImageProviderSettingsToUI(GetCurrentImageProviderId());
                     if (txtLibraryPath != null) txtLibraryPath.Text = Grasshopper.Instances.Settings.GetValue("Library_Path", "");
                     SetSettingsOverlayVisible(true);
                 };
@@ -2009,6 +2153,7 @@ namespace ADDGH
                 btnSaveSettings.Click += (s, e) => {
                     SaveSelectedProviderSettings();
                     SaveSelectedVisionProviderSetting();
+                    SaveSelectedImageProviderSettings();
                     if (txtLibraryPath != null) Grasshopper.Instances.Settings.SetValue("Library_Path", txtLibraryPath.Text);
                     SetSettingsOverlayVisible(false);
                 };
@@ -2024,6 +2169,7 @@ namespace ADDGH
             if (_btnSend != null) _btnSend.Click += BtnSend_Click;
 
             if (_txtInput != null) {
+                _txtInput.AllowDrop = true;
                 _txtInput.TextChanged += (s, e) => UpdateInputHeight();
                 _txtInput.PreviewKeyDown += (s, e) => {
                     if (e.Key == Key.Enter && Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) {
@@ -2038,9 +2184,16 @@ namespace ADDGH
                         if (!_isGenerating) BtnSend_Click(null, null);
                     }
                 };
+                _txtInput.PreviewDragOver += TxtInput_OnPreviewDragOver;
+                _txtInput.Drop += TxtInput_OnDrop;
                 UpdateInputHeight();
 
                 DataObject.AddPastingHandler(_txtInput, TxtInput_OnPasting);
+            }
+            if (_inputAreaBorder != null) {
+                _inputAreaBorder.AllowDrop = true;
+                _inputAreaBorder.PreviewDragOver += TxtInput_OnPreviewDragOver;
+                _inputAreaBorder.Drop += TxtInput_OnDrop;
             }
 
             var btnUploadImage = (Button)_window.FindName("BtnUploadImage");
@@ -2902,6 +3055,8 @@ namespace ADDGH
                 : _queuedImmediateSendDisplayTextOverride.Trim();
             _thinkingStatusStep = 0;
             bool hasImageAttachments = attachmentsToSend.Any(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64));
+            _currentTurnAttachments = CloneAttachments(attachmentsToSend);
+            _activeImageIntentRoute = ResolveImageIntentRoute(input, attachmentsToSend);
             ResetVisualWorkflowState(input, attachmentsToSend);
             if (hasImageAttachments && !string.IsNullOrWhiteSpace(_queuedImmediateSendVisionSourceInputOverride))
                 _finalVisualReviewSourceInput = _queuedImmediateSendVisionSourceInputOverride;
@@ -2959,6 +3114,8 @@ namespace ADDGH
                 HideThinkingAnimation();
                 _isGenerating = false;
                 ApplySendButtonIdleState();
+                _activeImageIntentRoute = ImageIntentRoute.None;
+                _currentTurnAttachments = new List<AttachmentItem>();
                 try { _cts?.Dispose(); } catch (Exception ex) { AddGhLog.Warn("Dispose CTS after send: " + ex.Message); }
                 _cts = null;
             }
@@ -2995,6 +3152,44 @@ namespace ADDGH
             {
                 if (_window?.FindName(name) is Button button) button.IsEnabled = !visible;
             }
+        }
+
+        private static ImageIntentRoute ResolveImageIntentRoute(string input, List<AttachmentItem> attachments)
+        {
+            bool hasImageAttachments = (attachments ?? new List<AttachmentItem>())
+                .Any(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64));
+            if (!hasImageAttachments)
+                return ImageIntentRoute.None;
+
+            string text = (input ?? "").Trim().ToLowerInvariant();
+            bool hasModelingIntent = ContainsAny(text,
+                "grasshopper", "gh ", " gh", "建模", "参数化", "电池", "搭定义", "定义", "还原几何", "节点网络", "画布");
+            bool hasImageCreationIntent = ContainsAny(text,
+                "生成图片", "生成一张", "画一张", "出图", "渲染", "海报", "插画", "效果图", "改图", "换风格", "去背景", "替换", "重绘", "图生图", "文生图");
+            bool hasGeneralVisionIntent = ContainsAny(text,
+                "解释", "说明", "分析", "识别", "哪里有问题", "什么问题", "描述", "看一下");
+
+            if (hasModelingIntent)
+                return ImageIntentRoute.VisualModeling;
+            if (hasImageCreationIntent)
+                return ImageIntentRoute.AiImageCreation;
+            if (hasGeneralVisionIntent)
+                return ImageIntentRoute.GeneralMultimodal;
+            return ImageIntentRoute.GeneralMultimodal;
+        }
+
+        private static bool ContainsAny(string source, params string[] candidates)
+        {
+            if (string.IsNullOrWhiteSpace(source) || candidates == null)
+                return false;
+
+            foreach (string candidate in candidates)
+            {
+                if (!string.IsNullOrWhiteSpace(candidate) && source.IndexOf(candidate, StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+            }
+
+            return false;
         }
 
         private static string GetChatHistoryDirectory()
@@ -3439,6 +3634,33 @@ namespace ADDGH
             }
         }
 
+        private static void TxtInput_OnPreviewDragOver(object sender, DragEventArgs e)
+        {
+            try
+            {
+                e.Effects = CanConsumeDragData(e.Data) ? DragDropEffects.Copy : DragDropEffects.None;
+                e.Handled = true;
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Debug("PreviewDragOver input: " + ex.Message);
+            }
+        }
+
+        private static void TxtInput_OnDrop(object sender, DragEventArgs e)
+        {
+            try
+            {
+                if (!TryConsumeDroppedDataAsAttachments(e.Data))
+                    return;
+                e.Handled = true;
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("Drop into input: " + ex.Message);
+            }
+        }
+
         /// <summary>
         /// WPF 粘贴时 <see cref="DataObjectPastingEventArgs.SourceDataObject"/> 有时与系统剪贴板不一致（例如资源管理器复制文件后 Ctrl+V），
         /// 故依次尝试事件源与 <see cref="Clipboard.GetDataObject"/>。
@@ -3539,6 +3761,84 @@ namespace ADDGH
             catch (Exception ex)
             {
                 AddGhLog.Warn("Paste Clipboard.GetImage: " + ex.Message);
+            }
+
+            return false;
+        }
+
+        private static bool CanConsumeDragData(IDataObject data)
+        {
+            if (data == null) return false;
+            if (data.GetDataPresent(DataFormats.FileDrop, true)) return true;
+            if (data.GetDataPresent(DataFormats.Bitmap, true)) return true;
+            foreach (string fmt in data.GetFormats())
+            {
+                if (string.Equals(fmt, "PNG", StringComparison.OrdinalIgnoreCase) || string.Equals(fmt, "image/png", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool TryConsumeDroppedDataAsAttachments(IDataObject data)
+        {
+            if (data == null) return false;
+
+            if (data.GetDataPresent(DataFormats.FileDrop, true))
+            {
+                var paths = data.GetData(DataFormats.FileDrop, true) as string[];
+                if (paths != null && paths.Length > 0)
+                {
+                    string[] files = paths.Where(p => !string.IsNullOrWhiteSpace(p) && File.Exists(p))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToArray();
+                    if (files.Length > 0)
+                    {
+                        AddPendingAttachments(files);
+                        if (_btnClearImage != null) _btnClearImage.Visibility = Visibility.Visible;
+                        return true;
+                    }
+                }
+            }
+
+            try
+            {
+                foreach (string fmt in data.GetFormats())
+                {
+                    if (!string.Equals(fmt, "PNG", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(fmt, "image/png", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(fmt, DataFormats.Bitmap, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    object payload = data.GetData(fmt, false);
+                    byte[] pngBytes = null;
+                    if (payload is MemoryStream ms)
+                        pngBytes = ms.ToArray();
+                    else if (payload is byte[] barr)
+                        pngBytes = barr;
+                    else if (payload is BitmapSource source)
+                    {
+                        var encoder = new PngBitmapEncoder();
+                        encoder.Frames.Add(BitmapFrame.Create(source));
+                        using (var stream = new MemoryStream())
+                        {
+                            encoder.Save(stream);
+                            pngBytes = stream.ToArray();
+                        }
+                    }
+
+                    if (pngBytes != null && pngBytes.Length > 16)
+                    {
+                        string tmpPath = Path.Combine(Path.GetTempPath(), "ADDGH_drop_" + DateTime.UtcNow.Ticks + "_" + Guid.NewGuid().ToString("n").Substring(0, 8) + ".png");
+                        File.WriteAllBytes(tmpPath, pngBytes);
+                        AddPendingAttachments(new[] { tmpPath });
+                        if (_btnClearImage != null) _btnClearImage.Visibility = Visibility.Visible;
+                        return true;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Debug("Drop image format scan: " + ex.Message);
             }
 
             return false;
@@ -3756,7 +4056,8 @@ namespace ADDGH
                         usedEndpoint);
                 }
 
-                string fullContent = messageNode["content"]?.ToString() ?? "";
+                string fullContent = SanitizeAssistantDisplayContent(messageNode["content"]?.ToString() ?? "");
+                messageNode["content"] = fullContent;
                 string fullReasoning = messageNode["reasoning_content"]?.ToString() ?? "";
                 var fullToolCalls = messageNode["tool_calls"] as JArray ?? new JArray();
 
@@ -3808,14 +4109,15 @@ namespace ADDGH
                         if (!string.IsNullOrWhiteSpace(cardSum))
                             operationCards.Add((cardSum, string.IsNullOrWhiteSpace(cardDet) ? "" : cardDet));
 
-                        var dispatch = ExecuteToolCall(
+                        var dispatch = await ExecuteToolCallAsync(
                             funcName,
                             argsObj,
                             argsJson,
                             callId,
                             fullContent,
                             fullReasoning,
-                            operationCards);
+                            operationCards,
+                            ct);
 
                         if (dispatch.EndApiRoundAwaitingUser)
                         {
