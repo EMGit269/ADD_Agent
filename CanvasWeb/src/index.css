@@ -69,6 +69,47 @@ html, body, #root {
   user-select: none;
 }
 
+.flow-canvas {
+  width: 100%;
+  height: 100%;
+  background: var(--app-bg);
+}
+
+.flow-canvas .react-flow__node {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.flow-canvas .react-flow__node.selected {
+  box-shadow: none;
+}
+
+.flow-canvas .react-flow__edge-path,
+.flow-canvas .react-flow__connection-path {
+  stroke: rgba(215, 189, 53, 0.58);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+.flow-canvas .react-flow__edge.selected .react-flow__edge-path {
+  stroke: rgba(215, 189, 53, 0.92);
+}
+
+.flow-canvas .react-flow__controls {
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--toolbar-border);
+  background: var(--toolbar-bg);
+  box-shadow: 0 12px 28px rgba(8, 11, 10, 0.18);
+}
+
+.flow-canvas .react-flow__controls button {
+  border-bottom-color: var(--toolbar-border);
+  background: transparent;
+  color: var(--button-fg);
+}
+
 .light-canvas.is-pan {
   cursor: grabbing;
 }
@@ -136,6 +177,14 @@ html, body, #root {
   cursor: grab;
   transform-origin: 0 0;
   overflow: hidden;
+}
+
+.canvas-node.flow-node {
+  position: relative;
+  left: auto;
+  top: auto;
+  z-index: auto;
+  cursor: grab;
 }
 
 .canvas-node.type-image { background: transparent; }
@@ -460,12 +509,35 @@ html, body, #root {
   transform: translateY(-50%);
 }
 
+.flow-node .port::before {
+  display: none;
+}
+
+.flow-node .port-handle {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 8px;
+  height: 8px;
+  min-width: 8px;
+  min-height: 8px;
+  border: 0;
+  border-radius: 50%;
+  background: #d7bd35;
+  transform: translateY(-50%);
+}
+
 .port-output {
   padding: 2px 16px 2px 4px;
   text-align: right;
 }
 
 .port-output::before {
+  left: auto;
+  right: 0;
+}
+
+.flow-node .port-output .port-handle {
   left: auto;
   right: 0;
 }

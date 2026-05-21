@@ -1,4 +1,18 @@
-import React, { Component, ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import React, { Component, ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Background,
+  Controls,
+  Handle,
+  NodeResizer,
+  Position,
+  ReactFlow,
+  type Connection,
+  type Edge,
+  type Node,
+  type NodeProps,
+  type Viewport as FlowViewport,
+} from '@xyflow/react'
+import '@xyflow/react/dist/style.css'
 
 type HostEnvelope = {
   type: string
@@ -68,6 +82,16 @@ type CanvasNode = {
   w: number
   h: number
   meta: Record<string, any>
+}
+
+type FlowNodeData = Record<string, unknown> & {
+  node: CanvasNode
+  pendingConnection: PendingConnection | null
+  updateNodeMeta: (sourceRef: string, patch: Record<string, unknown>) => void
+  onNodeResize: (sourceRef: string, width: number, height: number) => void
+  onPortClick: (node: CanvasNode, port: NodePort, event?: React.MouseEvent<HTMLButtonElement>) => void
+  onPortPointerDown: (event: React.PointerEvent<HTMLButtonElement>, node: CanvasNode, port: NodePort) => void
+  onPreviewImage: (src: string, title: string) => void
 }
 
 type LightweightSnapshot = {
@@ -189,7 +213,6 @@ function CanvasWorkbench() {
   const [selectedSourceRefs, setSelectedSourceRefs] = useState<string[]>([])
   const [pendingConnection, setPendingConnection] = useState<PendingConnection | null>(null)
   const [pendingConnectionPoint, setPendingConnectionPoint] = useState<{ x: number; y: number } | null>(null)
-  const [portPositions, setPortPositions] = useState<PortPositionMap>({})
   const [detailSourceRef, setDetailSourceRef] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null)
   const [inspectorSnapshot, setInspectorSnapshot] = useState<InspectorSnapshot | null>(null)
@@ -199,7 +222,6 @@ function CanvasWorkbench() {
   const [captureStatus, setCaptureStatus] = useState('')
   const [marqueeRect, setMarqueeRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
   const surfaceRef = useRef<HTMLDivElement | null>(null)
-  const connectionLayerRef = useRef<SVGSVGElement | null>(null)
   const dragRef = useRef<DragState>(null)
   const saveTimerRef = useRef<number | null>(null)
   const nodesRef = useRef(nodes)
@@ -214,6 +236,7 @@ function CanvasWorkbench() {
   const currentConversationTitleRef = useRef('Canvas')
   const canvasIdRef = useRef('canvas-default')
   const suppressNextContextMenuRef = useRef(false)
+  const shiftKeyRef = useRef(false)
   const isDarkMode = themeMode === 'dark'
 
   useEffect(() => {
@@ -275,6 +298,7 @@ function CanvasWorkbench() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      shiftKeyRef.current = event.shiftKey
       const target = event.target as HTMLElement | null
       const isTyping = Boolean(target?.closest('input,textarea,[contenteditable="true"]'))
 
@@ -309,9 +333,16 @@ function CanvasWorkbench() {
         deleteNodesBySourceRefs(selectedSourceRefsRef.current)
       }
     }
+    const handleKeyUp = (event: KeyboardEvent) => {
+      shiftKeyRef.current = event.shiftKey
+    }
 
     window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
+    }
   }, [])
 
   useEffect(() => {
@@ -399,8 +430,8 @@ function CanvasWorkbench() {
           role: 'assistant',
           kind: 'assistant_message',
           title: 'Canvas Demo',
-          summary: 'Standalone lightweight canvas.',
-          body: 'This canvas uses plain DOM nodes instead of tldraw. Drag nodes, pan the background, and zoom with the wheel.',
+          summary: 'React Flow canvas.',
+          body: 'This canvas uses React Flow for nodes, handles, edges, pan, and zoom while keeping ADDGH canvas documents unchanged.',
           tags: ['demo'],
           collapsed: false,
           pinned: false,
@@ -419,42 +450,6 @@ function CanvasWorkbench() {
     }
   }, [])
 
-  useLayoutEffect(() => {
-    const measurePorts = () => {
-      const layer = connectionLayerRef.current
-      if (!layer) return
-
-      const layerRect = layer.getBoundingClientRect()
-      const zoom = viewportRef.current.z
-      const next: PortPositionMap = {}
-
-      document.querySelectorAll<HTMLElement>('.canvas-node[data-source-ref] [data-port-id]').forEach((portElement) => {
-        const nodeElement = portElement.closest('.canvas-node') as HTMLElement | null
-        const sourceRef = nodeElement?.dataset.sourceRef
-        const portId = portElement.dataset.portId
-        if (!sourceRef || !portId) return
-
-        const rect = portElement.getBoundingClientRect()
-        const isOutput = portElement.classList.contains('port-output')
-        const dotRadius = 4 * zoom
-        next[portPositionKey(sourceRef, portId)] = {
-          x: (isOutput ? rect.right - dotRadius : rect.left + dotRadius) - layerRect.left,
-          y: rect.top + rect.height / 2 - layerRect.top,
-        }
-      })
-
-      setPortPositions((current) => (portPositionMapsEqual(current, next) ? current : next))
-    }
-
-    measurePorts()
-    const frame = window.requestAnimationFrame(measurePorts)
-    window.addEventListener('resize', measurePorts)
-    return () => {
-      window.cancelAnimationFrame(frame)
-      window.removeEventListener('resize', measurePorts)
-    }
-  }, [nodes, viewport, pendingConnection, connections.length])
-
   const selectedNode = useMemo(
     () => nodes.find((node) => node.sourceRef === selectedSourceRef) ?? null,
     [nodes, selectedSourceRef],
@@ -464,6 +459,39 @@ function CanvasWorkbench() {
     [nodes, detailSourceRef],
   )
   const detailMeta = detailNode?.meta ?? null
+  const flowNodes = useMemo<Node<FlowNodeData>[]>(() =>
+    nodes.map((node) => ({
+      id: node.id,
+      type: 'canvasNode',
+      position: { x: node.x, y: node.y },
+      selected: selectedSourceRefs.includes(node.sourceRef),
+      data: {
+        node,
+        pendingConnection,
+        updateNodeMeta,
+        onNodeResize,
+        onPortClick: handlePortClick,
+        onPortPointerDown: handlePortPointerDown,
+        onPreviewImage: (src: string, title: string) => {
+          setImagePreviewSrc(src)
+          setImagePreviewTitle(title)
+        },
+      },
+    })),
+    [nodes, selectedSourceRefs, pendingConnection],
+  )
+  const flowEdges = useMemo<Edge[]>(() =>
+    connections.map((connection) => ({
+      id: connection.id,
+      source: connection.fromNodeId,
+      sourceHandle: connection.fromPortId,
+      target: connection.toNodeId,
+      targetHandle: connection.toPortId,
+      type: 'default',
+      className: 'connection-path',
+    })),
+    [connections],
+  )
 
   function createSnapshotState(
     override: Partial<CanvasSnapshotState> = {},
@@ -566,6 +594,57 @@ function CanvasWorkbench() {
       }),
     )
     postHostMessage('card_meta_patch', { canvasId: canvasIdRef.current, sourceRef, ...cardMetaRef.current[sourceRef] })
+  }
+
+  function onNodeResize(sourceRef: string, width: number, height: number) {
+    updateNodes((current) =>
+      current.map((node) => {
+        if (node.sourceRef !== sourceRef) return node
+        const nextWidth = Math.max(120, width)
+        const nextHeight = Math.max(80, height)
+        const nextMeta = { ...node.meta, w: nextWidth, h: nextHeight }
+        return {
+          ...node,
+          w: nextWidth,
+          h: nextHeight,
+          meta: nextMeta,
+        }
+      }),
+    )
+  }
+
+  function onNodesChange(changes: Array<{ id?: string; type: string; position?: { x: number; y: number }; selected?: boolean }>) {
+    setNodes((current) => {
+      let next = current
+      for (const change of changes) {
+        if (change.type === 'position' && change.id && change.position) {
+          next = next.map((node) =>
+            node.id === change.id
+              ? {
+                  ...node,
+                  x: change.position!.x,
+                  y: change.position!.y,
+                  meta: {
+                    ...node.meta,
+                    x: change.position!.x,
+                    y: change.position!.y,
+                  },
+                }
+              : node,
+          )
+        }
+        if (change.type === 'select' && change.id) {
+          const node = next.find((item) => item.id === change.id)
+          if (node) {
+            setSelectedSourceRef(change.selected ? node.sourceRef : null)
+            setSelectedSourceRefs(change.selected ? [node.sourceRef] : [])
+          }
+        }
+      }
+      nodesRef.current = next
+      scheduleSave()
+      return next
+    })
   }
 
   function deleteNodeBySourceRef(sourceRef: string) {
@@ -763,6 +842,27 @@ function CanvasWorkbench() {
       },
     ])
     setPendingConnection(null)
+  }
+
+  function onFlowConnect(connection: Connection) {
+    if (!connection.source || !connection.target || !connection.sourceHandle || !connection.targetHandle) return
+    const from = { nodeId: connection.source, portId: connection.sourceHandle }
+    const to = { nodeId: connection.target, portId: connection.targetHandle }
+    if (shiftKeyRef.current) {
+      deleteConnectionBetween(from, to)
+      return
+    }
+    connectNodes(from, to)
+  }
+
+  function onEdgeClick(event: React.MouseEvent, edge: Edge) {
+    if (!event.shiftKey) return
+    event.stopPropagation()
+    updateConnections((current) => current.filter((connection) => connection.id !== edge.id))
+  }
+
+  function onViewportChange(next: FlowViewport) {
+    updateViewport({ x: next.x, y: next.y, z: next.zoom }, false)
   }
 
   function deleteConnectionBetween(from: PendingConnection, to: PendingConnection) {
@@ -1075,19 +1175,51 @@ function CanvasWorkbench() {
     })
   }
 
+  function onFlowNodeContextMenu(event: React.MouseEvent, flowNode: Node) {
+    event.preventDefault()
+    const node = nodesRef.current.find((item) => item.id === flowNode.id)
+    if (!node) return
+    setSelectedSourceRef(node.sourceRef)
+    setSelectedSourceRefs([node.sourceRef])
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      worldX: node.x,
+      worldY: node.y,
+      mode: 'node',
+      sourceRef: node.sourceRef,
+    })
+  }
+
   return (
     <div className={`app-shell ${isDarkMode ? 'theme-dark' : 'theme-light'}`}>
-      <div
-        ref={surfaceRef}
-        className={`light-canvas ${interactionMode !== 'idle' ? `is-${interactionMode}` : ''}`}
-        style={gridStyle(viewport, isDarkMode)}
-        onContextMenu={onCanvasContextMenu}
-        onPointerDown={onSurfacePointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-        onWheel={onWheel}
-      >
+      <div ref={surfaceRef} className="light-canvas">
+        <ReactFlow
+          className="flow-canvas"
+          nodes={flowNodes}
+          edges={flowEdges}
+          nodeTypes={canvasNodeTypes}
+          onNodesChange={onNodesChange}
+          onConnect={onFlowConnect}
+          onEdgeClick={onEdgeClick}
+          onNodeContextMenu={onFlowNodeContextMenu}
+          onPaneContextMenu={onCanvasContextMenu as unknown as React.MouseEventHandler}
+          onMoveEnd={(_, viewportState) => updateViewport({ x: viewportState.x, y: viewportState.y, z: viewportState.zoom })}
+          onViewportChange={onViewportChange}
+          viewport={{ x: viewport.x, y: viewport.y, zoom: viewport.z }}
+          defaultViewport={{ x: viewport.x, y: viewport.y, zoom: viewport.z }}
+          minZoom={0.25}
+          maxZoom={2.8}
+          fitView={false}
+          panOnDrag
+          selectionOnDrag
+          selectNodesOnDrag={false}
+          nodeOrigin={[0, 0]}
+          proOptions={{ hideAttribution: true }}
+        >
+          <Background gap={22} size={1} color={isDarkMode ? 'rgba(146,158,151,0.18)' : 'rgba(111,124,116,0.16)'} />
+          <Controls showZoom showFitView={false} showInteractive={false} />
+        </ReactFlow>
         {marqueeRect ? (
           <div
             className="selection-marquee"
@@ -1099,48 +1231,6 @@ function CanvasWorkbench() {
             }}
           />
         ) : null}
-        <div className="canvas-content">
-          <svg ref={connectionLayerRef} className="connection-layer" width="100%" height="100%">
-            {connections.map((connection) => renderConnection(connection, nodes, viewport, portPositions))}
-            {renderPendingConnection(pendingConnection, pendingConnectionPoint, nodes, viewport, portPositions)}
-          </svg>
-          {nodes.map((node) => (
-            <article
-              key={node.id}
-              className={`canvas-node node-${nodeKind(node.meta)} type-${node.nodeType} ${selectedSourceRefs.includes(node.sourceRef) ? 'selected' : ''} ${node.nodeType === 'image' ? 'is-image-node' : ''}`}
-              style={nodeStyle(node, viewport)}
-              data-source-ref={node.sourceRef}
-              onPointerDown={(event) => onNodePointerDown(event, node)}
-            >
-              {node.nodeType === 'image' ? (
-                renderImageNode(node, onImageResizePointerDown, (src, title) => {
-                  setImagePreviewSrc(src)
-                  setImagePreviewTitle(title)
-                })
-              ) : (
-                <>
-                  <header className="node-header">
-                    <input
-                      className="node-title-input"
-                      value={node.meta.title ?? 'Untitled'}
-                      onChange={(event) => updateNodeMeta(node.sourceRef, { title: event.target.value, userEditedTitle: true })}
-                    />
-                    <small>{node.nodeType}</small>
-                  </header>
-                  {renderPorts(node, pendingConnection, handlePortClick, handlePortPointerDown)}
-                  {!node.meta.collapsed ? renderInlineNodeEditor(node, updateNodeMeta) : null}
-                  {Array.isArray(node.meta.tags) && node.meta.tags.length ? (
-                    <div className="node-tags">
-                      {node.meta.tags.map((tag: string) => (
-                        <span key={tag}>#{tag}</span>
-                      ))}
-                    </div>
-                  ) : null}
-                </>
-              )}
-            </article>
-          ))}
-        </div>
       </div>
 
       <div className="floating-toolbar">
@@ -1254,6 +1344,72 @@ export default function App() {
     <CanvasErrorBoundary>
       <CanvasWorkbench />
     </CanvasErrorBoundary>
+  )
+}
+
+const canvasNodeTypes = {
+  canvasNode: CanvasFlowNode,
+}
+
+function CanvasFlowNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
+  const node = data.node
+  const isImage = node.nodeType === 'image'
+  const imageSrc = isImage ? resolveCanvasImageSource(node.meta.imageDataUrl ?? node.meta.imagePath) : ''
+
+  return (
+    <article
+      className={`canvas-node flow-node node-${nodeKind(node.meta)} type-${node.nodeType} ${selected ? 'selected' : ''} ${isImage ? 'is-image-node' : ''}`}
+      style={{ width: node.w, minHeight: node.h }}
+      data-source-ref={node.sourceRef}
+    >
+      {isImage ? (
+        <>
+          <NodeResizer
+            isVisible={Boolean(selected)}
+            minWidth={120}
+            minHeight={80}
+            onResizeEnd={(_, params) => data.onNodeResize(node.sourceRef, params.width, params.height)}
+          />
+          <div className="node-image-plain nodrag">
+            {imageSrc ? (
+              <img
+                src={imageSrc}
+                alt={String(node.meta.title ?? 'Image')}
+                loading="lazy"
+                decoding="async"
+                draggable={false}
+                onDoubleClick={(event) => {
+                  event.stopPropagation()
+                  data.onPreviewImage(imageSrc, String(node.meta.title ?? 'Image'))
+                }}
+              />
+            ) : (
+              <div className="node-image-empty node-image-plain-empty">No image</div>
+            )}
+          </div>
+        </>
+      ) : (
+        <>
+          <header className="node-header">
+            <input
+              className="node-title-input nodrag"
+              value={node.meta.title ?? 'Untitled'}
+              onChange={(event) => data.updateNodeMeta(node.sourceRef, { title: event.target.value, userEditedTitle: true })}
+            />
+            <small>{node.nodeType}</small>
+          </header>
+          {renderFlowPorts(node, data.pendingConnection, data.onPortClick)}
+          {!node.meta.collapsed ? renderInlineNodeEditor(node, data.updateNodeMeta) : null}
+          {Array.isArray(node.meta.tags) && node.meta.tags.length ? (
+            <div className="node-tags">
+              {node.meta.tags.map((tag: string) => (
+                <span key={tag}>#{tag}</span>
+              ))}
+            </div>
+          ) : null}
+        </>
+      )}
+    </article>
   )
 }
 
@@ -1533,6 +1689,45 @@ function renderPorts(
           </button>
         ))}
       </div>
+    </div>
+  )
+}
+
+function renderFlowPorts(
+  node: CanvasNode,
+  pending: PendingConnection | null,
+  onPortClick: (node: CanvasNode, port: NodePort, event?: React.MouseEvent<HTMLButtonElement>) => void,
+) {
+  const ports = Array.isArray(node.meta.ports) ? node.meta.ports : getNodePorts(node.nodeType, node.meta)
+  if (!ports.length) return null
+  const inputs = ports.filter((port) => port.direction === 'input')
+  const outputs = ports.filter((port) => port.direction === 'output')
+
+  const renderPort = (port: NodePort) => (
+    <button
+      key={port.id}
+      type="button"
+      className={`port port-${port.direction} nodrag ${pending?.nodeId === node.id && pending.portId === port.id ? 'active' : ''}`}
+      data-port-id={port.id}
+      onClick={(event) => {
+        event.stopPropagation()
+        onPortClick(node, port, event)
+      }}
+    >
+      <Handle
+        id={port.id}
+        type={port.direction === 'input' ? 'target' : 'source'}
+        position={port.direction === 'input' ? Position.Left : Position.Right}
+        className="port-handle"
+      />
+      <span>{port.label}</span>
+    </button>
+  )
+
+  return (
+    <div className="port-stack">
+      <div className="port-column port-column-inputs">{inputs.map(renderPort)}</div>
+      <div className="port-column port-column-outputs">{outputs.map(renderPort)}</div>
     </div>
   )
 }
