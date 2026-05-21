@@ -36,6 +36,7 @@ namespace ADDGH
         private static bool _canvasRuntimeReady = false;
         private static bool _canvasRuntimeInitializing = false;
         private static bool _canvasRuntimeFailed = false;
+        private static string _activeCanvasId = null;
         private const string CanvasVirtualHostName = "addgh-canvas.local";
 
         private static void InitializeCanvasWorkbenchBindings()
@@ -278,10 +279,44 @@ namespace ADDGH
                         NotifyCanvasInspectorUpdated();
                         break;
                     case "document_snapshot_save":
-                        SaveCanvasConversationSnapshot(GetCurrentCanvasConversationId(), payload?["snapshot"], null);
+                        SaveCanvasDocumentSnapshot(payload?["canvasId"]?.ToString() ?? GetCurrentCanvasDocumentId(), payload?["snapshot"], null);
                         break;
                     case "card_meta_patch":
-                        SaveCanvasMetaPatch(GetCurrentCanvasConversationId(), payload);
+                        SaveCanvasDocumentMetaPatch(payload?["canvasId"]?.ToString() ?? GetCurrentCanvasDocumentId(), payload);
+                        break;
+                    case "canvas_new":
+                        _activeCanvasId = CreateCanvasDocument(payload?["title"]?.ToString());
+                        NotifyCanvasConversationChanged(true);
+                        break;
+                    case "canvas_open":
+                        {
+                            string canvasId = payload?["canvasId"]?.ToString();
+                            if (!string.IsNullOrWhiteSpace(canvasId) && File.Exists(GetCanvasDocumentStatePath(canvasId)))
+                            {
+                                _activeCanvasId = canvasId;
+                                NotifyCanvasConversationChanged(true);
+                            }
+                        }
+                        break;
+                    case "capture_rhino_view":
+                        {
+                            string captureJson = ExecuteCaptureRhinoViewport(
+                                payload?["framing"]?.ToString() ?? "current_view",
+                                payload?["width"]?.Value<int?>(),
+                                payload?["height"]?.Value<int?>(),
+                                payload?["paddingRatio"]?.Value<double?>());
+                            JObject capturePayload;
+                            try
+                            {
+                                capturePayload = JObject.Parse(captureJson);
+                            }
+                            catch
+                            {
+                                capturePayload = new JObject { ["error"] = captureJson };
+                            }
+
+                            PostCanvasMessage("rhino_capture_result", capturePayload);
+                        }
                         break;
                     case "open_inspector_for_source":
                         SetWorkbenchPane(WorkbenchPane.Inspector);
@@ -380,16 +415,20 @@ namespace ADDGH
         private static JObject BuildCanvasBootstrapPayload()
         {
             string conversationId = GetCurrentCanvasConversationId();
-            JObject envelope = LoadCanvasConversationEnvelope(conversationId) ?? new JObject();
+            string canvasId = GetCurrentCanvasDocumentId();
+            JObject envelope = LoadCanvasDocumentEnvelope(canvasId) ?? CreateCanvasDocumentEnvelope(canvasId, null);
             JObject snapshot = envelope["snapshot"] as JObject ?? new JObject();
             snapshot["kind"] = "addgh-lightweight-canvas-v1";
-            snapshot["nodes"] = BuildCanvasTypedNodesFromEnvelope(conversationId);
+            snapshot["nodes"] = BuildCanvasTypedNodesFromEnvelope(canvasId);
             snapshot["connections"] = snapshot["connections"] as JArray ?? new JArray();
             envelope["snapshot"] = snapshot;
             return new JObject
             {
                 ["conversationId"] = conversationId,
                 ["conversationTitle"] = GetCurrentCanvasConversationTitle(),
+                ["canvasId"] = canvasId,
+                ["canvasTitle"] = envelope["title"]?.ToString() ?? "Canvas",
+                ["canvasHistory"] = BuildCanvasHistoryItems(),
                 ["messages"] = BuildCanvasMessageItems(),
                 ["toolEvents"] = BuildCanvasToolItems(),
                 ["inspectorSnapshot"] = BuildInspectorSnapshot(),
@@ -403,6 +442,7 @@ namespace ADDGH
             {
                 ["conversationId"] = GetCurrentCanvasConversationId(),
                 ["conversationTitle"] = GetCurrentCanvasConversationTitle(),
+                ["canvasId"] = GetCurrentCanvasDocumentId(),
                 ["messages"] = BuildCanvasMessageItems(),
                 ["toolEvents"] = BuildCanvasToolItems()
             };
@@ -468,12 +508,12 @@ namespace ADDGH
                 || sourceRef.StartsWith("generated_image:", StringComparison.OrdinalIgnoreCase);
         }
 
-        private static JArray BuildCanvasTypedNodesFromEnvelope(string conversationId)
+        private static JArray BuildCanvasTypedNodesFromEnvelope(string canvasId)
         {
             var nodes = new JArray();
             try
             {
-                JObject envelope = LoadCanvasConversationEnvelope(conversationId) ?? new JObject();
+                JObject envelope = LoadCanvasDocumentEnvelope(canvasId) ?? new JObject();
                 JObject snapshot = envelope["snapshot"] as JObject;
                 JArray existingNodes = snapshot?["nodes"] as JArray ?? new JArray();
                 foreach (var node in existingNodes.OfType<JObject>())
@@ -652,6 +692,13 @@ namespace ADDGH
             return dir;
         }
 
+        private static string GetCanvasDocumentDirectory()
+        {
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ADDGH", "canvas-documents");
+            try { Directory.CreateDirectory(dir); } catch { }
+            return dir;
+        }
+
         private static string GetCanvasWebViewUserDataFolder()
         {
             string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ADDGH", "WebView2", "CanvasWorkbench");
@@ -697,6 +744,110 @@ namespace ADDGH
             return Path.Combine(GetCanvasStateDirectory(), safe + ".json");
         }
 
+        private static string GetCurrentCanvasDocumentId()
+        {
+            if (!string.IsNullOrWhiteSpace(_activeCanvasId))
+                return _activeCanvasId;
+            _activeCanvasId = GetDefaultCanvasDocumentId();
+            EnsureCanvasDocumentExists(_activeCanvasId, "Canvas");
+            return _activeCanvasId;
+        }
+
+        private static string GetDefaultCanvasDocumentId()
+        {
+            return "canvas-default";
+        }
+
+        private static string GetCanvasDocumentStatePath(string canvasId)
+        {
+            string safe = string.IsNullOrWhiteSpace(canvasId) ? GetDefaultCanvasDocumentId() : canvasId.Trim();
+            foreach (char c in Path.GetInvalidFileNameChars())
+                safe = safe.Replace(c, '_');
+            return Path.Combine(GetCanvasDocumentDirectory(), safe + ".json");
+        }
+
+        private static JObject CreateCanvasDocumentEnvelope(string canvasId, string title)
+        {
+            string now = DateTime.UtcNow.ToString("o");
+            return new JObject
+            {
+                ["schemaVersion"] = "canvas-v2",
+                ["canvasId"] = canvasId,
+                ["title"] = string.IsNullOrWhiteSpace(title) ? "Canvas" : title.Trim(),
+                ["createdAtUtc"] = now,
+                ["updatedAtUtc"] = now,
+                ["snapshot"] = new JObject
+                {
+                    ["kind"] = "addgh-lightweight-canvas-v1",
+                    ["nodes"] = new JArray(),
+                    ["connections"] = new JArray()
+                },
+                ["cardMetaPatches"] = new JObject()
+            };
+        }
+
+        private static void EnsureCanvasDocumentExists(string canvasId, string title)
+        {
+            try
+            {
+                string path = GetCanvasDocumentStatePath(canvasId);
+                if (File.Exists(path)) return;
+                File.WriteAllText(path, CreateCanvasDocumentEnvelope(canvasId, title).ToString(Formatting.Indented), Encoding.UTF8);
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("EnsureCanvasDocumentExists failed: " + ex.Message);
+            }
+        }
+
+        private static string CreateCanvasDocument(string title)
+        {
+            string id = "canvas-" + DateTime.UtcNow.ToString("yyyyMMddHHmmssfff");
+            EnsureCanvasDocumentExists(id, string.IsNullOrWhiteSpace(title) ? ("Canvas " + DateTime.Now.ToString("HH:mm")) : title);
+            return id;
+        }
+
+        private static JObject LoadCanvasDocumentEnvelope(string canvasId)
+        {
+            try
+            {
+                string path = GetCanvasDocumentStatePath(canvasId);
+                if (!File.Exists(path)) return null;
+                return JObject.Parse(File.ReadAllText(path, Encoding.UTF8));
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("LoadCanvasDocumentEnvelope failed: " + ex.Message);
+                return null;
+            }
+        }
+
+        private static JArray BuildCanvasHistoryItems()
+        {
+            var result = new JArray();
+            try
+            {
+                foreach (string path in Directory.GetFiles(GetCanvasDocumentDirectory(), "*.json").OrderByDescending(File.GetLastWriteTimeUtc))
+                {
+                    JObject root = JObject.Parse(File.ReadAllText(path, Encoding.UTF8));
+                    string id = root["canvasId"]?.ToString();
+                    if (string.IsNullOrWhiteSpace(id))
+                        id = Path.GetFileNameWithoutExtension(path);
+                    result.Add(new JObject
+                    {
+                        ["canvasId"] = id,
+                        ["title"] = root["title"]?.ToString() ?? id,
+                        ["updatedAtUtc"] = root["updatedAtUtc"]?.ToString() ?? File.GetLastWriteTimeUtc(path).ToString("o")
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("BuildCanvasHistoryItems failed: " + ex.Message);
+            }
+            return result;
+        }
+
         private static JObject LoadCanvasConversationEnvelope(string conversationId)
         {
             try
@@ -714,12 +865,17 @@ namespace ADDGH
 
         private static void SaveCanvasConversationSnapshot(string conversationId, JToken snapshot, JToken metaPatches)
         {
+            SaveCanvasDocumentSnapshot(GetCurrentCanvasDocumentId(), snapshot, metaPatches);
+        }
+
+        private static void SaveCanvasDocumentSnapshot(string canvasId, JToken snapshot, JToken metaPatches)
+        {
             try
             {
-                string path = GetCanvasConversationStatePath(conversationId);
-                JObject root = LoadCanvasConversationEnvelope(conversationId) ?? new JObject();
-                root["schemaVersion"] = "canvas-v1";
-                root["conversationId"] = conversationId;
+                string path = GetCanvasDocumentStatePath(canvasId);
+                JObject root = LoadCanvasDocumentEnvelope(canvasId) ?? CreateCanvasDocumentEnvelope(canvasId, null);
+                root["schemaVersion"] = "canvas-v2";
+                root["canvasId"] = canvasId;
                 root["updatedAtUtc"] = DateTime.UtcNow.ToString("o");
                 if (snapshot != null)
                 {
@@ -746,20 +902,25 @@ namespace ADDGH
 
         private static void SaveCanvasMetaPatch(string conversationId, JObject patch)
         {
+            SaveCanvasDocumentMetaPatch(GetCurrentCanvasDocumentId(), patch);
+        }
+
+        private static void SaveCanvasDocumentMetaPatch(string canvasId, JObject patch)
+        {
             if (patch == null) return;
             try
             {
-                JObject root = LoadCanvasConversationEnvelope(conversationId) ?? new JObject();
+                JObject root = LoadCanvasDocumentEnvelope(canvasId) ?? CreateCanvasDocumentEnvelope(canvasId, null);
                 var bucket = root["cardMetaPatches"] as JObject ?? new JObject();
                 string sourceRef = patch["sourceRef"]?.ToString();
                 if (string.IsNullOrWhiteSpace(sourceRef))
                     sourceRef = patch["cardId"]?.ToString() ?? Guid.NewGuid().ToString("n");
                 bucket[sourceRef] = patch.DeepClone();
-                root["schemaVersion"] = "canvas-v1";
-                root["conversationId"] = conversationId;
+                root["schemaVersion"] = "canvas-v2";
+                root["canvasId"] = canvasId;
                 root["updatedAtUtc"] = DateTime.UtcNow.ToString("o");
                 root["cardMetaPatches"] = bucket;
-                File.WriteAllText(GetCanvasConversationStatePath(conversationId), root.ToString(Formatting.Indented), Encoding.UTF8);
+                File.WriteAllText(GetCanvasDocumentStatePath(canvasId), root.ToString(Formatting.Indented), Encoding.UTF8);
             }
             catch (Exception ex)
             {

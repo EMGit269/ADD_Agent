@@ -1,4 +1,4 @@
-import React, { Component, ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import React, { Component, ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 type HostEnvelope = {
   type: string
@@ -53,6 +53,12 @@ type CanvasConnection = {
   toPortId: string
 }
 
+type CanvasHistoryItem = {
+  canvasId: string
+  title: string
+  updatedAtUtc?: string
+}
+
 type CanvasNode = {
   id: string
   sourceRef: string
@@ -74,6 +80,8 @@ type LightweightSnapshot = {
 type DragState =
   | { mode: 'pan'; pointerId: number; startX: number; startY: number; startViewport: Viewport; moved: boolean }
   | { mode: 'node'; pointerId: number; sourceRef: string; startX: number; startY: number; startNodeX: number; startNodeY: number; moved: boolean }
+  | { mode: 'resize'; pointerId: number; sourceRef: string; startX: number; startY: number; startW: number; startH: number; aspect: number; moved: boolean }
+  | { mode: 'connect'; pointerId: number; from: PendingConnection; currentX: number; currentY: number }
   | { mode: 'select'; pointerId: number; startX: number; startY: number; currentX: number; currentY: number }
   | null
 
@@ -81,6 +89,8 @@ type PendingConnection = {
   nodeId: string
   portId: string
 }
+
+type PortPositionMap = Record<string, { x: number; y: number }>
 
 type CanvasSnapshotState = {
   nodes: CanvasNode[]
@@ -168,6 +178,9 @@ function CanvasWorkbench() {
   })
   const [conversationId, setConversationId] = useState('draft')
   const [conversationTitle, setConversationTitle] = useState('Canvas')
+  const [canvasId, setCanvasId] = useState('canvas-default')
+  const [canvasTitle, setCanvasTitle] = useState('Canvas')
+  const [canvasHistory, setCanvasHistory] = useState<CanvasHistoryItem[]>([])
   const [messages, setMessages] = useState<CanvasMessageItem[]>([])
   const [nodes, setNodes] = useState<CanvasNode[]>([])
   const [connections, setConnections] = useState<CanvasConnection[]>([])
@@ -175,14 +188,18 @@ function CanvasWorkbench() {
   const [selectedSourceRef, setSelectedSourceRef] = useState<string | null>(null)
   const [selectedSourceRefs, setSelectedSourceRefs] = useState<string[]>([])
   const [pendingConnection, setPendingConnection] = useState<PendingConnection | null>(null)
+  const [pendingConnectionPoint, setPendingConnectionPoint] = useState<{ x: number; y: number } | null>(null)
+  const [portPositions, setPortPositions] = useState<PortPositionMap>({})
   const [detailSourceRef, setDetailSourceRef] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null)
   const [inspectorSnapshot, setInspectorSnapshot] = useState<InspectorSnapshot | null>(null)
   const [interactionMode, setInteractionMode] = useState('idle')
   const [imagePreviewSrc, setImagePreviewSrc] = useState<string | null>(null)
   const [imagePreviewTitle, setImagePreviewTitle] = useState<string>('Image Preview')
+  const [captureStatus, setCaptureStatus] = useState('')
   const [marqueeRect, setMarqueeRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
   const surfaceRef = useRef<HTMLDivElement | null>(null)
+  const connectionLayerRef = useRef<SVGSVGElement | null>(null)
   const dragRef = useRef<DragState>(null)
   const saveTimerRef = useRef<number | null>(null)
   const nodesRef = useRef(nodes)
@@ -195,6 +212,7 @@ function CanvasWorkbench() {
   const lastMessagesSignatureRef = useRef('')
   const currentConversationIdRef = useRef('draft')
   const currentConversationTitleRef = useRef('Canvas')
+  const canvasIdRef = useRef('canvas-default')
   const suppressNextContextMenuRef = useRef(false)
   const isDarkMode = themeMode === 'dark'
 
@@ -222,6 +240,10 @@ function CanvasWorkbench() {
     currentConversationIdRef.current = conversationId
     currentConversationTitleRef.current = conversationTitle
   }, [conversationId, conversationTitle])
+
+  useEffect(() => {
+    canvasIdRef.current = canvasId
+  }, [canvasId])
 
   useEffect(() => {
     const reportError = (kind: string, detail: unknown) => {
@@ -300,6 +322,8 @@ function CanvasWorkbench() {
         const payload = envelope.payload ?? {}
         const nextConversationId = payload.conversationId ?? 'draft'
         const nextConversationTitle = payload.conversationTitle ?? 'Canvas'
+        const nextCanvasId = payload.canvasId ?? 'canvas-default'
+        const nextCanvasTitle = payload.canvasTitle ?? 'Canvas'
         const nextMessages = Array.isArray(payload.messages) ? payload.messages : []
         const nextSignature = computeMessagesSignature(nextMessages)
         const savedSnapshot = parseSnapshot(payload.canvasSnapshot?.snapshot)
@@ -309,15 +333,15 @@ function CanvasWorkbench() {
         currentConversationTitleRef.current = nextConversationTitle
         setConversationId(nextConversationId)
         setConversationTitle(nextConversationTitle)
+        setCanvasId(nextCanvasId)
+        setCanvasTitle(nextCanvasTitle)
+        setCanvasHistory(Array.isArray(payload.canvasHistory) ? payload.canvasHistory : [])
         setInspectorSnapshot(payload.inspectorSnapshot ?? null)
         cardMetaRef.current = { ...savedMeta }
         if (savedSnapshot?.viewport) setViewport(normalizeViewport(savedSnapshot.viewport))
         if (Array.isArray(savedSnapshot?.connections)) setConnections(savedSnapshot.connections.map(normalizeConnection))
 
-        setNodes((previous) => {
-          const baseNodes = savedSnapshot?.nodes?.length ? savedSnapshot.nodes : previous
-          return reconcileNodes(nextMessages, cardMetaRef.current, baseNodes, savedSnapshot?.connections ?? connectionsRef.current)
-        })
+        setNodes(reconcileTypedNodes(savedSnapshot?.nodes ?? []))
 
         if (nextSignature !== lastMessagesSignatureRef.current) {
           lastMessagesSignatureRef.current = nextSignature
@@ -329,6 +353,7 @@ function CanvasWorkbench() {
         const payload = envelope.payload ?? {}
         const nextConversationId = payload.conversationId ?? currentConversationIdRef.current
         const nextConversationTitle = payload.conversationTitle ?? currentConversationTitleRef.current
+        if (payload.canvasId) setCanvasId(payload.canvasId)
         const nextMessages = Array.isArray(payload.messages) ? payload.messages : []
         const nextSignature = computeMessagesSignature(nextMessages)
 
@@ -339,12 +364,27 @@ function CanvasWorkbench() {
         if (nextSignature !== lastMessagesSignatureRef.current) {
           lastMessagesSignatureRef.current = nextSignature
           setMessages(nextMessages)
-          setNodes((previous) => reconcileNodes(nextMessages, cardMetaRef.current, previous, connectionsRef.current))
         }
       }
 
       if (envelope.type === 'inspector_update') {
         setInspectorSnapshot((envelope.payload ?? null) as InspectorSnapshot | null)
+      }
+
+      if (envelope.type === 'rhino_capture_result') {
+        const payload = envelope.payload ?? {}
+        if (payload.error) {
+          setCaptureStatus(String(payload.error))
+          return
+        }
+        if (payload.path) {
+          createCapturedImageNode(
+            String(payload.path),
+            payload.dataUrl ? String(payload.dataUrl) : '',
+            payload.title ? String(payload.title) : 'Rhino View',
+          )
+          setCaptureStatus('Rhino view captured')
+        }
       }
     }
 
@@ -378,6 +418,42 @@ function CanvasWorkbench() {
       }
     }
   }, [])
+
+  useLayoutEffect(() => {
+    const measurePorts = () => {
+      const layer = connectionLayerRef.current
+      if (!layer) return
+
+      const layerRect = layer.getBoundingClientRect()
+      const zoom = viewportRef.current.z
+      const next: PortPositionMap = {}
+
+      document.querySelectorAll<HTMLElement>('.canvas-node[data-source-ref] [data-port-id]').forEach((portElement) => {
+        const nodeElement = portElement.closest('.canvas-node') as HTMLElement | null
+        const sourceRef = nodeElement?.dataset.sourceRef
+        const portId = portElement.dataset.portId
+        if (!sourceRef || !portId) return
+
+        const rect = portElement.getBoundingClientRect()
+        const isOutput = portElement.classList.contains('port-output')
+        const dotRadius = 4 * zoom
+        next[portPositionKey(sourceRef, portId)] = {
+          x: (isOutput ? rect.right - dotRadius : rect.left + dotRadius) - layerRect.left,
+          y: rect.top + rect.height / 2 - layerRect.top,
+        }
+      })
+
+      setPortPositions((current) => (portPositionMapsEqual(current, next) ? current : next))
+    }
+
+    measurePorts()
+    const frame = window.requestAnimationFrame(measurePorts)
+    window.addEventListener('resize', measurePorts)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.removeEventListener('resize', measurePorts)
+    }
+  }, [nodes, viewport, pendingConnection, connections.length])
 
   const selectedNode = useMemo(
     () => nodes.find((node) => node.sourceRef === selectedSourceRef) ?? null,
@@ -439,7 +515,7 @@ function CanvasWorkbench() {
         nodes: nodesRef.current,
         connections: connectionsRef.current,
       }
-      postHostMessage('document_snapshot_save', { snapshot })
+      postHostMessage('document_snapshot_save', { canvasId: canvasIdRef.current, snapshot })
     }, 350)
   }
 
@@ -489,7 +565,7 @@ function CanvasWorkbench() {
         }
       }),
     )
-    postHostMessage('card_meta_patch', { sourceRef, ...cardMetaRef.current[sourceRef] })
+    postHostMessage('card_meta_patch', { canvasId: canvasIdRef.current, sourceRef, ...cardMetaRef.current[sourceRef] })
   }
 
   function deleteNodeBySourceRef(sourceRef: string) {
@@ -569,7 +645,7 @@ function CanvasWorkbench() {
   function onNodePointerDown(event: React.PointerEvent<HTMLElement>, node: CanvasNode) {
     if (event.button !== 0) return
     const target = event.target as HTMLElement
-    if (target.closest('input,textarea,select,[data-port-id]')) return
+    if (target.closest('input,textarea,select,[data-port-id],[data-resize-handle]')) return
     setContextMenu(null)
     event.stopPropagation()
     setSelectedSourceRef(node.sourceRef)
@@ -588,7 +664,28 @@ function CanvasWorkbench() {
     surfaceRef.current?.setPointerCapture(event.pointerId)
   }
 
-  function handlePortClick(node: CanvasNode, port: NodePort) {
+  function onImageResizePointerDown(event: React.PointerEvent<HTMLButtonElement>, node: CanvasNode) {
+    if (event.button !== 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    setSelectedSourceRef(node.sourceRef)
+    setSelectedSourceRefs([node.sourceRef])
+    dragRef.current = {
+      mode: 'resize',
+      pointerId: event.pointerId,
+      sourceRef: node.sourceRef,
+      startX: event.clientX,
+      startY: event.clientY,
+      startW: node.w,
+      startH: node.h,
+      aspect: node.w / Math.max(1, node.h),
+      moved: false,
+    }
+    setInteractionMode('resize')
+    surfaceRef.current?.setPointerCapture(event.pointerId)
+  }
+
+  function handlePortClick(node: CanvasNode, port: NodePort, event?: React.MouseEvent<HTMLButtonElement>) {
     setContextMenu(null)
     setSelectedSourceRef(node.sourceRef)
     if (port.direction === 'output') {
@@ -602,8 +699,55 @@ function CanvasWorkbench() {
       setInteractionMode('idle')
       return
     }
-    connectNodes(pendingConnection, { nodeId: node.id, portId: port.id })
+    const to = { nodeId: node.id, portId: port.id }
+    if (event?.shiftKey) {
+      deleteConnectionBetween(pendingConnection, to)
+    } else {
+      connectNodes(pendingConnection, to)
+    }
     setInteractionMode('idle')
+  }
+
+  function handlePortPointerDown(event: React.PointerEvent<HTMLButtonElement>, node: CanvasNode, port: NodePort) {
+    event.preventDefault()
+    event.stopPropagation()
+    setContextMenu(null)
+    setSelectedSourceRef(node.sourceRef)
+
+    if (port.direction === 'input') {
+      if (pendingConnection) {
+        const to = { nodeId: node.id, portId: port.id }
+        if (event.shiftKey) {
+          deleteConnectionBetween(pendingConnection, to)
+        } else {
+          connectNodes(pendingConnection, to)
+        }
+        setInteractionMode('idle')
+      }
+      return
+    }
+
+    const rect = surfaceRef.current?.getBoundingClientRect()
+    const point = {
+      x: event.clientX - (rect?.left ?? 0),
+      y: event.clientY - (rect?.top ?? 0),
+    }
+    const from = { nodeId: node.id, portId: port.id }
+    setPendingConnection(from)
+    setPendingConnectionPoint(point)
+    dragRef.current = {
+      mode: 'connect',
+      pointerId: event.pointerId,
+      from,
+      currentX: point.x,
+      currentY: point.y,
+    }
+    setInteractionMode('connect')
+    try {
+      surfaceRef.current?.setPointerCapture(event.pointerId)
+    } catch {
+      // Pointer capture can fail if the browser already released it.
+    }
   }
 
   function connectNodes(from: PendingConnection, to: PendingConnection) {
@@ -618,6 +762,27 @@ function CanvasWorkbench() {
         toPortId: to.portId,
       },
     ])
+    setPendingConnection(null)
+  }
+
+  function deleteConnectionBetween(from: PendingConnection, to: PendingConnection) {
+    updateConnections((current) => {
+      const hasExactMatch = current.some((connection) =>
+        connection.fromNodeId === from.nodeId
+        && connection.fromPortId === from.portId
+        && connection.toNodeId === to.nodeId
+        && connection.toPortId === to.portId,
+      )
+      return current.filter((connection) => {
+        if (hasExactMatch) {
+          return !(connection.fromNodeId === from.nodeId
+            && connection.fromPortId === from.portId
+            && connection.toNodeId === to.nodeId
+            && connection.toPortId === to.portId)
+        }
+        return !(connection.fromNodeId === from.nodeId && connection.toNodeId === to.nodeId)
+      })
+    })
     setPendingConnection(null)
   }
 
@@ -645,6 +810,48 @@ function CanvasWorkbench() {
       drag.currentX = event.clientX
       drag.currentY = event.clientY
       setMarqueeRect({ left, top, width, height })
+      return
+    }
+
+    if (drag.mode === 'connect') {
+      const rect = event.currentTarget.getBoundingClientRect()
+      const point = {
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+      }
+      drag.currentX = point.x
+      drag.currentY = point.y
+      setPendingConnectionPoint(point)
+      return
+    }
+
+    if (drag.mode === 'resize') {
+      const zoom = viewportRef.current.z
+      const dx = (event.clientX - drag.startX) / zoom
+      const dy = (event.clientY - drag.startY) / zoom
+      drag.moved = drag.moved || Math.abs(dx) > 1 || Math.abs(dy) > 1
+      const rawW = drag.startW + dx
+      const rawH = drag.startH + dy
+      const nextW = clamp(rawW, 120, 1200)
+      const nextH = event.shiftKey
+        ? clamp(nextW / drag.aspect, 90, 900)
+        : clamp(rawH, 90, 900)
+      updateNodes((current) =>
+        current.map((node) =>
+          node.sourceRef === drag.sourceRef
+            ? {
+                ...node,
+                w: nextW,
+                h: nextH,
+                meta: {
+                  ...node.meta,
+                  w: nextW,
+                  h: nextH,
+                },
+              }
+            : node,
+        ),
+      )
       return
     }
 
@@ -689,6 +896,22 @@ function CanvasWorkbench() {
       selectedSourceRefsRef.current = [...selected]
       selectedSourceRefRef.current = selected[0] ?? null
       setMarqueeRect(null)
+      return
+    }
+    if (drag?.mode === 'connect') {
+      const target = findPortAtPoint(event.clientX, event.clientY, nodesRef.current)
+      if (target?.port.direction === 'input') {
+        const to = { nodeId: target.node.id, portId: target.port.id }
+        if (event.shiftKey) {
+          deleteConnectionBetween(drag.from, to)
+        } else {
+          connectNodes(drag.from, to)
+        }
+      } else {
+        setPendingConnection(null)
+      }
+      setPendingConnectionPoint(null)
+      setInteractionMode('idle')
       return
     }
     setMarqueeRect(null)
@@ -779,6 +1002,46 @@ function CanvasWorkbench() {
     postHostMessage('canvas_ready', { reason: 'manual-sync' })
   }
 
+  function onNewCanvas() {
+    postHostMessage('canvas_new', { title: `Canvas ${new Date().toLocaleTimeString()}` })
+  }
+
+  function onOpenCanvas(nextCanvasId: string) {
+    if (!nextCanvasId || nextCanvasId === canvasId) return
+    postHostMessage('canvas_open', { canvasId: nextCanvasId })
+  }
+
+  function onCaptureRhinoView() {
+    setCaptureStatus('Capturing Rhino view...')
+    postHostMessage('capture_rhino_view', { framing: 'current_view', width: 1600, height: 900 })
+  }
+
+  function createCapturedImageNode(path: string, dataUrl: string, title: string) {
+    const center = screenToWorld(
+      surfaceRef.current?.clientWidth ? surfaceRef.current.clientWidth / 2 : 360,
+      surfaceRef.current?.clientHeight ? surfaceRef.current.clientHeight / 2 : 240,
+      viewportRef.current,
+    )
+    const sourceRef = `image:rhino-capture:${Date.now()}`
+    const meta = {
+      ...buildDefaultNodeMeta('image', sourceRef),
+      title,
+      summary: 'Rhino viewport capture',
+      body: path,
+      imagePath: path,
+      imageDataUrl: dataUrl || path,
+      userEditedTitle: true,
+    }
+    const node = createNode(meta, nodesRef.current.length, center.x - 180, center.y - 130, 'image')
+    cardMetaRef.current[sourceRef] = meta
+    commitMutation((snapshot) => ({
+      ...snapshot,
+      nodes: [...snapshot.nodes, node],
+      selectedSourceRef: sourceRef,
+      selectedSourceRefs: [sourceRef],
+    }))
+  }
+
   function onCanvasContextMenu(event: React.MouseEvent<HTMLDivElement>) {
     event.preventDefault()
     if (suppressNextContextMenuRef.current) {
@@ -837,8 +1100,9 @@ function CanvasWorkbench() {
           />
         ) : null}
         <div className="canvas-content">
-          <svg className="connection-layer" width="100%" height="100%">
-            {connections.map((connection) => renderConnection(connection, nodes, viewport))}
+          <svg ref={connectionLayerRef} className="connection-layer" width="100%" height="100%">
+            {connections.map((connection) => renderConnection(connection, nodes, viewport, portPositions))}
+            {renderPendingConnection(pendingConnection, pendingConnectionPoint, nodes, viewport, portPositions)}
           </svg>
           {nodes.map((node) => (
             <article
@@ -847,28 +1111,24 @@ function CanvasWorkbench() {
               style={nodeStyle(node, viewport)}
               data-source-ref={node.sourceRef}
               onPointerDown={(event) => onNodePointerDown(event, node)}
-              onDoubleClick={() => {
-                if (node.nodeType !== 'image') setDetailSourceRef(node.sourceRef)
-              }}
             >
               {node.nodeType === 'image' ? (
-                renderImageNode(node, (src, title) => {
+                renderImageNode(node, onImageResizePointerDown, (src, title) => {
                   setImagePreviewSrc(src)
                   setImagePreviewTitle(title)
                 })
               ) : (
                 <>
                   <header className="node-header">
-                    <span>{node.meta.title ?? 'Untitled'}</span>
+                    <input
+                      className="node-title-input"
+                      value={node.meta.title ?? 'Untitled'}
+                      onChange={(event) => updateNodeMeta(node.sourceRef, { title: event.target.value, userEditedTitle: true })}
+                    />
                     <small>{node.nodeType}</small>
                   </header>
-                  <p className="node-summary">{node.meta.summary || node.meta.sourceRef}</p>
-                  {renderNodePreview(node, (src, title) => {
-                    setImagePreviewSrc(src)
-                    setImagePreviewTitle(title)
-                  })}
-                  {renderPorts(node, pendingConnection, handlePortClick)}
-                  {!node.meta.collapsed ? <pre className="node-body">{getNodePreviewText(node)}</pre> : null}
+                  {renderPorts(node, pendingConnection, handlePortClick, handlePortPointerDown)}
+                  {!node.meta.collapsed ? renderInlineNodeEditor(node, updateNodeMeta) : null}
                   {Array.isArray(node.meta.tags) && node.meta.tags.length ? (
                     <div className="node-tags">
                       {node.meta.tags.map((tag: string) => (
@@ -884,20 +1144,28 @@ function CanvasWorkbench() {
       </div>
 
       <div className="floating-toolbar">
+        <select className="canvas-history-select" value={canvasId} onChange={(event) => onOpenCanvas(event.target.value)}>
+          {canvasHistory.length ? canvasHistory.map((item) => (
+            <option key={item.canvasId} value={item.canvasId}>{item.title || item.canvasId}</option>
+          )) : <option value={canvasId}>{canvasTitle}</option>}
+        </select>
+        <button onClick={onNewCanvas}>New Canvas</button>
         <button onClick={() => setThemeMode((current) => current === 'dark' ? 'light' : 'dark')}>
           {isDarkMode ? 'Light' : 'Dark'}
         </button>
         <button onClick={onFit}>Fit</button>
+        <button onClick={onCaptureRhinoView}>Capture Rhino</button>
         <button onClick={onNewNote}>Note</button>
-        <button onClick={() => detailSourceRef ? setDetailSourceRef(null) : setDetailSourceRef(selectedSourceRef)}>Details</button>
         <button onClick={onCollapse} disabled={!selectedNode}>Collapse</button>
         <button onClick={onSync}>Sync</button>
       </div>
 
       <div className="status-pill">
+        <span>{canvasTitle}</span>
         <span>{conversationTitle}</span>
         <span>{nodes.length} nodes</span>
         <span>{viewport.z.toFixed(2)}x</span>
+        {captureStatus ? <span>{captureStatus}</span> : null}
       </div>
 
       {detailMeta?.sourceRef ? (
@@ -960,7 +1228,6 @@ function CanvasWorkbench() {
             </>
           ) : (
             <>
-              <button onClick={() => contextMenu.sourceRef ? setDetailSourceRef(contextMenu.sourceRef) : null}>Edit Details</button>
               <button onClick={() => contextMenu.sourceRef ? deleteNodeBySourceRef(contextMenu.sourceRef) : null}>Delete</button>
             </>
           )}
@@ -1121,11 +1388,16 @@ function normalizeNode(node: any): CanvasNode {
     h: size.h,
     meta: {
       ...resolvedMeta,
-      ports: Array.isArray(meta.ports) ? meta.ports.map(normalizePort) : getNodePorts(nodeType, resolvedMeta),
+      ports: shouldUseStoredPorts(nodeType, meta.ports) ? meta.ports.map(normalizePort) : getNodePorts(nodeType, resolvedMeta),
       w: size.w,
       h: size.h,
     },
   }
+}
+
+function shouldUseStoredPorts(nodeType: CanvasNodeType, ports: any) {
+  if (!Array.isArray(ports)) return false
+  return nodeType === 'code'
 }
 
 function normalizeConnection(connection: any): CanvasConnection {
@@ -1167,7 +1439,7 @@ function resolveNodeSize(meta: Record<string, any>, nodeType: CanvasNodeType, fa
   if (nodeType === 'file_upload') return { w: 340, h: 210 }
   if (nodeType === 'slider') return { w: 290, h: 170 }
   if (nodeType === 'code') return { w: 420, h: 260 }
-  if (nodeType === 'image') return { w: 360, h: 260 }
+  if (nodeType === 'image') return { w: numberOr(fallback?.w, meta.w, 360), h: numberOr(fallback?.h, meta.h, 260) }
   if (meta.collapsed) return { w: numberOr(fallback?.w, meta.w, 320), h: 112 }
   return { w: numberOr(fallback?.w, meta.w, 320), h: numberOr(fallback?.h, meta.h, 205) }
 }
@@ -1181,14 +1453,12 @@ function normalizeNodeType(value: any): CanvasNodeType {
 
 function getNodePorts(nodeType: CanvasNodeType, meta: Record<string, any>): NodePort[] {
   if (nodeType === 'message') return []
-  if (nodeType === 'image') {
-    return [
-      { id: 'in', label: 'Input', direction: 'input', dataType: 'image', slot: 0 },
-      { id: 'out', label: 'Output', direction: 'output', dataType: 'image', slot: 1 },
-    ]
-  }
+  if (nodeType === 'image') return []
   if (nodeType === 'prompt') {
-    return [{ id: 'out', label: 'Prompt', direction: 'output', dataType: 'text', slot: 0 }]
+    return [
+      { id: 'clip', label: 'clip', direction: 'input', dataType: 'any', slot: 0 },
+      { id: 'conditioning', label: 'CONDITIONING', direction: 'output', dataType: 'text', slot: 0 },
+    ]
   }
   if (nodeType === 'file_upload') {
     return [{ id: 'out', label: 'File Path', direction: 'output', dataType: 'path', slot: 0 }]
@@ -1218,23 +1488,51 @@ function getNodePort(node: CanvasNode, portId: string) {
 function renderPorts(
   node: CanvasNode,
   pending: PendingConnection | null,
-  onPortClick: (node: CanvasNode, port: NodePort) => void,
+  onPortClick: (node: CanvasNode, port: NodePort, event?: React.MouseEvent<HTMLButtonElement>) => void,
+  onPortPointerDown: (event: React.PointerEvent<HTMLButtonElement>, node: CanvasNode, port: NodePort) => void,
 ) {
   const ports = Array.isArray(node.meta.ports) ? node.meta.ports : getNodePorts(node.nodeType, node.meta)
   if (!ports.length) return null
+  const inputs = ports.filter((port) => port.direction === 'input')
+  const outputs = ports.filter((port) => port.direction === 'output')
   return (
     <div className="port-stack">
-      {ports.map((port) => (
-        <button
-          key={port.id}
-          type="button"
-          className={`port port-${port.direction} ${pending?.nodeId === node.id && pending.portId === port.id ? 'active' : ''}`}
-          data-port-id={port.id}
-          onClick={() => onPortClick(node, port)}
-        >
-          {port.label}
-        </button>
-      ))}
+      <div className="port-column port-column-inputs">
+        {inputs.map((port) => (
+          <button
+            key={port.id}
+            type="button"
+            className={`port port-${port.direction} ${pending?.nodeId === node.id && pending.portId === port.id ? 'active' : ''}`}
+            data-port-id={port.id}
+            onPointerDown={(event) => onPortPointerDown(event, node, port)}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation()
+              onPortClick(node, port, event)
+            }}
+          >
+            {port.label}
+          </button>
+        ))}
+      </div>
+      <div className="port-column port-column-outputs">
+        {outputs.map((port) => (
+          <button
+            key={port.id}
+            type="button"
+            className={`port port-${port.direction} ${pending?.nodeId === node.id && pending.portId === port.id ? 'active' : ''}`}
+            data-port-id={port.id}
+            onPointerDown={(event) => onPortPointerDown(event, node, port)}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation()
+              onPortClick(node, port, event)
+            }}
+          >
+            {port.label}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }
@@ -1289,7 +1587,7 @@ function renderNodeBody(
       <div className="node-image-field">
         {imageSrc ? (
           <button type="button" className="node-image-preview" onClick={() => onPreviewImage(imageSrc, String(node.meta.title ?? 'Image'))}>
-            <img src={imageSrc} alt={String(node.meta.title ?? 'Image')} />
+            <img src={imageSrc} alt={String(node.meta.title ?? 'Image')} loading="lazy" decoding="async" draggable={false} />
           </button>
         ) : (
           <div className="node-image-preview node-image-empty">No image</div>
@@ -1304,18 +1602,98 @@ function renderNodeBody(
   return null
 }
 
-function renderImageNode(node: CanvasNode, onPreviewImage: (src: string, title: string) => void) {
-  const imageSrc = resolveCanvasImageSource(node.meta.imageDataUrl ?? node.meta.imagePath)
-  if (!imageSrc) {
-    return <div className="node-image-empty node-image-plain-empty">No image</div>
+function renderInlineNodeEditor(
+  node: CanvasNode,
+  updateMeta: (sourceRef: string, patch: Record<string, unknown>) => void,
+) {
+  if (node.nodeType === 'prompt') {
+    return (
+      <textarea
+        className="node-inline-textarea prompt"
+        value={node.meta.prompt ?? ''}
+        placeholder="Prompt text..."
+        onChange={(event) => updateMeta(node.sourceRef, { prompt: event.target.value })}
+      />
+    )
   }
+  if (node.nodeType === 'code') {
+    return (
+      <textarea
+        className="node-inline-textarea code"
+        value={node.meta.body ?? ''}
+        placeholder="C# code..."
+        spellCheck={false}
+        onChange={(event) => updateMeta(node.sourceRef, { body: event.target.value })}
+      />
+    )
+  }
+  if (node.nodeType === 'file_upload') {
+    return (
+      <input
+        className="node-inline-input"
+        value={node.meta.filePath ?? ''}
+        placeholder="File path..."
+        onChange={(event) => updateMeta(node.sourceRef, { filePath: event.target.value })}
+      />
+    )
+  }
+  if (node.nodeType === 'slider') {
+    return (
+      <label className="node-inline-slider">
+        <span>{Number(node.meta.value ?? 0).toFixed(2)}</span>
+        <input
+          type="range"
+          min={Number(node.meta.min ?? 0)}
+          max={Number(node.meta.max ?? 1)}
+          step={Number(node.meta.step ?? 0.01)}
+          value={Number(node.meta.value ?? 0)}
+          onChange={(event) => updateMeta(node.sourceRef, { value: Number(event.target.value) })}
+        />
+      </label>
+    )
+  }
+  return (
+    <textarea
+      className="node-inline-textarea"
+      value={node.meta.body ?? node.meta.summary ?? ''}
+      placeholder="Node text..."
+      onChange={(event) => updateMeta(node.sourceRef, { body: event.target.value })}
+    />
+  )
+}
+
+function renderImageNode(
+  node: CanvasNode,
+  onResizePointerDown: (event: React.PointerEvent<HTMLButtonElement>, node: CanvasNode) => void,
+  onPreviewImage: (src: string, title: string) => void,
+) {
+  const imageSrc = resolveCanvasImageSource(node.meta.imageDataUrl ?? node.meta.imagePath)
 
   return (
-    <div className="node-image-plain" onDoubleClick={(event) => {
-      event.stopPropagation()
-      onPreviewImage(imageSrc, String(node.meta.title ?? 'Image'))
-    }}>
-      <img src={imageSrc} alt={String(node.meta.title ?? 'Image')} />
+    <div className="node-image-plain">
+      {imageSrc ? (
+        <img
+          src={imageSrc}
+          alt={String(node.meta.title ?? 'Image')}
+          loading="lazy"
+          decoding="async"
+          draggable={false}
+          onDoubleClick={(event) => {
+            event.stopPropagation()
+            onPreviewImage(imageSrc, String(node.meta.title ?? 'Image'))
+          }}
+        />
+      ) : (
+        <div className="node-image-empty node-image-plain-empty">No image</div>
+      )}
+      <button
+        type="button"
+        className="image-resize-handle"
+        data-resize-handle="true"
+        aria-label="Resize image"
+        title="Drag to resize. Hold Shift to keep aspect ratio."
+        onPointerDown={(event) => onResizePointerDown(event, node)}
+      />
     </div>
   )
 }
@@ -1343,7 +1721,7 @@ function renderNodePreview(node: CanvasNode, onPreviewImage: (src: string, title
     const imageSrc = resolveCanvasImageSource(node.meta.imageDataUrl ?? node.meta.imagePath)
     return imageSrc ? (
       <button type="button" className="node-image-chip" onClick={() => onPreviewImage(imageSrc, String(node.meta.title ?? 'Image'))}>
-        <img src={imageSrc} alt={String(node.meta.title ?? 'Image')} />
+        <img src={imageSrc} alt={String(node.meta.title ?? 'Image')} loading="lazy" decoding="async" draggable={false} />
       </button>
     ) : (
       <div className="node-preview-chip">{String(node.meta.imagePath)}</div>
@@ -1366,30 +1744,91 @@ function getNodePreviewText(node: CanvasNode) {
   return node.meta.body || 'No content'
 }
 
-function renderConnection(connection: CanvasConnection, nodes: CanvasNode[], viewport: Viewport) {
+function portPositionKey(sourceRef: string, portId: string) {
+  return `${sourceRef}::${portId}`
+}
+
+function portPositionMapsEqual(a: PortPositionMap, b: PortPositionMap) {
+  const aKeys = Object.keys(a)
+  const bKeys = Object.keys(b)
+  if (aKeys.length !== bKeys.length) return false
+  return aKeys.every((key) => {
+    const left = a[key]
+    const right = b[key]
+    return Boolean(right) && Math.abs(left.x - right.x) < 0.5 && Math.abs(left.y - right.y) < 0.5
+  })
+}
+
+function renderConnection(connection: CanvasConnection, nodes: CanvasNode[], viewport: Viewport, portPositions: PortPositionMap) {
   const fromNode = nodes.find((node) => node.id === connection.fromNodeId)
   const toNode = nodes.find((node) => node.id === connection.toNodeId)
   if (!fromNode || !toNode) return null
-  const from = getPortPosition(fromNode, connection.fromPortId, viewport)
-  const to = getPortPosition(toNode, connection.toPortId, viewport)
+  const from = getPortPosition(fromNode, connection.fromPortId, viewport, portPositions)
+  const to = getPortPosition(toNode, connection.toPortId, viewport, portPositions)
   if (!from || !to) return null
-  const midX = (from.x + to.x) / 2
   return (
     <path
       key={connection.id}
-      d={`M ${from.x} ${from.y} C ${midX} ${from.y}, ${midX} ${to.y}, ${to.x} ${to.y}`}
+      d={createConnectionPath(from, to)}
       className="connection-path"
     />
   )
 }
 
-function getPortPosition(node: CanvasNode, portId: string, viewport: Viewport) {
+function renderPendingConnection(
+  pending: PendingConnection | null,
+  point: { x: number; y: number } | null,
+  nodes: CanvasNode[],
+  viewport: Viewport,
+  portPositions: PortPositionMap,
+) {
+  if (!pending || !point) return null
+  const fromNode = nodes.find((node) => node.id === pending.nodeId)
+  if (!fromNode) return null
+  const from = getPortPosition(fromNode, pending.portId, viewport, portPositions)
+  if (!from) return null
+  return (
+    <path
+      d={createConnectionPath(from, point)}
+      className="connection-path connection-path-pending"
+    />
+  )
+}
+
+function createConnectionPath(from: { x: number; y: number }, to: { x: number; y: number }) {
+  const dx = Math.abs(to.x - from.x)
+  const dy = Math.abs(to.y - from.y)
+  const horizontal = Math.max(72, Math.min(220, dx * 0.52 + dy * 0.18))
+  const c1x = from.x + horizontal
+  const c2x = to.x - horizontal
+  return `M ${from.x} ${from.y} C ${c1x} ${from.y}, ${c2x} ${to.y}, ${to.x} ${to.y}`
+}
+
+function getPortPosition(node: CanvasNode, portId: string, viewport: Viewport, portPositions?: PortPositionMap) {
+  const measured = portPositions?.[portPositionKey(node.sourceRef, portId)]
+  if (measured) return measured
   const ports = Array.isArray(node.meta.ports) ? node.meta.ports : getNodePorts(node.nodeType, node.meta)
   const port = ports.find((item) => item.id === portId)
   if (!port) return null
-  const top = viewport.y + (node.y + 56 + port.slot * 22) * viewport.z
-  const left = viewport.x + (node.x + (port.direction === 'input' ? 0 : node.w)) * viewport.z
+  const sidePorts = ports.filter((item) => item.direction === port.direction)
+  const sideIndex = sidePorts.findIndex((item) => item.id === port.id)
+  const top = viewport.y + (node.y + 42 + sideIndex * 18) * viewport.z
+  const left = viewport.x + (node.x + (port.direction === 'input' ? 4 : node.w - 4)) * viewport.z
   return { x: left, y: top }
+}
+
+function findPortAtPoint(clientX: number, clientY: number, nodes: CanvasNode[]) {
+  const element = document.elementFromPoint(clientX, clientY) as HTMLElement | null
+  const portElement = element?.closest?.('[data-port-id]') as HTMLElement | null
+  const nodeElement = element?.closest?.('.canvas-node') as HTMLElement | null
+  const portId = portElement?.dataset.portId
+  const sourceRef = nodeElement?.dataset.sourceRef
+  if (!portId || !sourceRef) return null
+  const node = nodes.find((item) => item.sourceRef === sourceRef)
+  if (!node) return null
+  const port = getNodePort(node, portId)
+  if (!port) return null
+  return { node, port }
 }
 
 function buildDefaultNodeMeta(nodeType: CanvasNodeType, sourceRef: string) {

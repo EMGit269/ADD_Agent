@@ -3942,10 +3942,12 @@ namespace ADDGH
                         Directory.CreateDirectory(dir);
                         string filePath = Path.Combine(dir, "rhino_capture_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".png");
                         bitmap.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
+                        string dataUrl = "data:image/png;base64," + Convert.ToBase64String(File.ReadAllBytes(filePath));
 
                         var payload = new JObject
                         {
                             ["path"] = filePath,
+                            ["dataUrl"] = dataUrl,
                             ["width"] = captureWidth,
                             ["height"] = captureHeight,
                             ["framing"] = framingMode,

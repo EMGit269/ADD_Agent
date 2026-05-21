@@ -77,6 +77,10 @@ html, body, #root {
   cursor: grabbing;
 }
 
+.light-canvas.is-resize {
+  cursor: nwse-resize;
+}
+
 .light-canvas.is-select {
   cursor: crosshair;
 }
@@ -98,7 +102,7 @@ html, body, #root {
 .connection-layer {
   position: absolute;
   inset: 0;
-  z-index: 1;
+  z-index: 3;
   pointer-events: none;
   overflow: visible;
 }
@@ -110,6 +114,11 @@ html, body, #root {
   stroke-linecap: round;
 }
 
+.connection-path-pending {
+  stroke: rgba(215, 189, 53, 0.78);
+  stroke-dasharray: 4 3;
+}
+
 .canvas-node {
   position: absolute;
   left: 0;
@@ -117,23 +126,25 @@ html, body, #root {
   z-index: 2;
   display: grid;
   gap: 8px;
-  padding: 14px 14px 12px;
+  padding: 8px;
   border: 1px solid rgba(132, 144, 137, 0.18);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.72);
-  box-shadow: 0 18px 40px rgba(31, 46, 39, 0.08);
-  backdrop-filter: blur(18px);
+  border-radius: 10px;
+  background: rgba(38, 40, 39, 0.92);
+  box-shadow: 0 16px 34px rgba(8, 11, 10, 0.18);
+  backdrop-filter: blur(12px);
   color: var(--app-fg);
   cursor: grab;
   transform-origin: 0 0;
   overflow: hidden;
 }
 
-.canvas-node.type-image { background: rgba(241, 247, 246, 0.8); }
-.canvas-node.type-prompt { background: rgba(250, 246, 237, 0.82); }
-.canvas-node.type-file_upload { background: rgba(240, 247, 239, 0.82); }
-.canvas-node.type-slider { background: rgba(246, 241, 250, 0.82); }
-.canvas-node.type-code { background: rgba(241, 243, 244, 0.84); }
+.canvas-node.type-image { background: transparent; }
+.canvas-node.type-prompt,
+.canvas-node.type-file_upload,
+.canvas-node.type-slider,
+.canvas-node.type-code,
+.canvas-node.type-note,
+.canvas-node.type-message { background: rgba(42, 44, 43, 0.94); }
 
 .canvas-node:active {
   cursor: grabbing;
@@ -150,7 +161,7 @@ html, body, #root {
   display: block;
   padding: 0;
   border: 0;
-  border-radius: 18px;
+  border-radius: 0;
   background: transparent;
   box-shadow: none;
   backdrop-filter: none;
@@ -181,16 +192,23 @@ html, body, #root {
 
 .node-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
+  min-height: 22px;
 }
 
-.node-header span {
+.node-title-input {
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: rgba(238, 239, 235, 0.9);
   font-weight: 600;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.25;
   letter-spacing: 0.01em;
+  outline: none;
 }
 
 .node-header small {
@@ -198,8 +216,8 @@ html, body, #root {
   max-width: 96px;
   padding: 3px 7px;
   border-radius: 999px;
-  background: rgba(73, 87, 80, 0.08);
-  color: var(--muted-fg);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(206, 211, 203, 0.7);
   font-size: 9px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -223,6 +241,54 @@ html, body, #root {
   line-height: 1.5;
   white-space: pre-wrap;
   opacity: 0.82;
+}
+
+.node-inline-textarea,
+.node-inline-input {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  background: rgba(16, 18, 17, 0.82);
+  color: rgba(238, 239, 235, 0.92);
+  outline: none;
+  font-size: 11px;
+}
+
+.node-inline-textarea {
+  min-height: 96px;
+  padding: 9px;
+  resize: none;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  line-height: 1.45;
+}
+
+.node-inline-textarea.prompt {
+  min-height: 118px;
+}
+
+.node-inline-textarea.code {
+  min-height: 150px;
+}
+
+.node-inline-input {
+  height: 30px;
+  padding: 0 9px;
+}
+
+.node-inline-slider {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  border-radius: 4px;
+  background: rgba(16, 18, 17, 0.82);
+  color: rgba(238, 239, 235, 0.88);
+  font-size: 11px;
+}
+
+.node-inline-slider input {
+  width: 100%;
 }
 
 .node-field {
@@ -268,12 +334,13 @@ html, body, #root {
 }
 
 .node-image-plain {
+  position: relative;
   display: block;
   width: 100%;
   height: 100%;
   padding: 0;
   border: 0;
-  border-radius: 18px;
+  border-radius: 0;
   overflow: hidden;
   background: transparent;
   cursor: grab;
@@ -284,13 +351,33 @@ html, body, #root {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  user-select: none;
+  pointer-events: auto;
 }
 
 .node-image-plain-empty {
   width: 100%;
   height: 100%;
-  border-radius: 18px;
+  border-radius: 0;
   background: rgba(12, 17, 15, 0.06);
+}
+
+.image-resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  background:
+    linear-gradient(135deg, transparent 0 48%, rgba(255, 255, 255, 0.85) 50% 56%, transparent 58%),
+    linear-gradient(135deg, transparent 0 62%, rgba(255, 255, 255, 0.72) 64% 70%, transparent 72%);
+  cursor: nwse-resize;
+  opacity: 0.78;
+}
+
+.image-resize-handle:hover {
+  opacity: 1;
 }
 
 .node-image-preview {
@@ -322,25 +409,72 @@ html, body, #root {
 
 .port-stack {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  align-items: flex-start;
+  justify-content: space-between;
+  min-height: 20px;
+  gap: 18px;
+  pointer-events: none;
+}
+
+.port-column {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.port-column-inputs {
+  justify-items: start;
+}
+
+.port-column-outputs {
+  justify-items: end;
+  margin-left: auto;
 }
 
 .port {
-  border: 1px solid rgba(88, 109, 139, 0.18);
+  position: relative;
+  border: 0;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.46);
-  color: var(--field-fg);
+  background: transparent;
+  color: rgba(220, 223, 216, 0.8);
   font-size: 9px;
-  padding: 3px 7px;
+  padding: 2px 4px 2px 16px;
   cursor: pointer;
+  text-align: left;
+  pointer-events: auto;
+  max-width: 128px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.port-input { opacity: 0.88; }
+.port::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d7bd35;
+  transform: translateY(-50%);
+}
+
+.port-output {
+  padding: 2px 16px 2px 4px;
+  text-align: right;
+}
+
+.port-output::before {
+  left: auto;
+  right: 0;
+}
+
+.port-input { opacity: 0.9; }
 .port-output { opacity: 1; }
 .port.active {
-  border-color: rgba(67, 97, 83, 0.48);
-  box-shadow: 0 0 0 2px rgba(67, 97, 83, 0.12);
+  color: #fff;
+  text-shadow: 0 0 10px rgba(215, 189, 53, 0.4);
 }
 
 .node-tags {
@@ -382,6 +516,17 @@ html, body, #root {
   padding: 8px 12px;
   font-size: 11px;
   cursor: pointer;
+}
+
+.canvas-history-select {
+  max-width: 180px;
+  border: 1px solid var(--button-border);
+  background: var(--button-bg);
+  color: var(--button-fg);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 11px;
+  outline: none;
 }
 
 .floating-toolbar button:disabled {
