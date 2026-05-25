@@ -52,7 +52,7 @@ namespace ADDGH
                     type = "function",
                     function = new {
                         name = "get_gh_components",
-                        description = "获取当前 Grasshopper 画布的完整 JSON：电池、端口、连线、运行时错误；对脚本/表达式类实例尽可能附带 script_bodies（截断后文本，含属性/字段名）。",
+                        description = "获取当前 Grasshopper 画布的完整 JSON：rhino_units 当前 Rhino 模型单位/公差、电池、端口、连线、运行时错误；对脚本/表达式类实例尽可能附带 script_bodies（截断后文本，含属性/字段名）。",
                         parameters = new {
                             type = "object",
                             properties = new {

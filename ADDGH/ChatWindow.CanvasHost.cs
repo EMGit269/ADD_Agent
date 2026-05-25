@@ -318,6 +318,9 @@ namespace ADDGH
                             PostCanvasMessage("rhino_capture_result", capturePayload);
                         }
                         break;
+                    case "canvas_ai_image_config_request":
+                        PostCanvasMessage("canvas_ai_image_config", BuildCanvasAiImageConfigPayload());
+                        break;
                     case "open_inspector_for_source":
                         SetWorkbenchPane(WorkbenchPane.Inspector);
                         UpdateCodeView();

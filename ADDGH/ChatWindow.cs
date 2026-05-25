@@ -168,6 +168,7 @@ namespace ADDGH
 5. 完成建模或修改后必须检查关键输出是否正确，不能以“没有报错”作为完成标准；目标电池可能仍输出 `Null`、空列表、空树或明显不符合预期的数据。
 6. 检查时优先围绕目标结果相关的关键电池做验证：必要时先触发 recompute，再读取组件状态、预览信息或关键输出；如果仅靠现有信息无法确认，允许在目标输出端临时或直接连接 `Panel` 检查实际输出内容。
 7. 若检查发现输出为 `Null`、空数据、类型不对、数据结构不对或结果与用户目标不一致，不能宣称完成；应继续定位并修正，再次验证后再结束。
+8. Rhino 单位规则：所有几何尺寸、slider 数值、脚本参数默认都表示当前 Rhino 文档 `ModelUnitSystem` 的模型单位；如果任务涉及真实尺寸、距离、厚度、半径、高度、偏移或公差，必须先通过 `get_gh_components` 确认 `rhino_units`，不要假设单位是 mm、cm 或 m。若 `rhino_units.available=false`，应说明无法确认当前 Rhino 单位，并避免给出依赖单位的确定尺寸结论。
 
 【多模态图片任务路由】
 1. 你不是视觉模型，也看不到原图；当用户上传图片时，只能依据视觉预处理模型给出的图片分析、用户原始文字和当前上下文做判断。
@@ -2172,7 +2173,11 @@ namespace ADDGH
                 _txtInput.AllowDrop = true;
                 _txtInput.TextChanged += (s, e) => UpdateInputHeight();
                 _txtInput.PreviewKeyDown += (s, e) => {
-                    if (e.Key == Key.Enter && Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) {
+                    if (e.Key == Key.V && Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && TryConsumeClipboardImageAsAttachment())
+                    {
+                        e.Handled = true;
+                    }
+                    else if (e.Key == Key.Enter && Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) {
                         e.Handled = true;
                         int caret = _txtInput.CaretIndex;
                         _txtInput.SelectedText = Environment.NewLine;
@@ -3750,28 +3755,10 @@ namespace ADDGH
                 if (data == null) continue;
                 try
                 {
-                    foreach (string fmt in data.GetFormats())
+                    if (TryConsumeImageDataObjectAsAttachment(data, "ADDGH_paste_"))
                     {
-                        if (!string.Equals(fmt, "PNG", StringComparison.OrdinalIgnoreCase)
-                            && !string.Equals(fmt, "image/png", StringComparison.OrdinalIgnoreCase))
-                            continue;
-
-                        object payload = data.GetData(fmt, false);
-                        byte[] pngBytes = null;
-                        if (payload is MemoryStream ms)
-                            pngBytes = ms.ToArray();
-                        else if (payload is byte[] barr)
-                            pngBytes = barr;
-
-                        if (pngBytes != null && pngBytes.Length > 16)
-                        {
-                            string tmpPath = Path.Combine(Path.GetTempPath(), "ADDGH_paste_" + DateTime.UtcNow.Ticks + "_" + Guid.NewGuid().ToString("n").Substring(0, 8) + ".png");
-                            File.WriteAllBytes(tmpPath, pngBytes);
-                            e.CancelCommand();
-                            AddPendingAttachments(new[] { tmpPath });
-                            if (_btnClearImage != null) _btnClearImage.Visibility = Visibility.Visible;
-                            return true;
-                        }
+                        e.CancelCommand();
+                        return true;
                     }
                 }
                 catch (Exception ex)
@@ -3805,6 +3792,102 @@ namespace ADDGH
             }
 
             return false;
+        }
+
+        private static bool TryConsumeClipboardImageAsAttachment()
+        {
+            try
+            {
+                IDataObject data = null;
+                try { data = Clipboard.GetDataObject(); }
+                catch (Exception ex) { AddGhLog.Debug("Clipboard.GetDataObject shortcut paste: " + ex.Message); }
+
+                if (data != null && TryConsumeImageDataObjectAsAttachment(data, "paste"))
+                    return true;
+
+                if (Clipboard.ContainsImage())
+                {
+                    BitmapSource img = Clipboard.GetImage();
+                    if (img != null)
+                    {
+                        string tmpPath = SaveBitmapSourceToTempPng(img, "ADDGH_paste_");
+                        AddPendingAttachments(new[] { tmpPath });
+                        if (_btnClearImage != null) _btnClearImage.Visibility = Visibility.Visible;
+                        return true;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("Shortcut paste image: " + ex.Message);
+            }
+
+            return false;
+        }
+
+        private static bool TryConsumeImageDataObjectAsAttachment(IDataObject data, string prefix)
+        {
+            if (data == null) return false;
+            foreach (string fmt in data.GetFormats())
+            {
+                if (!IsClipboardImageFormat(fmt))
+                    continue;
+
+                object payload = data.GetData(fmt, false);
+                string tmpPath = TrySaveClipboardImagePayload(payload, fmt, prefix);
+                if (!string.IsNullOrWhiteSpace(tmpPath))
+                {
+                    AddPendingAttachments(new[] { tmpPath });
+                    if (_btnClearImage != null) _btnClearImage.Visibility = Visibility.Visible;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static bool IsClipboardImageFormat(string fmt)
+        {
+            return string.Equals(fmt, "PNG", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(fmt, "image/png", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(fmt, "DeviceIndependentBitmap", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(fmt, DataFormats.Dib, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(fmt, DataFormats.Bitmap, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string TrySaveClipboardImagePayload(object payload, string fmt, string prefix)
+        {
+            bool rawPng = string.Equals(fmt, "PNG", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(fmt, "image/png", StringComparison.OrdinalIgnoreCase);
+
+            if (rawPng && payload is MemoryStream ms)
+            {
+                byte[] bytes = ms.ToArray();
+                if (bytes.Length > 16)
+                {
+                    string tmpPath = Path.Combine(Path.GetTempPath(), prefix + DateTime.UtcNow.Ticks + "_" + Guid.NewGuid().ToString("n").Substring(0, 8) + ".png");
+                    File.WriteAllBytes(tmpPath, bytes);
+                    return tmpPath;
+                }
+            }
+            if (rawPng && payload is byte[] barr && barr.Length > 16)
+            {
+                string tmpPath = Path.Combine(Path.GetTempPath(), prefix + DateTime.UtcNow.Ticks + "_" + Guid.NewGuid().ToString("n").Substring(0, 8) + ".png");
+                File.WriteAllBytes(tmpPath, barr);
+                return tmpPath;
+            }
+            if (payload is BitmapSource source)
+                return SaveBitmapSourceToTempPng(source, prefix);
+            return null;
+        }
+
+        private static string SaveBitmapSourceToTempPng(BitmapSource source, string prefix)
+        {
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(source));
+            string tmpPath = Path.Combine(Path.GetTempPath(), prefix + DateTime.UtcNow.Ticks + "_" + Guid.NewGuid().ToString("n").Substring(0, 8) + ".png");
+            using (var fs = new FileStream(tmpPath, FileMode.CreateNew))
+                encoder.Save(fs);
+            return tmpPath;
         }
 
         private static bool CanConsumeDragData(IDataObject data)
@@ -3845,32 +3928,13 @@ namespace ADDGH
             {
                 foreach (string fmt in data.GetFormats())
                 {
-                    if (!string.Equals(fmt, "PNG", StringComparison.OrdinalIgnoreCase)
-                        && !string.Equals(fmt, "image/png", StringComparison.OrdinalIgnoreCase)
-                        && !string.Equals(fmt, DataFormats.Bitmap, StringComparison.OrdinalIgnoreCase))
+                    if (!IsClipboardImageFormat(fmt))
                         continue;
 
                     object payload = data.GetData(fmt, false);
-                    byte[] pngBytes = null;
-                    if (payload is MemoryStream ms)
-                        pngBytes = ms.ToArray();
-                    else if (payload is byte[] barr)
-                        pngBytes = barr;
-                    else if (payload is BitmapSource source)
+                    string tmpPath = TrySaveClipboardImagePayload(payload, fmt, "ADDGH_drop_");
+                    if (!string.IsNullOrWhiteSpace(tmpPath))
                     {
-                        var encoder = new PngBitmapEncoder();
-                        encoder.Frames.Add(BitmapFrame.Create(source));
-                        using (var stream = new MemoryStream())
-                        {
-                            encoder.Save(stream);
-                            pngBytes = stream.ToArray();
-                        }
-                    }
-
-                    if (pngBytes != null && pngBytes.Length > 16)
-                    {
-                        string tmpPath = Path.Combine(Path.GetTempPath(), "ADDGH_drop_" + DateTime.UtcNow.Ticks + "_" + Guid.NewGuid().ToString("n").Substring(0, 8) + ".png");
-                        File.WriteAllBytes(tmpPath, pngBytes);
                         AddPendingAttachments(new[] { tmpPath });
                         if (_btnClearImage != null) _btnClearImage.Visibility = Visibility.Visible;
                         return true;

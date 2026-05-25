@@ -668,7 +668,7 @@ namespace ADDGH
                     string modelUnit = units["model_unit_system"]?.ToString();
                     string absTol = units["model_absolute_tolerance"]?.ToString();
                     if (!string.IsNullOrWhiteSpace(modelUnit) || !string.IsNullOrWhiteSpace(absTol))
-                        sb.AppendLine($"单位={modelUnit ?? "未知"} 公差={absTol ?? "未知"}");
+                        sb.AppendLine($"Rhino模型单位={modelUnit ?? "未知"}；以下所有未标注尺寸均按该单位理解；模型绝对公差={absTol ?? "未知"}");
                 }
 
                 string canvasIssueText = _txtCanvasIssues?.Text?.Trim();

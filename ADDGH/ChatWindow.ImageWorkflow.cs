@@ -60,6 +60,22 @@ namespace ADDGH
             return SerializeAiImageExecutionResult(result);
         }
 
+        private static JObject BuildCanvasAiImageConfigPayload()
+        {
+            var providerSettings = GetImageProviderRuntimeSettings();
+            return new JObject
+            {
+                ["success"] = !string.IsNullOrWhiteSpace(providerSettings?.ApiKey),
+                ["providerId"] = GetCurrentImageProviderId(),
+                ["provider"] = providerSettings?.Config?.DisplayName ?? "",
+                ["baseUrl"] = providerSettings?.BaseUrl ?? "",
+                ["model"] = providerSettings?.ModelName ?? "",
+                ["apiKey"] = providerSettings?.ApiKey ?? "",
+                ["proxyUrl"] = providerSettings?.ProxyUrl ?? "",
+                ["error"] = string.IsNullOrWhiteSpace(providerSettings?.ApiKey) ? "Image API key is empty." : ""
+            };
+        }
+
         private static async Task<AiImageExecutionResult> RunAiImageGenerationAsync(string prompt, string intent, bool useUploadedImages, string aspectRatio, System.Threading.CancellationToken ct)
         {
             string normalizedIntent = string.Equals(intent, "edit", StringComparison.OrdinalIgnoreCase) ? "edit" : "generate";

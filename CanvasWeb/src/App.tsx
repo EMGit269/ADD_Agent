@@ -6,7 +6,9 @@ import {
   NodeResizer,
   Position,
   ReactFlow,
+  getBezierPath,
   type Connection,
+  type ConnectionLineComponentProps,
   type Edge,
   type Node,
   type NodeProps,
@@ -70,6 +72,27 @@ type CanvasConnection = {
   toPortId: string
 }
 
+type AiImageConfig = {
+  success?: boolean
+  providerId?: string
+  provider?: string
+  baseUrl?: string
+  model?: string
+  apiKey?: string
+  proxyUrl?: string
+  error?: string
+}
+
+type PendingAiImageRun = {
+  sourceRef: string
+  prompt: string
+  intent: 'generate' | 'edit'
+  aspectRatio?: string
+  size?: string
+  count?: number
+  image: any
+}
+
 type CanvasHistoryItem = {
   canvasId: string
   title: string
@@ -90,8 +113,13 @@ type CanvasNode = {
 type FlowNodeData = Record<string, unknown> & {
   node: CanvasNode
   updateNodeMeta: (sourceRef: string, patch: Record<string, unknown>) => void
-  onNodeResize: (sourceRef: string, width: number, height: number) => void
+  onNodeResize: (sourceRef: string, width: number, height: number, shouldSave?: boolean) => void
+  onImageLoaded: (sourceRef: string, naturalWidth: number, naturalHeight: number) => void
   onPreviewImage: (src: string, title: string) => void
+  onRunAiImage: (sourceRef: string) => void
+  onDownloadNodeImage: (sourceRef: string) => void
+  onOpenNodeSettings: (sourceRef: string) => void
+  keepImageAspectRatio: boolean
 }
 
 type LightweightSnapshot = {
@@ -237,6 +265,8 @@ function CanvasWorkbench() {
   const canvasIdRef = useRef('canvas-default')
   const suppressNextContextMenuRef = useRef(false)
   const shiftKeyRef = useRef(false)
+  const aiImageConfigRef = useRef<AiImageConfig | null>(null)
+  const pendingAiImageRunRef = useRef<PendingAiImageRun | null>(null)
   const isDarkMode = themeMode === 'dark'
 
   useEffect(() => {
@@ -302,6 +332,14 @@ function CanvasWorkbench() {
       const target = event.target as HTMLElement | null
       const isTyping = Boolean(target?.closest('input,textarea,[contenteditable="true"]'))
 
+      if (isTyping) return
+
+      if (event.key === 'Escape') {
+        setContextMenu(null)
+        setPendingConnection(null)
+        return
+      }
+
       if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'z') {
         event.preventDefault()
         const last = historyRef.current.past[historyRef.current.past.length - 1]
@@ -326,8 +364,6 @@ function CanvasWorkbench() {
         return
       }
 
-      if (isTyping) return
-
       if (event.key === 'Delete' && selectedSourceRefsRef.current.length) {
         event.preventDefault()
         deleteNodesBySourceRefs(selectedSourceRefsRef.current)
@@ -339,9 +375,17 @@ function CanvasWorkbench() {
 
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('keyup', handleKeyUp)
+    const preventImageFileDrop = (event: DragEvent) => {
+      if (!event.dataTransfer || !hasDraggedImage(event.dataTransfer)) return
+      event.preventDefault()
+    }
+    window.addEventListener('dragover', preventImageFileDrop)
+    window.addEventListener('drop', preventImageFileDrop)
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
+      window.removeEventListener('dragover', preventImageFileDrop)
+      window.removeEventListener('drop', preventImageFileDrop)
     }
   }, [])
 
@@ -417,6 +461,17 @@ function CanvasWorkbench() {
           setCaptureStatus('Rhino view captured')
         }
       }
+
+      if (envelope.type === 'canvas_ai_image_result') {
+        applyAiImageResult(envelope.payload ?? {})
+      }
+
+      if (envelope.type === 'canvas_ai_image_config') {
+        aiImageConfigRef.current = envelope.payload ?? null
+        const pending = pendingAiImageRunRef.current
+        pendingAiImageRunRef.current = null
+        if (pending) void runAiImageInBrowser(pending, aiImageConfigRef.current)
+      }
     }
 
     const handleMessage = (event: MessageEvent) => applyEnvelope(event.data as HostEnvelope)
@@ -469,25 +524,37 @@ function CanvasWorkbench() {
         node,
         updateNodeMeta,
         onNodeResize,
+        onImageLoaded,
         onPreviewImage: (src: string, title: string) => {
           setImagePreviewSrc(src)
           setImagePreviewTitle(title)
         },
+        onRunAiImage,
+        onDownloadNodeImage,
+        onOpenNodeSettings,
+        keepImageAspectRatio: shiftKeyRef.current,
       },
     })),
     [nodes, selectedSourceRefs],
   )
   const flowEdges = useMemo<Edge[]>(() =>
-    connections.map((connection) => ({
-      id: connection.id,
-      source: connection.fromNodeId,
-      sourceHandle: connection.fromPortId,
-      target: connection.toNodeId,
-      targetHandle: connection.toPortId,
-      type: 'default',
-      className: 'connection-path',
-    })),
-    [connections],
+    connections.map((connection) => {
+      const sourceNode = nodes.find((node) => node.id === connection.fromNodeId)
+      const targetNode = nodes.find((node) => node.id === connection.toNodeId)
+      const portType = sourceNode ? getPortDataType(sourceNode, connection.fromPortId, 'output') : 'any'
+      const isRunningInput = Boolean(targetNode?.meta.isRunning)
+      return {
+        id: connection.id,
+        source: connection.fromNodeId,
+        sourceHandle: connection.fromPortId,
+        target: connection.toNodeId,
+        targetHandle: connection.toPortId,
+        type: 'default',
+        className: `connection-path${isRunningInput ? ' connection-path-running' : ''}`,
+        style: { '--connection-color': portColor(portType) } as React.CSSProperties,
+      }
+    }),
+    [connections, nodes],
   )
 
   function createSnapshotState(
@@ -593,17 +660,66 @@ function CanvasWorkbench() {
     postHostMessage('card_meta_patch', { canvasId: canvasIdRef.current, sourceRef, ...cardMetaRef.current[sourceRef] })
   }
 
-  function onNodeResize(sourceRef: string, width: number, height: number) {
+  function applyNodeMetaPatch(sourceRef: string, patch: Record<string, unknown>) {
+    cardMetaRef.current[sourceRef] = { ...(cardMetaRef.current[sourceRef] ?? {}), ...patch }
+    updateNodes((current) =>
+      current.map((node) => {
+        if (node.sourceRef !== sourceRef) return node
+        const nextMeta = { ...node.meta, ...patch }
+        nextMeta.ports = getNodePorts(node.nodeType, nextMeta)
+        const { w, h } = resolveNodeSize(nextMeta, node.nodeType, node)
+        return {
+          ...node,
+          w,
+          h,
+          meta: {
+            ...nextMeta,
+            w,
+            h,
+          },
+        }
+      }),
+    )
+    postHostMessage('card_meta_patch', { canvasId: canvasIdRef.current, sourceRef, ...cardMetaRef.current[sourceRef] })
+  }
+
+  function onNodeResize(sourceRef: string, width: number, height: number, shouldSave = true) {
     updateNodes((current) =>
       current.map((node) => {
         if (node.sourceRef !== sourceRef) return node
         const nextWidth = Math.max(120, width)
         const nextHeight = Math.max(80, height)
-        const nextMeta = { ...node.meta, w: nextWidth, h: nextHeight }
+        const nextMeta = { ...node.meta, w: nextWidth, h: nextHeight, userResized: true }
         return {
           ...node,
           w: nextWidth,
           h: nextHeight,
+          meta: nextMeta,
+        }
+      }),
+      shouldSave,
+    )
+  }
+
+  function onImageLoaded(sourceRef: string, naturalWidth: number, naturalHeight: number) {
+    if (naturalWidth <= 0 || naturalHeight <= 0) return
+    updateNodes((current) =>
+      current.map((node) => {
+        if (node.sourceRef !== sourceRef || node.nodeType !== 'image') return node
+        if (node.meta.userResized || node.meta.naturalWidth === naturalWidth && node.meta.naturalHeight === naturalHeight) return node
+        const size = fitImageInitialSize(naturalWidth, naturalHeight)
+        const nextMeta = {
+          ...node.meta,
+          naturalWidth,
+          naturalHeight,
+          w: size.w,
+          h: size.h,
+        }
+        cardMetaRef.current[sourceRef] = { ...(cardMetaRef.current[sourceRef] ?? {}), ...nextMeta }
+        return {
+          ...node,
+          w: size.w,
+          h: size.h,
           meta: nextMeta,
         }
       }),
@@ -688,6 +804,29 @@ function CanvasWorkbench() {
     const sourceRef = `${nodeType}:${Date.now()}`
     const meta = buildDefaultNodeMeta(nodeType, sourceRef)
     const node = createNode(meta, nodesRef.current.length, x, y, nodeType)
+    cardMetaRef.current[sourceRef] = meta
+    commitMutation((snapshot) => ({
+      ...snapshot,
+      nodes: [...snapshot.nodes, node],
+      selectedSourceRef: sourceRef,
+      selectedSourceRefs: [sourceRef],
+    }))
+    setContextMenu(null)
+  }
+
+  function createImageNodeAt(x: number, y: number, image: { title?: string; path?: string; dataUrl: string; mimeType?: string }) {
+    const sourceRef = `image:drop:${Date.now()}`
+    const meta = {
+      ...buildDefaultNodeMeta('image', sourceRef),
+      title: image.title || 'Image',
+      summary: 'Dropped image',
+      body: image.path || image.title || '',
+      imagePath: image.path || '',
+      imageDataUrl: image.dataUrl,
+      mimeType: image.mimeType || getMimeTypeFromDataUrl(image.dataUrl) || 'image/png',
+      userEditedTitle: true,
+    }
+    const node = createNode(meta, nodesRef.current.length, x, y, 'image')
     cardMetaRef.current[sourceRef] = meta
     commitMutation((snapshot) => ({
       ...snapshot,
@@ -843,6 +982,13 @@ function CanvasWorkbench() {
 
   function connectNodes(from: PendingConnection, to: PendingConnection) {
     if (from.nodeId === to.nodeId && from.portId === to.portId) return
+    const sourceNode = nodesRef.current.find((node) => node.id === from.nodeId)
+    const targetNode = nodesRef.current.find((node) => node.id === to.nodeId)
+    if (!sourceNode || !targetNode) return
+    const sourcePort = getNodePort(sourceNode, from.portId)
+    const targetPort = getNodePort(targetNode, to.portId)
+    if (!sourcePort || !targetPort || sourcePort.direction !== 'output' || targetPort.direction !== 'input') return
+    if (!arePortTypesCompatible(sourcePort, targetPort)) return
     updateConnections((current) => [
       ...current,
       {
@@ -896,6 +1042,95 @@ function CanvasWorkbench() {
       })
     })
     setPendingConnection(null)
+  }
+
+  function onRunAiImage(sourceRef: string) {
+    const node = nodesRef.current.find((item) => item.sourceRef === sourceRef)
+    if (!node || node.nodeType !== 'gen_img') return
+    const prompt = String(getNodeInputValue(node, 'txt', nodesRef.current, connectionsRef.current) ?? node.meta.prompt ?? '').trim()
+    const imageInput = getNodeInputImage(node, 'img_in', nodesRef.current, connectionsRef.current)
+    if (!prompt) {
+      applyNodeMetaPatch(sourceRef, { runStatus: 'Prompt required', isRunning: false })
+      return
+    }
+    applyNodeMetaPatch(sourceRef, { runStatus: 'Generating...', isRunning: true, error: '' })
+    const run: PendingAiImageRun = {
+      sourceRef,
+      prompt,
+      intent: imageInput ? 'edit' : 'generate',
+      aspectRatio: node.meta.aspectRatio ?? '',
+      size: normalizeAiImageSize(node.meta.imageSize ?? node.meta.size ?? '1024x1024'),
+      count: clamp(Math.round(Number(node.meta.imageCount ?? node.meta.count ?? 1)), 1, 4),
+      image: imageInput,
+    }
+    if (aiImageConfigRef.current?.apiKey) {
+      void runAiImageInBrowser(run, aiImageConfigRef.current)
+    } else {
+      pendingAiImageRunRef.current = run
+      postHostMessage('canvas_ai_image_config_request', { canvasId: canvasIdRef.current })
+    }
+  }
+
+  async function runAiImageInBrowser(run: PendingAiImageRun, config: AiImageConfig | null) {
+    try {
+      if (!config?.apiKey) throw new Error(config?.error || 'Image API key is empty.')
+      const result = await createCanvasAiImage(run, config)
+      applyAiImageResult({
+        sourceRef: run.sourceRef,
+        success: true,
+        provider: config.provider,
+        model: config.model,
+        prompt: run.prompt,
+        size: run.size,
+        images: result.images,
+        generatedAtUtc: new Date().toISOString(),
+      })
+    } catch (error) {
+      applyAiImageResult({
+        sourceRef: run.sourceRef,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  function applyAiImageResult(payload: any) {
+    const sourceRef = String(payload?.sourceRef ?? '')
+    if (!sourceRef) return
+    if (payload?.error || payload?.success === false) {
+      applyNodeMetaPatch(sourceRef, {
+        isRunning: false,
+        runStatus: 'Failed',
+        error: String(payload?.error ?? 'Image generation failed'),
+      })
+      return
+    }
+
+    const image = Array.isArray(payload?.images) ? payload.images[0] : null
+    if (!image) {
+      applyNodeMetaPatch(sourceRef, { isRunning: false, runStatus: 'No image returned' })
+      return
+    }
+    const requestedSize = parseAiImageSize(payload?.size ?? image.size ?? '')
+    const naturalSize = getImageSizeFromPayload(image) ?? requestedSize
+    const fittedSize = naturalSize ? fitImageInitialSize(naturalSize.w, naturalSize.h) : null
+
+    applyNodeMetaPatch(sourceRef, {
+      isRunning: false,
+      runStatus: 'Generated',
+      imagePath: image.path ?? '',
+      imageDataUrl: normalizeImageSourceValue(image.dataUrl ?? image.imageDataUrl ?? image.b64_json ?? image.base64 ?? image.url ?? image.path ?? ''),
+      mimeType: image.mimeType ?? 'image/png',
+      images: Array.isArray(payload?.images) ? payload.images : [image],
+      naturalWidth: naturalSize?.w,
+      naturalHeight: naturalSize?.h,
+      w: fittedSize?.w,
+      h: fittedSize?.h,
+      provider: payload.provider ?? image.provider ?? '',
+      model: payload.model ?? image.model ?? '',
+      generatedAtUtc: payload.generatedAtUtc ?? new Date().toISOString(),
+      error: '',
+    })
   }
 
   function onPointerMove(event: React.PointerEvent<HTMLDivElement>) {
@@ -1123,6 +1358,22 @@ function CanvasWorkbench() {
     postHostMessage('canvas_open', { canvasId: nextCanvasId })
   }
 
+  function onOpenNodeSettings(sourceRef: string) {
+    setDetailSourceRef(sourceRef)
+  }
+
+  function onDownloadNodeImage(sourceRef: string) {
+    const node = nodesRef.current.find((item) => item.sourceRef === sourceRef)
+    const imageSrc = resolveCanvasImageSource(node?.meta.imageDataUrl ?? node?.meta.imagePath)
+    if (!imageSrc) return
+    const link = document.createElement('a')
+    link.href = imageSrc
+    link.download = `${slugify(String(node?.meta.title ?? 'image')) || 'image'}.${mimeTypeToExtension(String(node?.meta.mimeType ?? 'image/png'))}`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+  }
+
   function onCaptureRhinoView() {
     setCaptureStatus('Capturing Rhino view...')
     postHostMessage('capture_rhino_view', { framing: 'current_view', width: 1600, height: 900 })
@@ -1154,7 +1405,7 @@ function CanvasWorkbench() {
     }))
   }
 
-  function onCanvasContextMenu(event: React.MouseEvent<HTMLDivElement>) {
+  function onCanvasContextMenu(event: MouseEvent | React.MouseEvent<Element, MouseEvent>) {
     event.preventDefault()
     const target = event.target as HTMLElement
     const nodeHost = target.closest('.canvas-node') as HTMLElement | null
@@ -1172,7 +1423,7 @@ function CanvasWorkbench() {
       return
     }
 
-    const rect = event.currentTarget.getBoundingClientRect()
+    const rect = surfaceRef.current?.getBoundingClientRect() ?? new DOMRect()
     const point = screenToWorld(event.clientX - rect.left, event.clientY - rect.top, viewportRef.current)
     setContextMenu({
       x: event.clientX,
@@ -1199,19 +1450,60 @@ function CanvasWorkbench() {
     })
   }
 
+  function closeContextMenu() {
+    setContextMenu(null)
+  }
+
+  function runContextMenuAction(action: () => void) {
+    action()
+    setContextMenu(null)
+  }
+
+  function onCanvasDragOver(event: React.DragEvent<HTMLDivElement>) {
+    if (!hasDraggedImage(event.dataTransfer)) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+  }
+
+  async function onCanvasDrop(event: React.DragEvent<HTMLDivElement>) {
+    if (!hasDraggedImage(event.dataTransfer)) return
+    event.preventDefault()
+    event.stopPropagation()
+    const file = [...event.dataTransfer.files].find((item) => item.type.startsWith('image/'))
+    if (!file) return
+    try {
+      const dataUrl = await readFileAsDataUrl(file)
+      const rect = surfaceRef.current?.getBoundingClientRect() ?? new DOMRect()
+      const point = screenToWorld(event.clientX - rect.left, event.clientY - rect.top, viewportRef.current)
+      createImageNodeAt(point.x - 180, point.y - 130, {
+        title: file.name || 'Image',
+        path: file.name || '',
+        dataUrl,
+        mimeType: file.type || getMimeTypeFromDataUrl(dataUrl) || 'image/png',
+      })
+    } catch (error) {
+      postHostMessage('canvas_error', {
+        kind: 'drop_image',
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
   return (
     <div className={`app-shell ${isDarkMode ? 'theme-dark' : 'theme-light'}`}>
-      <div ref={surfaceRef} className="light-canvas">
+      <div ref={surfaceRef} className="light-canvas" onDragOver={onCanvasDragOver} onDrop={onCanvasDrop}>
         <ReactFlow
           className="flow-canvas"
           nodes={flowNodes}
           edges={flowEdges}
           nodeTypes={canvasNodeTypes}
+          connectionLineComponent={ColoredConnectionLine}
           onNodesChange={onNodesChange}
           onConnect={onFlowConnect}
           onEdgeClick={onEdgeClick}
           onNodeContextMenu={onFlowNodeContextMenu}
-          onPaneContextMenu={onCanvasContextMenu as unknown as React.MouseEventHandler}
+          onPaneContextMenu={onCanvasContextMenu}
+          onPaneClick={closeContextMenu}
           onMoveEnd={(_, viewportState) => updateViewport({ x: viewportState.x, y: viewportState.y, z: viewportState.zoom })}
           onViewportChange={onViewportChange}
           viewport={{ x: viewport.x, y: viewport.y, zoom: viewport.z }}
@@ -1224,7 +1516,7 @@ function CanvasWorkbench() {
           nodeOrigin={[0, 0]}
           proOptions={{ hideAttribution: true }}
         >
-          <Background gap={22} size={1} color={isDarkMode ? 'rgba(146,158,151,0.18)' : 'rgba(111,124,116,0.16)'} />
+          <Background gap={22} size={1.35} color={isDarkMode ? 'rgba(176,190,181,0.34)' : 'rgba(82,96,88,0.28)'} />
           <Controls showZoom showFitView={false} showInteractive={false} />
         </ReactFlow>
       </div>
@@ -1255,8 +1547,8 @@ function CanvasWorkbench() {
       </div>
 
       {detailMeta?.sourceRef ? (
-        <div className="detail-modal-backdrop" onClick={() => setDetailSourceRef(null)}>
-          <aside className="detail-modal" onClick={(event) => event.stopPropagation()}>
+        <div className="detail-panel-anchor">
+          <aside className="detail-modal">
             <div className="detail-header">
               <h3>{detailNode?.meta.title ?? 'Node'}</h3>
               <button type="button" onClick={() => setDetailSourceRef(null)}>Close</button>
@@ -1302,22 +1594,22 @@ function CanvasWorkbench() {
       ) : null}
 
       {contextMenu ? (
-        <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
+        <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>
           {contextMenu.mode === 'canvas' ? (
             <>
-              <button onClick={() => createTypedNodeAt('prompt', contextMenu.worldX, contextMenu.worldY)}>Prompt Node</button>
-              <button onClick={() => createTypedNodeAt('file_upload', contextMenu.worldX, contextMenu.worldY)}>File Node</button>
-              <button onClick={() => createTypedNodeAt('code', contextMenu.worldX, contextMenu.worldY)}>Code Node</button>
-              <button onClick={() => createTypedNodeAt('panel', contextMenu.worldX, contextMenu.worldY)}>Panel</button>
-              <button onClick={() => createTypedNodeAt('img', contextMenu.worldX, contextMenu.worldY)}>Image</button>
-              <button onClick={() => createTypedNodeAt('gen_img', contextMenu.worldX, contextMenu.worldY)}>AI Image</button>
-              <button onClick={() => createTypedNodeAt('slider', contextMenu.worldX, contextMenu.worldY)}>Slider Node</button>
-              <button onClick={() => createTypedNodeAt('c_sharp', contextMenu.worldX, contextMenu.worldY)}>C# Node</button>
-              <button onClick={() => createTypedNodeAt('note', contextMenu.worldX, contextMenu.worldY)}>New Note</button>
+              <button onClick={() => runContextMenuAction(() => createTypedNodeAt('prompt', contextMenu.worldX, contextMenu.worldY))}>Prompt Node</button>
+              <button onClick={() => runContextMenuAction(() => createTypedNodeAt('file_upload', contextMenu.worldX, contextMenu.worldY))}>File Node</button>
+              <button onClick={() => runContextMenuAction(() => createTypedNodeAt('code', contextMenu.worldX, contextMenu.worldY))}>Code Node</button>
+              <button onClick={() => runContextMenuAction(() => createTypedNodeAt('panel', contextMenu.worldX, contextMenu.worldY))}>Panel</button>
+              <button onClick={() => runContextMenuAction(() => createTypedNodeAt('image', contextMenu.worldX, contextMenu.worldY))}>Image</button>
+              <button onClick={() => runContextMenuAction(() => createTypedNodeAt('gen_img', contextMenu.worldX, contextMenu.worldY))}>AI Image</button>
+              <button onClick={() => runContextMenuAction(() => createTypedNodeAt('slider', contextMenu.worldX, contextMenu.worldY))}>Slider Node</button>
+              <button onClick={() => runContextMenuAction(() => createTypedNodeAt('c_sharp', contextMenu.worldX, contextMenu.worldY))}>C# Node</button>
+              <button onClick={() => runContextMenuAction(() => createTypedNodeAt('note', contextMenu.worldX, contextMenu.worldY))}>New Note</button>
             </>
           ) : (
             <>
-              <button onClick={() => contextMenu.sourceRef ? deleteNodeBySourceRef(contextMenu.sourceRef) : null}>Delete</button>
+              <button onClick={() => runContextMenuAction(() => contextMenu.sourceRef ? deleteNodeBySourceRef(contextMenu.sourceRef) : undefined)}>Delete</button>
             </>
           )}
         </div>
@@ -1350,55 +1642,102 @@ const canvasNodeTypes = {
   canvasNode: CanvasFlowNode,
 }
 
+function ColoredConnectionLine({
+  fromNode,
+  fromHandle,
+  fromX,
+  fromY,
+  toX,
+  toY,
+  fromPosition,
+  toPosition,
+}: ConnectionLineComponentProps<Node<FlowNodeData>>) {
+  const node = fromNode?.internals.userNode?.data?.node
+  const dataType = node && fromHandle?.id ? getPortDataType(node, fromHandle.id, 'output') : 'any'
+  const [path] = getBezierPath({ sourceX: fromX, sourceY: fromY, sourcePosition: fromPosition, targetX: toX, targetY: toY, targetPosition: toPosition })
+  return (
+    <path
+      d={path}
+      className="connection-path connection-path-pending"
+      style={{ '--connection-color': portColor(dataType) } as React.CSSProperties}
+    />
+  )
+}
+
 function CanvasFlowNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
   const node = data.node
   const isImage = node.nodeType === 'image'
-  const imageSrc = isImage ? resolveCanvasImageSource(node.meta.imageDataUrl ?? node.meta.imagePath) : ''
+  const isAiImage = node.nodeType === 'gen_img'
+  const imageSrc = isImage || node.nodeType === 'gen_img' ? resolveCanvasImageSource(node.meta.imageDataUrl ?? node.meta.imagePath) : ''
 
   return (
     <article
-      className={`canvas-node flow-node node-${nodeKind(node.meta)} type-${node.nodeType} ${selected ? 'selected' : ''} ${isImage ? 'is-image-node' : ''}`}
-      style={{ width: node.w, minHeight: node.h }}
+      className={`canvas-node flow-node node-${nodeKind(node.meta)} type-${node.nodeType} ${selected ? 'selected' : ''} ${isImage || isAiImage ? 'is-image-node' : ''}`}
+      style={{ width: node.w, height: node.h }}
       data-source-ref={node.sourceRef}
     >
-      {isImage ? (
+      <NodeResizer
+        isVisible={Boolean(selected)}
+        minWidth={120}
+        minHeight={80}
+        maxWidth={1200}
+        maxHeight={900}
+        keepAspectRatio={false}
+        handleClassName="node-edge-resizer-corner"
+        lineClassName="node-edge-resizer-line"
+        onResize={(_, params) => data.onNodeResize(node.sourceRef, params.width, params.height, false)}
+        onResizeEnd={(_, params) => data.onNodeResize(node.sourceRef, params.width, params.height, true)}
+      />
+      {isImage || isAiImage ? (
         <>
-          <NodeResizer
-            isVisible={Boolean(selected)}
-            minWidth={120}
-            minHeight={80}
-            onResizeEnd={(_, params) => data.onNodeResize(node.sourceRef, params.width, params.height)}
-          />
-          <div className="node-image-plain nodrag">
+          <header className="node-header">
+            <strong className="node-title-text">{node.meta.title ?? (isAiImage ? 'AI Image' : 'Image')}</strong>
+            <small>{node.nodeType}</small>
+          </header>
+          <div className={`node-image-plain ${isAiImage ? 'ai-image-plain' : ''}`}>
             {imageSrc ? (
               <img
                 src={imageSrc}
-                alt={String(node.meta.title ?? 'Image')}
+                alt={String(node.meta.title ?? (isAiImage ? 'AI Image' : 'Image'))}
                 loading="lazy"
                 decoding="async"
                 draggable={false}
+                onLoad={(event) => {
+                  if (!isAiImage) data.onImageLoaded(node.sourceRef, event.currentTarget.naturalWidth, event.currentTarget.naturalHeight)
+                }}
                 onDoubleClick={(event) => {
                   event.stopPropagation()
-                  data.onPreviewImage(imageSrc, String(node.meta.title ?? 'Image'))
+                  data.onPreviewImage(imageSrc, String(node.meta.title ?? (isAiImage ? 'AI Image' : 'Image')))
                 }}
               />
             ) : (
-              <div className="node-image-empty node-image-plain-empty">No image</div>
+              <div className="node-image-empty node-image-plain-empty">{isAiImage ? null : 'No image'}</div>
             )}
           </div>
+          {renderFlowPorts(node)}
+          {selected ? (
+            <NodeActionBar
+              node={node}
+              onSettings={data.onOpenNodeSettings}
+              onDownload={data.onDownloadNodeImage}
+              onGenerate={data.onRunAiImage}
+            />
+          ) : null}
         </>
       ) : (
         <>
           <header className="node-header">
-            <input
-              className="node-title-input nodrag"
-              value={node.meta.title ?? 'Untitled'}
-              onChange={(event) => data.updateNodeMeta(node.sourceRef, { title: event.target.value, userEditedTitle: true })}
-            />
+            <strong className="node-title-text">{node.meta.title ?? 'Untitled'}</strong>
             <small>{node.nodeType}</small>
           </header>
+          <div className="node-panel-surface">
           {renderFlowPorts(node)}
-          {!node.meta.collapsed ? renderInlineNodeEditor(node, data.updateNodeMeta) : null}
+          {!node.meta.collapsed ? renderInlineNodeEditor(node, data.updateNodeMeta, data.onRunAiImage, data.onPreviewImage) : null}
+          {node.nodeType === 'gen_img' && imageSrc ? (
+            <button type="button" className="node-generated-image nodrag" onClick={() => data.onPreviewImage(imageSrc, String(node.meta.title ?? 'AI Image'))}>
+              <img src={imageSrc} alt={String(node.meta.title ?? 'AI Image')} loading="lazy" decoding="async" draggable={false} />
+            </button>
+          ) : null}
           {Array.isArray(node.meta.tags) && node.meta.tags.length ? (
             <div className="node-tags">
               {node.meta.tags.map((tag: string) => (
@@ -1406,9 +1745,47 @@ function CanvasFlowNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
               ))}
             </div>
           ) : null}
+          </div>
+          {selected ? (
+            <NodeActionBar
+              node={node}
+              onSettings={data.onOpenNodeSettings}
+              onDownload={data.onDownloadNodeImage}
+              onGenerate={data.onRunAiImage}
+            />
+          ) : null}
         </>
       )}
     </article>
+  )
+}
+
+function NodeActionBar({
+  node,
+  onSettings,
+  onDownload,
+  onGenerate,
+}: {
+  node: CanvasNode
+  onSettings: (sourceRef: string) => void
+  onDownload: (sourceRef: string) => void
+  onGenerate: (sourceRef: string) => void
+}) {
+  const canDownload = Boolean(resolveCanvasImageSource(node.meta.imageDataUrl ?? node.meta.imagePath))
+  const canGenerate = node.nodeType === 'gen_img'
+  return (
+    <div className="node-action-bar nodrag">
+      <button type="button" className="node-action-icon" title="Settings" onClick={() => onSettings(node.sourceRef)}>⚙</button>
+      <button type="button" className="node-action-icon" title="Download" disabled={!canDownload} onClick={() => onDownload(node.sourceRef)}>↓</button>
+      <button
+        type="button"
+        className="node-action-generate"
+        disabled={!canGenerate || Boolean(node.meta.isRunning)}
+        onClick={() => canGenerate ? onGenerate(node.sourceRef) : undefined}
+      >
+        {node.meta.isRunning ? 'Generating' : 'Generate'}
+      </button>
+    </div>
   )
 }
 
@@ -1460,16 +1837,20 @@ function reconcileTypedNodes(existingNodes: CanvasNode[]) {
   return dedupeNodes(existingNodes.map((node) => {
     if (node.nodeType === 'message' || node.nodeType === 'note') return node
     const meta = { ...node.meta }
-    if (node.nodeType === 'image' && !meta.imageDataUrl && meta.imagePath) {
+    const nodeType = node.nodeType === 'img' ? 'image' : node.nodeType
+    if (nodeType === 'image' && !meta.imageDataUrl && meta.imagePath) {
       meta.imageDataUrl = meta.imagePath
     }
-    const { w, h } = resolveNodeSize(meta, node.nodeType, node)
+    const { w, h } = resolveNodeSize(meta, nodeType, node)
     return {
       ...node,
+      nodeType,
       w,
       h,
       meta: {
         ...meta,
+        nodeType,
+        ports: getNodePorts(nodeType, meta),
         w,
         h,
       },
@@ -1552,7 +1933,7 @@ function normalizeNode(node: any): CanvasNode {
 
 function shouldUseStoredPorts(nodeType: CanvasNodeType, ports: any) {
   if (!Array.isArray(ports)) return false
-  return nodeType === 'code' || nodeType === 'c_sharp' || nodeType === 'panel' || nodeType === 'img' || nodeType === 'gen_img'
+  return nodeType === 'code' || nodeType === 'c_sharp' || nodeType === 'panel' || nodeType === 'image' || nodeType === 'gen_img'
 }
 
 function normalizeConnection(connection: any): CanvasConnection {
@@ -1592,11 +1973,25 @@ function normalizePortDataType(value: any): PortDataType {
   return 'any'
 }
 
+function getPortDataType(node: CanvasNode, portId: string, direction?: PortDirection): PortDataType {
+  const ports = Array.isArray(node.meta.ports) ? node.meta.ports.map(normalizePort) : getNodePorts(node.nodeType, node.meta)
+  const port = ports.find((item) => item.id === portId && (!direction || item.direction === direction))
+  return port?.dataType ?? 'any'
+}
+
+function portColor(dataType: PortDataType) {
+  if (dataType === 'text') return '#73b7ff'
+  if (dataType === 'image') return '#d7bd35'
+  if (dataType === 'path') return '#68d39b'
+  if (dataType === 'number') return '#ff9f5f'
+  if (dataType === 'code') return '#b99cff'
+  return '#b7c1ba'
+}
+
 function resolveNodeSize(meta: Record<string, any>, nodeType: CanvasNodeType, fallback?: Partial<CanvasNode>) {
-  if (nodeType === 'panel') return { w: numberOr(fallback?.w, meta.w, meta.default_width, 320), h: numberOr(fallback?.h, meta.h, meta.default_height, 280) }
-  if (nodeType === 'img') return { w: numberOr(fallback?.w, meta.w, meta.default_width, 420), h: numberOr(fallback?.h, meta.h, meta.default_height, 360) }
-  if (nodeType === 'gen_img') return { w: numberOr(fallback?.w, meta.w, meta.default_width, 260), h: numberOr(fallback?.h, meta.h, meta.default_height, 210) }
-  if (nodeType === 'c_sharp') return { w: numberOr(fallback?.w, meta.w, meta.default_width, 520), h: numberOr(fallback?.h, meta.h, meta.default_height, 360) }
+  if (nodeType === 'panel') return { w: numberOr(fallback?.w, meta.w, meta.default_width ?? 320), h: numberOr(fallback?.h, meta.h, meta.default_height ?? 280) }
+  if (nodeType === 'gen_img') return { w: numberOr(meta.w, fallback?.w, meta.default_width ?? 260), h: numberOr(meta.h, fallback?.h, meta.default_height ?? 180) }
+  if (nodeType === 'c_sharp') return { w: numberOr(fallback?.w, meta.w, meta.default_width ?? 520), h: numberOr(fallback?.h, meta.h, meta.default_height ?? 360) }
   if (nodeType === 'prompt') return { w: 300, h: 180 }
   if (nodeType === 'file_upload') return { w: 340, h: 210 }
   if (nodeType === 'slider') return { w: 290, h: 170 }
@@ -1619,27 +2014,26 @@ function normalizeNodeType(value: any): CanvasNodeType {
     value === 'gen_img' ||
     value === 'c_sharp'
   ) {
-    return value
+    return value === 'img' ? 'image' : value
   }
   return 'message'
 }
 
 function getNodePorts(nodeType: CanvasNodeType, meta: Record<string, any>): NodePort[] {
-  if (Array.isArray(meta.ports) && (nodeType === 'panel' || nodeType === 'img' || nodeType === 'gen_img' || nodeType === 'c_sharp')) {
+  if (Array.isArray(meta.ports) && (nodeType === 'panel' || nodeType === 'gen_img' || nodeType === 'c_sharp')) {
     return meta.ports.map(normalizePort)
   }
   if (nodeType === 'message') return []
-  if (nodeType === 'image') return []
+  if (nodeType === 'image' || nodeType === 'img') {
+    return [
+      { id: 'in', label: 'image', direction: 'input', dataType: 'image', slot: 0, visible: true, required: false, dynamic: false },
+      { id: 'out', label: 'image', direction: 'output', dataType: 'image', slot: 0, visible: true, required: false, dynamic: false },
+    ]
+  }
   if (nodeType === 'panel') {
     return [
       { id: 'in', label: 'Input', direction: 'input', dataType: 'any', slot: 0, visible: true, required: false, dynamic: false },
       { id: 'out', label: 'Output', direction: 'output', dataType: 'any', slot: 0, visible: true, required: false, dynamic: false },
-    ]
-  }
-  if (nodeType === 'img') {
-    return [
-      { id: 'in', label: 'image', direction: 'input', dataType: 'image', slot: 0, visible: true, required: false, dynamic: false },
-      { id: 'out', label: 'image', direction: 'output', dataType: 'image', slot: 0, visible: true, required: false, dynamic: false },
     ]
   }
   if (nodeType === 'gen_img') {
@@ -1659,8 +2053,7 @@ function getNodePorts(nodeType: CanvasNodeType, meta: Record<string, any>): Node
   }
   if (nodeType === 'prompt') {
     return [
-      { id: 'clip', label: 'clip', direction: 'input', dataType: 'any', slot: 0 },
-      { id: 'conditioning', label: 'CONDITIONING', direction: 'output', dataType: 'text', slot: 0 },
+      { id: 'out', label: 'prompt', direction: 'output', dataType: 'text', slot: 0, visible: true, required: false, dynamic: false },
     ]
   }
   if (nodeType === 'file_upload') {
@@ -1686,6 +2079,303 @@ function getNodePorts(nodeType: CanvasNodeType, meta: Record<string, any>): Node
 
 function getNodePort(node: CanvasNode, portId: string) {
   return (Array.isArray(node.meta.ports) ? node.meta.ports : getNodePorts(node.nodeType, node.meta)).find((port: NodePort) => port.id === portId) ?? null
+}
+
+function arePortTypesCompatible(sourcePort: NodePort, targetPort: NodePort) {
+  if (sourcePort.dataType === 'any' || targetPort.dataType === 'any') return true
+  return sourcePort.dataType === targetPort.dataType
+}
+
+function getNodeInputValue(node: CanvasNode, portId: string, nodes: CanvasNode[], connections: CanvasConnection[]) {
+  const connection = connections.find((item) => item.toNodeId === node.id && item.toPortId === portId)
+  if (!connection) return undefined
+  const sourceNode = nodes.find((item) => item.id === connection.fromNodeId)
+  if (!sourceNode) return undefined
+  return getNodeOutputValue(sourceNode, connection.fromPortId)
+}
+
+function getNodeOutputValue(node: CanvasNode, portId: string) {
+  if (node.nodeType === 'prompt') return node.meta.prompt ?? node.meta.body ?? ''
+  if (node.nodeType === 'file_upload') return node.meta.filePath ?? ''
+  if (node.nodeType === 'slider') return Number(node.meta.value ?? 0)
+  if (node.nodeType === 'panel') return node.meta.body ?? ''
+  if (node.nodeType === 'image' || node.nodeType === 'img' || node.nodeType === 'gen_img') {
+    return getImagePayload(node)
+  }
+  if (portId && node.meta.outputs && Object.prototype.hasOwnProperty.call(node.meta.outputs, portId)) {
+    return node.meta.outputs[portId]
+  }
+  return node.meta.body ?? ''
+}
+
+function getNodeInputImage(node: CanvasNode, portId: string, nodes: CanvasNode[], connections: CanvasConnection[]) {
+  const value = getNodeInputValue(node, portId, nodes, connections)
+  if (!value) return null
+  if (typeof value === 'string') {
+    return { path: value, dataUrl: value.startsWith('data:') ? value : '', mimeType: 'image/png' }
+  }
+  if (typeof value === 'object') return value
+  return null
+}
+
+function getImagePayload(node: CanvasNode) {
+  return {
+    path: String(node.meta.imagePath ?? ''),
+    dataUrl: String(node.meta.imageDataUrl ?? ''),
+    mimeType: String(node.meta.mimeType ?? 'image/png'),
+    title: String(node.meta.title ?? 'Image'),
+  }
+}
+
+function getImageSizeFromPayload(image: any) {
+  const w = Number(image?.width ?? image?.naturalWidth ?? 0)
+  const h = Number(image?.height ?? image?.naturalHeight ?? 0)
+  if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) return { w, h }
+  return null
+}
+
+function fitImageInitialSize(naturalWidth: number, naturalHeight: number) {
+  const maxW = 520
+  const maxH = 420
+  const minW = 160
+  const minH = 110
+  const scale = Math.min(maxW / naturalWidth, maxH / naturalHeight, 1)
+  const w = Math.max(minW, Math.round(naturalWidth * scale))
+  const h = Math.max(minH, Math.round(naturalHeight * scale))
+  return { w, h }
+}
+
+function normalizeAiImageSize(value: unknown) {
+  const text = String(value ?? '').trim().toLowerCase().replace(/\s+/g, '')
+  if (/^\d{2,4}x\d{2,4}$/.test(text)) return text
+  return '1024x1024'
+}
+
+function parseAiImageSize(value: unknown) {
+  const text = normalizeAiImageSize(value)
+  const match = text.match(/^(\d{2,4})x(\d{2,4})$/)
+  if (!match) return null
+  const w = Number(match[1])
+  const h = Number(match[2])
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return null
+  return { w, h }
+}
+
+async function createCanvasAiImage(run: PendingAiImageRun, config: AiImageConfig) {
+  const endpoint = buildImageEndpoint(config.baseUrl ?? '', run.intent === 'edit')
+  const response = run.intent === 'edit' && run.image
+    ? await sendCanvasImageEditRequest(endpoint, run, config)
+    : await sendCanvasImageGenerationRequest(endpoint, run, config)
+
+  const responseText = await response.text()
+  if (!response.ok) {
+    throw new Error(`Image request failed: HTTP ${response.status} ${response.statusText}\n${responseText.slice(0, 1200)}`)
+  }
+  return parseCanvasImageResponse(responseText, run, config)
+}
+
+function buildImageEndpoint(baseUrl: string, isEdit: boolean) {
+  let raw = String(baseUrl || '').trim().replace(/\/+$/, '')
+  if (!raw) raw = 'https://api.openai.com/v1'
+
+  if (/\/v1\/images\/(generations|edits)$/i.test(raw)) {
+    raw = raw.replace(/\/v1\/images\/(generations|edits)$/i, '')
+  }
+
+  if (/\/v1$/i.test(raw)) return `${raw}${isEdit ? '/images/edits' : '/images/generations'}`
+  return `${raw}${isEdit ? '/v1/images/edits' : '/v1/images/generations'}`
+}
+
+async function sendCanvasImageGenerationRequest(endpoint: string, run: PendingAiImageRun, config: AiImageConfig) {
+  const body: Record<string, any> = {
+    model: config.model ?? '',
+    prompt: run.prompt,
+    response_format: 'b64_json',
+  }
+  if (run.aspectRatio) body.aspect_ratio = run.aspectRatio
+  if (run.size) body.size = run.size
+  if (run.count) body.n = clamp(Math.round(run.count), 1, 4)
+  if (run.image) {
+    const imageDataUrl = await resolveImageDataUrl(run.image)
+    if (imageDataUrl) body.image = [imageDataUrl]
+  }
+
+  return fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.apiKey ?? ''}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+}
+
+async function sendCanvasImageEditRequest(endpoint: string, run: PendingAiImageRun, config: AiImageConfig) {
+  const imageDataUrl = await resolveImageDataUrl(run.image)
+  if (!imageDataUrl) throw new Error('AI image edit requires a connected image input.')
+  const { blob, mimeType } = dataUrlToBlob(imageDataUrl)
+  const form = new FormData()
+  form.append('model', config.model ?? '')
+  form.append('prompt', run.prompt)
+  form.append('response_format', 'b64_json')
+  if (run.aspectRatio) form.append('aspect_ratio', run.aspectRatio)
+  if (run.size) form.append('size', run.size)
+  if (run.count) form.append('n', String(clamp(Math.round(run.count), 1, 4)))
+  form.append('image', blob, `canvas-input.${mimeTypeToExtension(mimeType)}`)
+
+  return fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.apiKey ?? ''}`,
+    },
+    body: form,
+  })
+}
+
+async function parseCanvasImageResponse(responseText: string, run: PendingAiImageRun, config: AiImageConfig) {
+  const root = JSON.parse(responseText)
+  const data = collectImageResponseItems(root)
+  const images = data
+    .map((item: any, index: number) => {
+      const b64 = item?.b64_json ?? item?.base64 ?? item?.image_base64
+      const url = item?.url ?? item?.image_url ?? item?.image
+      if (b64) {
+        const dataUrl = normalizeImageSourceValue(b64)
+        const mimeType = getMimeTypeFromDataUrl(dataUrl) ?? detectBase64ImageMimeType(b64) ?? 'image/png'
+        return {
+          dataUrl,
+          path: '',
+          mimeType,
+          prompt: run.prompt,
+          provider: config.provider ?? '',
+          model: config.model ?? '',
+          intent: run.intent,
+          index,
+        }
+      }
+      if (url) {
+        const dataUrl = normalizeImageSourceValue(url)
+        return {
+          dataUrl,
+          path: String(url),
+          mimeType: getMimeTypeFromDataUrl(dataUrl) ?? guessMimeTypeFromUrl(String(url)),
+          prompt: run.prompt,
+          provider: config.provider ?? '',
+          model: config.model ?? '',
+          intent: run.intent,
+          index,
+        }
+      }
+      return null
+    })
+    .filter(Boolean)
+
+  if (!images.length) throw new Error('Image API returned no usable image data.')
+  return { images }
+}
+
+function collectImageResponseItems(root: any) {
+  if (Array.isArray(root?.data)) return root.data
+  if (Array.isArray(root?.images)) return root.images
+  if (Array.isArray(root?.output)) return root.output
+  if (root?.b64_json || root?.base64 || root?.image_base64 || root?.url || root?.image_url || root?.image) return [root]
+  return []
+}
+
+async function resolveImageDataUrl(image: any) {
+  const dataUrl = normalizeImageSourceValue(image?.dataUrl ?? image?.imageDataUrl ?? '')
+  if (dataUrl.startsWith('data:')) return dataUrl
+  const pathOrUrl = String(image?.path ?? image?.imagePath ?? dataUrl).trim()
+  if (pathOrUrl.startsWith('data:')) return pathOrUrl
+  if (/^https?:/i.test(pathOrUrl)) return fetchImageAsDataUrl(pathOrUrl)
+  return ''
+}
+
+async function fetchImageAsDataUrl(url: string) {
+  const response = await fetch(url)
+  if (!response.ok) throw new Error(`Unable to load image URL: HTTP ${response.status}`)
+  const blob = await response.blob()
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ''))
+    reader.onerror = () => reject(reader.error ?? new Error('Unable to read image URL.'))
+    reader.readAsDataURL(blob)
+  })
+}
+
+function dataUrlToBlob(dataUrl: string) {
+  const match = /^data:([^;,]+)?(;base64)?,(.*)$/i.exec(dataUrl)
+  if (!match) throw new Error('Connected image must be a data URL for browser-side edit requests.')
+  const mimeType = match[1] || 'image/png'
+  const payload = match[3] || ''
+  const bytes = match[2]
+    ? Uint8Array.from(atob(payload.replace(/\s+/g, '')), (char) => char.charCodeAt(0))
+    : new TextEncoder().encode(decodeURIComponent(payload))
+  return { blob: new Blob([bytes], { type: mimeType }), mimeType }
+}
+
+function detectBase64ImageMimeType(base64: string) {
+  const value = String(base64 ?? '').replace(/^data:[^,]+,/i, '').replace(/\s+/g, '')
+  if (value.startsWith('/9j/')) return 'image/jpeg'
+  if (value.startsWith('iVBORw0KGgo')) return 'image/png'
+  if (value.startsWith('UklGR')) return 'image/webp'
+  if (value.startsWith('R0lGOD')) return 'image/gif'
+  return 'image/png'
+}
+
+function guessMimeTypeFromUrl(url: string) {
+  const lower = url.toLowerCase()
+  if (lower.includes('.jpg') || lower.includes('.jpeg')) return 'image/jpeg'
+  if (lower.includes('.webp')) return 'image/webp'
+  if (lower.includes('.gif')) return 'image/gif'
+  if (lower.includes('.bmp')) return 'image/bmp'
+  return 'image/png'
+}
+
+function mimeTypeToExtension(mimeType: string) {
+  if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') return 'jpg'
+  if (mimeType === 'image/webp') return 'webp'
+  if (mimeType === 'image/gif') return 'gif'
+  if (mimeType === 'image/bmp') return 'bmp'
+  return 'png'
+}
+
+function normalizeImageSourceValue(value: any, fallbackMimeType = 'image/png') {
+  const raw = String(value ?? '').trim()
+  if (!raw) return ''
+  if (/^data:/i.test(raw) || /^https?:/i.test(raw) || /^file:/i.test(raw)) return raw
+  const compact = raw.replace(/\s+/g, '')
+  if (looksLikeBase64Image(compact)) {
+    const mimeType = detectBase64ImageMimeType(compact) ?? fallbackMimeType
+    return `data:${mimeType};base64,${compact}`
+  }
+  return raw
+}
+
+function looksLikeBase64Image(value: string) {
+  if (value.length < 80) return false
+  if (!/^[A-Za-z0-9+/]+=*$/.test(value)) return false
+  return value.startsWith('/9j/') || value.startsWith('iVBORw0KGgo') || value.startsWith('UklGR') || value.startsWith('R0lGOD')
+}
+
+function getMimeTypeFromDataUrl(value: string) {
+  const match = /^data:([^;,]+)/i.exec(String(value ?? '').trim())
+  return match?.[1] ?? ''
+}
+
+function hasDraggedImage(dataTransfer: DataTransfer | null) {
+  if (!dataTransfer) return false
+  if ([...dataTransfer.files].some((file) => file.type.startsWith('image/'))) return true
+  return [...dataTransfer.items].some((item) => item.kind === 'file' && item.type.startsWith('image/'))
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ''))
+    reader.onerror = () => reject(reader.error ?? new Error('Unable to read dropped image.'))
+    reader.readAsDataURL(file)
+  })
 }
 
 function renderPorts(
@@ -1749,7 +2439,7 @@ function renderFlowPorts(node: CanvasNode) {
   const renderPort = (port: NodePort) => (
     <div
       key={port.id}
-      className={`port port-${port.direction} nodrag`}
+      className={`port port-${port.direction} port-type-${port.dataType} nodrag`}
     >
       <Handle
         id={port.id}
@@ -1792,10 +2482,32 @@ function renderNodeBody(
   }
   if (node.nodeType === 'gen_img') {
     return (
-      <label className="node-field">
-        <span>Prompt</span>
-        <textarea value={node.meta.prompt ?? ''} onChange={(event) => updateMeta(node.sourceRef, { prompt: event.target.value })} />
-      </label>
+      <>
+        <label className="node-field">
+          <span>Prompt</span>
+          <textarea value={node.meta.prompt ?? ''} onChange={(event) => updateMeta(node.sourceRef, { prompt: event.target.value })} />
+        </label>
+        <label className="node-field">
+          <span>Generation Size</span>
+          <select value={normalizeAiImageSize(node.meta.imageSize ?? node.meta.size ?? '1024x1024')} onChange={(event) => updateMeta(node.sourceRef, { imageSize: event.target.value })}>
+            <option value="512x512">512 x 512</option>
+            <option value="768x768">768 x 768</option>
+            <option value="1024x1024">1024 x 1024</option>
+            <option value="1024x1536">1024 x 1536</option>
+            <option value="1536x1024">1536 x 1024</option>
+          </select>
+        </label>
+        <label className="node-field">
+          <span>Generation Count</span>
+          <input
+            type="number"
+            min={1}
+            max={4}
+            value={clamp(Math.round(Number(node.meta.imageCount ?? node.meta.count ?? 1)), 1, 4)}
+            onChange={(event) => updateMeta(node.sourceRef, { imageCount: clamp(Math.round(Number(event.target.value || 1)), 1, 4) })}
+          />
+        </label>
+      </>
     )
   }
   if (node.nodeType === 'file_upload') {
@@ -1839,7 +2551,7 @@ function renderNodeBody(
       </label>
     )
   }
-  if (node.nodeType === 'image' || node.nodeType === 'img') {
+  if (node.nodeType === 'image') {
     const imageSrc = resolveCanvasImageSource(node.meta.imageDataUrl ?? node.meta.imagePath)
     return (
       <div className="node-image-field">
@@ -1860,17 +2572,63 @@ function renderNodeBody(
   return null
 }
 
+function StableNodeTextarea({
+  className,
+  value,
+  placeholder,
+  onCommit,
+}: {
+  className: string
+  value: string
+  placeholder?: string
+  onCommit: (value: string) => void
+}) {
+  const [draft, setDraft] = useState(value)
+  const composingRef = useRef(false)
+
+  useEffect(() => {
+    if (!composingRef.current) setDraft(value)
+  }, [value])
+
+  return (
+    <textarea
+      className={className}
+      value={draft}
+      placeholder={placeholder}
+      onPointerDown={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
+      onKeyDown={(event) => event.stopPropagation()}
+      onCompositionStart={() => {
+        composingRef.current = true
+      }}
+      onCompositionEnd={(event) => {
+        composingRef.current = false
+        const next = event.currentTarget.value
+        setDraft(next)
+        onCommit(next)
+      }}
+      onChange={(event) => {
+        const next = event.target.value
+        setDraft(next)
+        if (!composingRef.current) onCommit(next)
+      }}
+    />
+  )
+}
+
 function renderInlineNodeEditor(
   node: CanvasNode,
   updateMeta: (sourceRef: string, patch: Record<string, unknown>) => void,
+  onRunAiImage?: (sourceRef: string) => void,
+  _onPreviewImage?: (src: string, title: string) => void,
 ) {
   if (node.nodeType === 'prompt') {
     return (
-      <textarea
-        className="node-inline-textarea prompt"
-        value={node.meta.prompt ?? ''}
+      <StableNodeTextarea
+        className="node-inline-textarea prompt nodrag"
+        value={String(node.meta.prompt ?? '')}
         placeholder="Prompt text..."
-        onChange={(event) => updateMeta(node.sourceRef, { prompt: event.target.value })}
+        onCommit={(value) => updateMeta(node.sourceRef, { prompt: value })}
       />
     )
   }
@@ -1886,21 +2644,22 @@ function renderInlineNodeEditor(
   }
   if (node.nodeType === 'gen_img') {
     return (
-      <textarea
-        className="node-inline-textarea prompt"
-        value={node.meta.prompt ?? ''}
-        placeholder="Image prompt..."
-        onChange={(event) => updateMeta(node.sourceRef, { prompt: event.target.value })}
-      />
+      <div className="ai-image-node-body">
+        {node.meta.runStatus ? <span className="ai-image-status">{String(node.meta.runStatus)}</span> : null}
+        {node.meta.error ? <div className="node-error-text">{String(node.meta.error)}</div> : null}
+      </div>
     )
   }
   if (node.nodeType === 'code' || node.nodeType === 'c_sharp') {
     return (
       <textarea
-        className="node-inline-textarea code"
+        className="node-inline-textarea code nodrag"
         value={node.meta.body ?? ''}
         placeholder="C# code..."
         spellCheck={false}
+        onPointerDown={(event) => event.stopPropagation()}
+        onMouseDown={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}
         onChange={(event) => updateMeta(node.sourceRef, { body: event.target.value })}
       />
     )
@@ -2048,11 +2807,14 @@ function renderConnection(connection: CanvasConnection, nodes: CanvasNode[], vie
   const from = getPortPosition(fromNode, connection.fromPortId, viewport, portPositions)
   const to = getPortPosition(toNode, connection.toPortId, viewport, portPositions)
   if (!from || !to) return null
+  const portType = getPortDataType(fromNode, connection.fromPortId, 'output')
+  const isRunningInput = Boolean(toNode.meta.isRunning)
   return (
     <path
       key={connection.id}
       d={createConnectionPath(from, to)}
-      className="connection-path"
+      className={`connection-path${isRunningInput ? ' connection-path-running' : ''}`}
+      style={{ '--connection-color': portColor(portType) } as React.CSSProperties}
     />
   )
 }
@@ -2069,10 +2831,12 @@ function renderPendingConnection(
   if (!fromNode) return null
   const from = getPortPosition(fromNode, pending.portId, viewport, portPositions)
   if (!from) return null
+  const portType = getPortDataType(fromNode, pending.portId, 'output')
   return (
     <path
       d={createConnectionPath(from, point)}
       className="connection-path connection-path-pending"
+      style={{ '--connection-color': portColor(portType) } as React.CSSProperties}
     />
   )
 }
@@ -2129,10 +2893,10 @@ function buildDefaultNodeMeta(nodeType: CanvasNodeType, sourceRef: string) {
       ports: getNodePorts(nodeType, {}),
     }
   }
-  if (nodeType === 'img') {
+  if (nodeType === 'image' || nodeType === 'img') {
     return {
       sourceRef,
-      nodeType,
+      nodeType: 'image',
       title: 'Image',
       summary: 'Image preview',
       body: 'Paste an image path, URL, or data URL.',
@@ -2142,7 +2906,7 @@ function buildDefaultNodeMeta(nodeType: CanvasNodeType, sourceRef: string) {
       collapsed: false,
       default_width: 420,
       default_height: 360,
-      ports: getNodePorts(nodeType, {}),
+      ports: getNodePorts('image', {}),
     }
   }
   if (nodeType === 'gen_img') {
@@ -2153,12 +2917,14 @@ function buildDefaultNodeMeta(nodeType: CanvasNodeType, sourceRef: string) {
       summary: 'Generate image',
       body: 'Generate an image from a prompt and optional reference image.',
       prompt: '',
+      imageSize: '1024x1024',
+      imageCount: 1,
       seed: 0,
       role: 'tool',
       kind: 'tool',
       collapsed: false,
       default_width: 260,
-      default_height: 210,
+      default_height: 118,
       ports: getNodePorts(nodeType, {}),
     }
   }
@@ -2176,18 +2942,6 @@ function buildDefaultNodeMeta(nodeType: CanvasNodeType, sourceRef: string) {
       collapsed: false,
       default_width: 520,
       default_height: 360,
-      ports: getNodePorts(nodeType, {}),
-    }
-  }
-  if (nodeType === 'image') {
-    return {
-      sourceRef,
-      nodeType,
-      title: 'Image',
-      summary: 'Image input/output node',
-      body: 'Drag in an image reference or paste a path/URL.',
-      imagePath: '',
-      collapsed: false,
       ports: getNodePorts(nodeType, {}),
     }
   }
@@ -2260,7 +3014,7 @@ function buildDefaultNodeMeta(nodeType: CanvasNodeType, sourceRef: string) {
 }
 
 function resolveCanvasImageSource(value: any) {
-  const raw = String(value ?? '').trim()
+  const raw = normalizeImageSourceValue(value)
   if (!raw) return ''
   if (/^(data:|https?:|file:)/i.test(raw)) return raw
   if (/^[a-zA-Z]:[\\/]/.test(raw) || raw.startsWith('\\\\')) {
