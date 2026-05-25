@@ -1,0 +1,8 @@
+Open `node-type-form.html` in a browser.
+
+Click `Save` to store data in browser localStorage.
+Click `Export JSON` to download `node-type-template.json`.
+
+When you want Codex to read the result, provide:
+- the exported JSON file, or
+- the page contents from the Saved JSON panel.

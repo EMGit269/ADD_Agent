@@ -264,15 +264,15 @@ namespace ADDGH
             return result;
         }
 
-        private static async Task<byte[]> GetImageBytesFromAttachmentAsync(AttachmentItem sourceImage, System.Threading.CancellationToken ct)
+        private static Task<byte[]> GetImageBytesFromAttachmentAsync(AttachmentItem sourceImage, System.Threading.CancellationToken ct)
         {
             if (!string.IsNullOrWhiteSpace(sourceImage?.Base64))
-                return DecodeImageBytes(sourceImage.Base64, out _);
+                return Task.FromResult(DecodeImageBytes(sourceImage.Base64, out _));
 
             if (!string.IsNullOrWhiteSpace(sourceImage?.Path) && File.Exists(sourceImage.Path))
-                return File.ReadAllBytes(sourceImage.Path);
+                return Task.FromResult(File.ReadAllBytes(sourceImage.Path));
 
-            return Array.Empty<byte>();
+            return Task.FromResult(Array.Empty<byte>());
         }
 
         private static byte[] DecodeImageBytes(string raw, out string mimeType)

@@ -5,13 +5,24 @@
     <TargetExt>.gha</TargetExt>
     <AssemblyName>ADDGH</AssemblyName>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <RestoreSources>$(MSBuildThisFileDirectory)..\nuget-offline</RestoreSources>
+    <RestoreIgnoreFailedSources>true</RestoreIgnoreFailedSources>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- 引用 McNeel 官方提供的 Grasshopper SDK -->
     <PackageReference Include="Grasshopper" Version="7.0.20314.3001" />
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Microsoft.Web.WebView2.Core" Condition="Exists('C:\\Program Files (x86)\\ASUS\\ASUS Member Center\\Microsoft.Web.WebView2.Core.dll')">
+      <HintPath>C:\\Program Files (x86)\\ASUS\\ASUS Member Center\\Microsoft.Web.WebView2.Core.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Microsoft.Web.WebView2.Wpf" Condition="Exists('C:\\Program Files (x86)\\ASUS\\ASUS Member Center\\Microsoft.Web.WebView2.Wpf.dll')">
+      <HintPath>C:\\Program Files (x86)\\ASUS\\ASUS Member Center\\Microsoft.Web.WebView2.Wpf.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>
@@ -42,7 +53,6 @@
     </Content>
   </ItemGroup>
 
-  <!-- xUnit / ProjectReference resolve ADDGH.dll; primary GH artifact remains .gha -->
   <Target Name="CopyGhaAsDllForConsumers" AfterTargets="Build">
     <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(TargetDir)$(AssemblyName).dll" SkipUnchangedFiles="true" />
   </Target>

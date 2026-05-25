@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Node Type Form</title>
+  <style>
+    :root {
+      --bg: #0f1412;
+      --panel: #161d1a;
+      --panel-2: #111714;
+      --line: #2c3832;
+      --text: #eef2ee;
+      --muted: #9aa7a0;
+      --accent: #d6bd49;
+      --danger: #8e4a4a;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background: linear-gradient(180deg, #0f1412 0%, #121814 100%);
+      color: var(--text);
+      font-family: "Segoe UI", "PingFang SC", sans-serif;
+    }
+    body { padding: 20px; }
+    .app { max-width: 1500px; margin: 0 auto; display: grid; gap: 16px; }
+    .hero, .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+    }
+    .hero {
+      padding: 18px 20px;
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: center;
+    }
+    .hero h1 { margin: 0 0 6px; font-size: 22px; }
+    .hero p, .hint { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .status {
+      min-width: 240px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px;
+      color: var(--muted);
+      white-space: pre-wrap;
+      font-size: 12px;
+    }
+    .result-box {
+      margin-top: 10px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px;
+      background: #121814;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 16px;
+    }
+    .panel { padding: 16px; }
+    .panel h2 {
+      margin: 0 0 10px;
+      font-size: 14px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    button, input, select, textarea {
+      font: inherit;
+    }
+    button {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #1b231f;
+      color: var(--text);
+      padding: 9px 12px;
+      cursor: pointer;
+    }
+    button.primary {
+      background: var(--accent);
+      color: #1c1808;
+      font-weight: 700;
+      border-color: #c6ab2a;
+    }
+    button.danger {
+      background: #2b1b1b;
+      border-color: var(--danger);
+    }
+    input, select, textarea {
+      width: 100%;
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      outline: none;
+    }
+    textarea {
+      min-height: 90px;
+      resize: vertical;
+    }
+    .node-list {
+      display: grid;
+      gap: 14px;
+    }
+    .node-card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      overflow: hidden;
+      background: #18201c;
+    }
+    .node-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      background: #1b231f;
+    }
+    .node-head strong { font-size: 14px; }
+    .node-head small { color: var(--muted); }
+    .node-body {
+      padding: 16px;
+      display: grid;
+      gap: 14px;
+    }
+    .fields {
+      display: grid;
+      gap: 12px;
+    }
+    .fields.two {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .fields.three {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+    label.field {
+      display: grid;
+      gap: 6px;
+    }
+    label.field span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    details {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      background: #161d1a;
+    }
+    summary {
+      padding: 12px 14px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .details-body {
+      padding: 0 14px 14px;
+      display: grid;
+      gap: 12px;
+    }
+    .checks {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .check {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .check input { width: auto; }
+    .ports {
+      display: grid;
+      gap: 10px;
+    }
+    .port-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 0.8fr 0.8fr 0.55fr 0.7fr 0.7fr 0.7fr auto;
+      gap: 8px;
+      align-items: center;
+    }
+    .json {
+      min-height: 620px;
+      max-height: 76vh;
+      overflow: auto;
+      background: #0d1210;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+      white-space: pre-wrap;
+      font-family: "Cascadia Code", "Consolas", monospace;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    @media (max-width: 1220px) {
+      .layout { grid-template-columns: 1fr; }
+      .fields.two, .fields.three, .checks { grid-template-columns: 1fr; }
+      .port-row { grid-template-columns: 1fr 1fr 1fr 1fr; }
+      .port-row button { grid-column: 1 / -1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <section class="hero">
+      <div>
+        <h1>Node Type Form</h1>
+        <p>填表时右侧会实时生成 JSON。点 Save 会保存到浏览器本地。</p>
+      </div>
+      <div id="status" class="status">Ready</div>
+    </section>
+
+    <div class="layout">
+      <section class="panel">
+        <h2>节点集合</h2>
+        <div class="toolbar">
+          <button id="addNodeBtn" class="primary" type="button">新增节点类型</button>
+          <button id="expandBtn" type="button">展开全部</button>
+          <button id="collapseBtn" type="button">收起全部</button>
+        </div>
+        <p class="hint">一个节点一张卡片。修改任意字段，右侧 JSON 会实时更新。</p>
+        <div id="nodeList" class="node-list"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Saved JSON</h2>
+        <div class="toolbar">
+          <button id="saveBtn" class="primary" type="button">Save</button>
+          <button id="loadBtn" type="button">Load Saved</button>
+          <button id="exportBtn" type="button">导出 JSON</button>
+          <button id="copyBtn" type="button">复制 JSON</button>
+          <button id="clearBtn" class="danger" type="button">Clear Saved</button>
+        </div>
+        <p class="hint">JSON 结构是：`schemaVersion + savedAtUtc + nodes`。</p>
+        <div id="resultBox" class="result-box">这里会显示保存、导出、复制的结果。</div>
+        <pre id="jsonPreview" class="json">{}</pre>
+      </section>
+    </div>
+  </div>
+
+  <template id="nodeTemplate">
+    <section class="node-card">
+      <div class="node-head">
+        <div>
+          <strong data-title>新节点</strong>
+          <small data-subtitle>未填写</small>
+        </div>
+        <div class="toolbar" style="margin:0;">
+          <button type="button" data-action="toggle-help">说明</button>
+          <button type="button" class="danger" data-action="remove-node">删除</button>
+        </div>
+      </div>
+
+      <div class="node-body">
+        <div class="fields two">
+          <label class="field"><span>type_name - 节点唯一标识</span><input data-field="type_name" /></label>
+          <label class="field"><span>display_name - 显示名称</span><input data-field="display_name" /></label>
+          <label class="field"><span>category - 分类</span>
+            <select data-field="category">
+              <option value="">请选择</option>
+              <option value="message">消息/文本</option>
+              <option value="input">输入</option>
+              <option value="output">输出</option>
+              <option value="logic">逻辑/控制</option>
+              <option value="media">图片/媒体</option>
+              <option value="data">数据处理</option>
+              <option value="layout">布局/容器</option>
+              <option value="annotation">注释</option>
+              <option value="custom">自定义</option>
+            </select>
+          </label>
+          <label class="field"><span>role - 角色</span>
+            <select data-field="role">
+              <option value="">请选择</option>
+              <option value="user">用户</option>
+              <option value="assistant">助手</option>
+              <option value="tool">工具</option>
+              <option value="system">系统</option>
+              <option value="note">备注</option>
+              <option value="config">配置</option>
+              <option value="action">动作</option>
+            </select>
+          </label>
+          <label class="field"><span>description - 节点说明</span><textarea data-field="description"></textarea></label>
+          <label class="field"><span>icon - 图标</span><input data-field="icon" /></label>
+          <label class="field"><span>priority - 优先级</span><input data-field="priority" type="number" step="1" /></label>
+        </div>
+
+        <details open>
+          <summary>布局与交互</summary>
+          <div class="details-body">
+            <div class="fields three">
+              <label class="field"><span>default_width</span><select data-field="default_width"><option value="260">260 - 紧凑</option><option value="320">320 - 标准</option><option value="420">420 - 宽</option><option value="520">520 - 大面板</option></select></label>
+              <label class="field"><span>default_height</span><select data-field="default_height"><option value="160">160 - 紧凑</option><option value="210">210 - 标准</option><option value="280">280 - 富文本</option><option value="360">360 - 大内容</option></select></label>
+              <label class="field"><span>theme_variant</span><select data-field="theme_variant"><option value="">默认</option><option value="neutral">中性</option><option value="warning">警告</option><option value="success">成功</option><option value="info">信息</option><option value="code">代码</option><option value="image">图片</option></select></label>
+              <label class="field"><span>drag_behavior</span><select data-field="drag_behavior"><option value="">默认</option><option value="move">移动</option><option value="snap-grid">吸附网格</option><option value="free">自由拖拽</option><option value="locked">锁定</option></select></label>
+              <label class="field"><span>resize_behavior</span><select data-field="resize_behavior"><option value="">默认</option><option value="fixed">固定</option><option value="horizontal">仅横向</option><option value="vertical">仅纵向</option><option value="both">双向</option><option value="aspect-lock">锁定比例</option></select></label>
+              <label class="field"><span>selection_behavior</span><select data-field="selection_behavior"><option value="">默认</option><option value="single">单选</option><option value="multi">多选</option><option value="auto-focus">自动聚焦</option><option value="none">不参与选中</option></select></label>
+            </div>
+            <div class="checks">
+              <label class="check"><input data-field="resizable" type="checkbox" /> 可缩放</label>
+              <label class="check"><input data-field="collapsed_default" type="checkbox" /> 默认折叠</label>
+              <label class="check"><input data-field="inline_edit_supported" type="checkbox" /> 支持内联编辑</label>
+              <label class="check"><input data-field="compact_mode" type="checkbox" /> 紧凑模式</label>
+              <label class="check"><input data-field="allow_cycle" type="checkbox" /> 允许成环连接</label>
+              <label class="check"><input data-field="allow_self_connection" type="checkbox" /> 允许自连接</label>
+            </div>
+          </div>
+        </details>
+
+        <details>
+          <summary>端口配置</summary>
+          <div class="details-body">
+            <div class="fields two">
+              <label class="field"><span>port_mode - 端口模式</span><select data-field="port_mode"><option value="fixed">固定端口</option><option value="dynamic">动态端口</option><option value="hybrid">混合端口</option></select></label>
+              <label class="field"><span>connection_validation - 连接校验</span><select data-field="connection_validation"><option value="">默认</option><option value="any">任意</option><option value="same-type">同类型</option><option value="text-only">仅文本</option><option value="number-only">仅数值</option><option value="path-only">仅路径</option><option value="image-only">仅图片</option><option value="custom">自定义</option></select></label>
+              <label class="field"><span>max_incoming_connections - 最大输入连接数</span><select data-field="max_incoming_connections"><option value="">不限制</option><option value="1">1</option><option value="2">2</option><option value="4">4</option><option value="8">8</option></select></label>
+              <label class="field"><span>max_outgoing_connections - 最大输出连接数</span><select data-field="max_outgoing_connections"><option value="">不限制</option><option value="1">1</option><option value="2">2</option><option value="4">4</option><option value="8">8</option></select></label>
+            </div>
+            <div class="toolbar">
+              <button type="button" data-action="add-port">新增端口</button>
+              <button type="button" data-action="reset-ports">恢复默认端口</button>
+            </div>
+            <div class="ports" data-ports></div>
+            <p class="hint">visible = 是否显示，required = 是否必须连接，dynamic = 是否允许动态增减。</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>数据与样式</summary>
+          <div class="details-body">
+            <div class="fields two">
+              <label class="field"><span>meta_schema - 元数据结构</span><textarea data-field="meta_schema"></textarea></label>
+              <label class="field"><span>default_values - 默认值</span><textarea data-field="default_values"></textarea></label>
+              <label class="field"><span>field_validation - 字段校验</span><textarea data-field="field_validation"></textarea></label>
+              <label class="field"><span>runtime_validation - 运行时校验</span><textarea data-field="runtime_validation"></textarea></label>
+              <label class="field"><span>background - 背景色</span><input data-field="background" /></label>
+              <label class="field"><span>border_color - 边框色</span><input data-field="border_color" /></label>
+              <label class="field"><span>accent_color - 强调色</span><input data-field="accent_color" /></label>
+              <label class="field"><span>title_color - 标题色</span><input data-field="title_color" /></label>
+              <label class="field"><span>implementation_notes - 实现备注</span><textarea data-field="implementation_notes"></textarea></label>
+              <label class="field"><span>things_not_allowed - 不允许的情况</span><textarea data-field="things_not_allowed"></textarea></label>
+            </div>
+          </div>
+        </details>
+      </div>
+    </section>
+  </template>
+
+  <template id="portTemplate">
+    <div class="port-row">
+      <input class="small" data-field="id" placeholder="in" />
+      <input class="small" data-field="label" placeholder="输入" />
+      <select class="small" data-field="direction"><option value="input">input</option><option value="output">output</option></select>
+      <select class="small" data-field="dataType"><option value="any">any</option><option value="image">image</option><option value="text">text</option><option value="path">path</option><option value="number">number</option><option value="code">code</option></select>
+      <input class="small" data-field="slot" type="number" step="1" />
+      <select class="small" data-field="visible"><option value="true">yes</option><option value="false">no</option></select>
+      <select class="small" data-field="required"><option value="true">yes</option><option value="false">no</option></select>
+      <select class="small" data-field="dynamic"><option value="true">yes</option><option value="false">no</option></select>
+      <button type="button" class="danger" data-action="remove-port">x</button>
+    </div>
+  </template>
+
+  <script>
+    const STORAGE_KEY = "addgh-node-type-template-v4";
+    const SCHEMA_VERSION = 4;
+
+    const defaultPorts = () => ([
+      { id: "in", label: "输入", direction: "input", dataType: "any", slot: 0, visible: true, required: false, dynamic: false },
+      { id: "out", label: "输出", direction: "output", dataType: "any", slot: 0, visible: true, required: false, dynamic: false }
+    ]);
+
+    const defaultNode = () => ({
+      type_name: "",
+      display_name: "",
+      category: "",
+      role: "",
+      description: "",
+      icon: "",
+      priority: "",
+      default_width: "320",
+      default_height: "210",
+      theme_variant: "",
+      drag_behavior: "",
+      resize_behavior: "",
+      selection_behavior: "",
+      resizable: true,
+      collapsed_default: false,
+      inline_edit_supported: true,
+      compact_mode: false,
+      allow_cycle: false,
+      allow_self_connection: false,
+      port_mode: "fixed",
+      connection_validation: "",
+      max_incoming_connections: "",
+      max_outgoing_connections: "",
+      meta_schema: '{\n  "type": "object"\n}',
+      default_values: '{\n  "title": "",\n  "summary": ""\n}',
+      field_validation: "",
+      runtime_validation: "",
+      background: "#1a211d",
+      border_color: "#849189",
+      accent_color: "#d8bf42",
+      title_color: "#ecf1ec",
+      implementation_notes: "",
+      things_not_allowed: "",
+      ports: defaultPorts()
+    });
+
+    const nodeList = document.getElementById("nodeList");
+    const preview = document.getElementById("jsonPreview");
+    const statusBox = document.getElementById("status");
+    const resultBox = document.getElementById("resultBox");
+    const nodeTemplate = document.getElementById("nodeTemplate");
+    const portTemplate = document.getElementById("portTemplate");
+
+    function setStatus(text) {
+      statusBox.textContent = text;
+    }
+
+    function setResult(text) {
+      resultBox.textContent = text;
+    }
+
+    function readPortRow(row) {
+      return {
+        id: row.querySelector('[data-field="id"]').value.trim(),
+        label: row.querySelector('[data-field="label"]').value.trim(),
+        direction: row.querySelector('[data-field="direction"]').value,
+        dataType: row.querySelector('[data-field="dataType"]').value,
+        slot: Number(row.querySelector('[data-field="slot"]').value || 0),
+        visible: row.querySelector('[data-field="visible"]').value === "true",
+        required: row.querySelector('[data-field="required"]').value === "true",
+        dynamic: row.querySelector('[data-field="dynamic"]').value === "true"
+      };
+    }
+
+    function readNodeCard(card) {
+      const node = {};
+      for (const field of card.querySelectorAll("[data-field]")) {
+        const key = field.dataset.field;
+        if (field.type === "checkbox") node[key] = field.checked;
+        else if (field.type === "number") node[key] = field.value === "" ? "" : Number(field.value);
+        else node[key] = field.value;
+      }
+      node.ports = [...card.querySelectorAll("[data-ports] .port-row")]
+        .map(readPortRow)
+        .filter((port) => port.id || port.label);
+      return node;
+    }
+
+    function getPayload() {
+      return {
+        schemaVersion: SCHEMA_VERSION,
+        savedAtUtc: new Date().toISOString(),
+        nodes: [...nodeList.querySelectorAll(".node-card")].map(readNodeCard)
+      };
+    }
+
+    function refreshPreview() {
+      preview.textContent = JSON.stringify(getPayload(), null, 2);
+    }
+
+    function updateCardHeader(card) {
+      const typeName = card.querySelector('[data-field="type_name"]').value.trim();
+      const displayName = card.querySelector('[data-field="display_name"]').value.trim();
+      card.querySelector("[data-title]").textContent = displayName || typeName || "新节点";
+      card.querySelector("[data-subtitle]").textContent = typeName ? `type_name: ${typeName}` : "未填写";
+    }
+
+    function makePortRow(port = null) {
+      const row = portTemplate.content.firstElementChild.cloneNode(true);
+      const data = port || { id: "", label: "", direction: "input", dataType: "any", slot: 0, visible: true, required: false, dynamic: false };
+      row.querySelector('[data-field="id"]').value = data.id ?? "";
+      row.querySelector('[data-field="label"]').value = data.label ?? "";
+      row.querySelector('[data-field="direction"]').value = data.direction ?? "input";
+      row.querySelector('[data-field="dataType"]').value = data.dataType ?? "any";
+      row.querySelector('[data-field="slot"]').value = data.slot ?? 0;
+      row.querySelector('[data-field="visible"]').value = String(data.visible ?? true);
+      row.querySelector('[data-field="required"]').value = String(data.required ?? false);
+      row.querySelector('[data-field="dynamic"]').value = String(data.dynamic ?? false);
+      row.querySelector('[data-action="remove-port"]').addEventListener("click", () => {
+        row.remove();
+        refreshPreview();
+      });
+      row.querySelectorAll("[data-field]").forEach((field) => {
+        field.addEventListener("input", refreshPreview);
+        field.addEventListener("change", refreshPreview);
+      });
+      return row;
+    }
+
+    function renderPorts(card, ports) {
+      const host = card.querySelector("[data-ports]");
+      host.innerHTML = "";
+      const list = ports && ports.length ? ports : defaultPorts();
+      for (const port of list) host.appendChild(makePortRow(port));
+    }
+
+    function applyNodeToCard(card, node) {
+      const data = { ...defaultNode(), ...node };
+      for (const field of card.querySelectorAll("[data-field]")) {
+        const key = field.dataset.field;
+        if (key === "id" || key === "label" || key === "direction" || key === "dataType" || key === "slot" || key === "visible" || key === "required" || key === "dynamic") continue;
+        if (field.type === "checkbox") field.checked = Boolean(data[key]);
+        else field.value = data[key] ?? "";
+      }
+      renderPorts(card, data.ports);
+      updateCardHeader(card);
+    }
+
+    function createNodeCard(node = null) {
+      const card = nodeTemplate.content.firstElementChild.cloneNode(true);
+      applyNodeToCard(card, node || defaultNode());
+
+      card.querySelectorAll("[data-field]").forEach((field) => {
+        field.addEventListener("input", () => {
+          updateCardHeader(card);
+          refreshPreview();
+        });
+        field.addEventListener("change", () => {
+          updateCardHeader(card);
+          refreshPreview();
+        });
+      });
+
+      card.querySelector('[data-action="toggle-help"]').addEventListener("click", () => {
+        card.querySelectorAll("details").forEach((item) => {
+          item.open = !item.open;
+        });
+      });
+
+      card.querySelector('[data-action="remove-node"]').addEventListener("click", () => {
+        if (nodeList.children.length === 1) return;
+        card.remove();
+        refreshPreview();
+      });
+
+      card.querySelector('[data-action="add-port"]').addEventListener("click", () => {
+        card.querySelector("[data-ports]").appendChild(makePortRow());
+        refreshPreview();
+      });
+
+      card.querySelector('[data-action="reset-ports"]').addEventListener("click", () => {
+        renderPorts(card, defaultPorts());
+        refreshPreview();
+      });
+
+      return card;
+    }
+
+    function saveData() {
+      const payload = getPayload();
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      preview.textContent = JSON.stringify(payload, null, 2);
+      setStatus(`Saved\n${payload.savedAtUtc}`);
+      setResult(`已保存到浏览器 localStorage\nkey: ${STORAGE_KEY}\n时间: ${payload.savedAtUtc}`);
+    }
+
+    function loadData() {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) {
+        setStatus("No saved data");
+        return;
+      }
+      try {
+        const payload = JSON.parse(raw);
+        nodeList.innerHTML = "";
+        const nodes = Array.isArray(payload.nodes) && payload.nodes.length ? payload.nodes : [defaultNode()];
+        for (const node of nodes) nodeList.appendChild(createNodeCard(node));
+        preview.textContent = JSON.stringify(payload, null, 2);
+        setStatus("Saved data loaded");
+        setResult(`已从浏览器 localStorage 读取保存内容\nkey: ${STORAGE_KEY}`);
+      } catch (error) {
+        console.error(error);
+        setStatus("Failed to load saved data");
+        setResult("读取保存内容失败，请打开浏览器控制台查看错误。");
+      }
+    }
+
+    function clearData() {
+      localStorage.removeItem(STORAGE_KEY);
+      nodeList.innerHTML = "";
+      nodeList.appendChild(createNodeCard(defaultNode()));
+      refreshPreview();
+      setStatus("Saved data cleared");
+      setResult(`已清空浏览器 localStorage\nkey: ${STORAGE_KEY}`);
+    }
+
+    function exportJson() {
+      const payload = getPayload();
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "node-type-template.json";
+      a.click();
+      URL.revokeObjectURL(url);
+      setStatus(`Exported\n${payload.savedAtUtc}`);
+      setResult(`已触发下载\n文件名: node-type-template.json\n通常位置: C:\\Users\\26933\\Downloads\\node-type-template.json\n时间: ${payload.savedAtUtc}`);
+    }
+
+    async function copyJson() {
+      const text = JSON.stringify(getPayload(), null, 2);
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(text);
+          setStatus("Copied JSON");
+          setResult("JSON 已复制到剪贴板。");
+          return;
+        }
+      } catch (error) {
+        console.error(error);
+      }
+
+      const range = document.createRange();
+      range.selectNodeContents(preview);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      try {
+        document.execCommand("copy");
+        setStatus("Copied JSON");
+        setResult("JSON 已复制到剪贴板。");
+      } catch (error) {
+        console.error(error);
+        setStatus("Copy failed");
+        setResult("复制失败。你可以直接选中下面的 JSON 手动复制。");
+      }
+      selection.removeAllRanges();
+    }
+
+    function expandAll(open) {
+      nodeList.querySelectorAll("details").forEach((item) => {
+        item.open = open;
+      });
+    }
+
+    function addNode(node = null) {
+      nodeList.appendChild(createNodeCard(node || defaultNode()));
+      refreshPreview();
+    }
+
+    document.getElementById("addNodeBtn").addEventListener("click", () => addNode());
+    document.getElementById("expandBtn").addEventListener("click", () => expandAll(true));
+    document.getElementById("collapseBtn").addEventListener("click", () => expandAll(false));
+    document.getElementById("saveBtn").addEventListener("click", saveData);
+    document.getElementById("loadBtn").addEventListener("click", loadData);
+    document.getElementById("exportBtn").addEventListener("click", exportJson);
+    document.getElementById("copyBtn").addEventListener("click", copyJson);
+    document.getElementById("clearBtn").addEventListener("click", clearData);
+
+    addNode(defaultNode());
+    refreshPreview();
+    setStatus("Ready");
+    setResult("这里会显示保存、导出、复制的结果。");
+  </script>
+</body>
+</html>

@@ -45,7 +45,7 @@ type Viewport = {
   z: number
 }
 
-type CanvasNodeType = 'message' | 'note' | 'image' | 'prompt' | 'file_upload' | 'slider' | 'code'
+type CanvasNodeType = 'message' | 'note' | 'image' | 'prompt' | 'file_upload' | 'slider' | 'code' | 'panel' | 'img' | 'gen_img' | 'c_sharp'
 
 type PortDirection = 'input' | 'output'
 
@@ -57,6 +57,9 @@ type NodePort = {
   direction: PortDirection
   dataType: PortDataType
   slot: number
+  visible?: boolean
+  required?: boolean
+  dynamic?: boolean
 }
 
 type CanvasConnection = {
@@ -86,11 +89,8 @@ type CanvasNode = {
 
 type FlowNodeData = Record<string, unknown> & {
   node: CanvasNode
-  pendingConnection: PendingConnection | null
   updateNodeMeta: (sourceRef: string, patch: Record<string, unknown>) => void
   onNodeResize: (sourceRef: string, width: number, height: number) => void
-  onPortClick: (node: CanvasNode, port: NodePort, event?: React.MouseEvent<HTMLButtonElement>) => void
-  onPortPointerDown: (event: React.PointerEvent<HTMLButtonElement>, node: CanvasNode, port: NodePort) => void
   onPreviewImage: (src: string, title: string) => void
 }
 
@@ -467,18 +467,15 @@ function CanvasWorkbench() {
       selected: selectedSourceRefs.includes(node.sourceRef),
       data: {
         node,
-        pendingConnection,
         updateNodeMeta,
         onNodeResize,
-        onPortClick: handlePortClick,
-        onPortPointerDown: handlePortPointerDown,
         onPreviewImage: (src: string, title: string) => {
           setImagePreviewSrc(src)
           setImagePreviewTitle(title)
         },
       },
     })),
-    [nodes, selectedSourceRefs, pendingConnection],
+    [nodes, selectedSourceRefs],
   )
   const flowEdges = useMemo<Edge[]>(() =>
     connections.map((connection) => ({
@@ -616,8 +613,12 @@ function CanvasWorkbench() {
   function onNodesChange(changes: Array<{ id?: string; type: string; position?: { x: number; y: number }; selected?: boolean }>) {
     setNodes((current) => {
       let next = current
+      let changedPosition = false
+      let changedSelection = false
+      const selectedRefs = new Set(selectedSourceRefsRef.current)
       for (const change of changes) {
         if (change.type === 'position' && change.id && change.position) {
+          changedPosition = true
           next = next.map((node) =>
             node.id === change.id
               ? {
@@ -636,13 +637,24 @@ function CanvasWorkbench() {
         if (change.type === 'select' && change.id) {
           const node = next.find((item) => item.id === change.id)
           if (node) {
-            setSelectedSourceRef(change.selected ? node.sourceRef : null)
-            setSelectedSourceRefs(change.selected ? [node.sourceRef] : [])
+            changedSelection = true
+            if (change.selected) {
+              selectedRefs.add(node.sourceRef)
+            } else {
+              selectedRefs.delete(node.sourceRef)
+            }
           }
         }
       }
+      if (changedSelection) {
+        const orderedSelection = next.filter((node) => selectedRefs.has(node.sourceRef)).map((node) => node.sourceRef)
+        selectedSourceRefsRef.current = orderedSelection
+        selectedSourceRefRef.current = orderedSelection[0] ?? null
+        setSelectedSourceRefs(orderedSelection)
+        setSelectedSourceRef(orderedSelection[0] ?? null)
+      }
       nodesRef.current = next
-      scheduleSave()
+      if (changedPosition) scheduleSave()
       return next
     })
   }
@@ -1144,10 +1156,6 @@ function CanvasWorkbench() {
 
   function onCanvasContextMenu(event: React.MouseEvent<HTMLDivElement>) {
     event.preventDefault()
-    if (suppressNextContextMenuRef.current) {
-      suppressNextContextMenuRef.current = false
-      return
-    }
     const target = event.target as HTMLElement
     const nodeHost = target.closest('.canvas-node') as HTMLElement | null
     if (nodeHost?.dataset.sourceRef) {
@@ -1213,24 +1221,12 @@ function CanvasWorkbench() {
           fitView={false}
           panOnDrag
           selectionOnDrag
-          selectNodesOnDrag={false}
           nodeOrigin={[0, 0]}
           proOptions={{ hideAttribution: true }}
         >
           <Background gap={22} size={1} color={isDarkMode ? 'rgba(146,158,151,0.18)' : 'rgba(111,124,116,0.16)'} />
           <Controls showZoom showFitView={false} showInteractive={false} />
         </ReactFlow>
-        {marqueeRect ? (
-          <div
-            className="selection-marquee"
-            style={{
-              left: marqueeRect.left,
-              top: marqueeRect.top,
-              width: marqueeRect.width,
-              height: marqueeRect.height,
-            }}
-          />
-        ) : null}
       </div>
 
       <div className="floating-toolbar">
@@ -1309,12 +1305,15 @@ function CanvasWorkbench() {
         <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
           {contextMenu.mode === 'canvas' ? (
             <>
-              <button onClick={() => createTypedNodeAt('note', contextMenu.worldX, contextMenu.worldY)}>New Note</button>
-              <button onClick={() => createTypedNodeAt('image', contextMenu.worldX, contextMenu.worldY)}>Image Node</button>
               <button onClick={() => createTypedNodeAt('prompt', contextMenu.worldX, contextMenu.worldY)}>Prompt Node</button>
               <button onClick={() => createTypedNodeAt('file_upload', contextMenu.worldX, contextMenu.worldY)}>File Node</button>
-              <button onClick={() => createTypedNodeAt('slider', contextMenu.worldX, contextMenu.worldY)}>Slider Node</button>
               <button onClick={() => createTypedNodeAt('code', contextMenu.worldX, contextMenu.worldY)}>Code Node</button>
+              <button onClick={() => createTypedNodeAt('panel', contextMenu.worldX, contextMenu.worldY)}>Panel</button>
+              <button onClick={() => createTypedNodeAt('img', contextMenu.worldX, contextMenu.worldY)}>Image</button>
+              <button onClick={() => createTypedNodeAt('gen_img', contextMenu.worldX, contextMenu.worldY)}>AI Image</button>
+              <button onClick={() => createTypedNodeAt('slider', contextMenu.worldX, contextMenu.worldY)}>Slider Node</button>
+              <button onClick={() => createTypedNodeAt('c_sharp', contextMenu.worldX, contextMenu.worldY)}>C# Node</button>
+              <button onClick={() => createTypedNodeAt('note', contextMenu.worldX, contextMenu.worldY)}>New Note</button>
             </>
           ) : (
             <>
@@ -1398,7 +1397,7 @@ function CanvasFlowNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
             />
             <small>{node.nodeType}</small>
           </header>
-          {renderFlowPorts(node, data.pendingConnection, data.onPortClick)}
+          {renderFlowPorts(node)}
           {!node.meta.collapsed ? renderInlineNodeEditor(node, data.updateNodeMeta) : null}
           {Array.isArray(node.meta.tags) && node.meta.tags.length ? (
             <div className="node-tags">
@@ -1553,7 +1552,7 @@ function normalizeNode(node: any): CanvasNode {
 
 function shouldUseStoredPorts(nodeType: CanvasNodeType, ports: any) {
   if (!Array.isArray(ports)) return false
-  return nodeType === 'code'
+  return nodeType === 'code' || nodeType === 'c_sharp' || nodeType === 'panel' || nodeType === 'img' || nodeType === 'gen_img'
 }
 
 function normalizeConnection(connection: any): CanvasConnection {
@@ -1582,6 +1581,9 @@ function normalizePort(port: any): NodePort {
     direction: port?.direction === 'input' ? 'input' : 'output',
     dataType: normalizePortDataType(port?.dataType),
     slot: numberOr(port?.slot, undefined, 0),
+    visible: Boolean(port?.visible ?? true),
+    required: Boolean(port?.required ?? false),
+    dynamic: Boolean(port?.dynamic ?? false),
   }
 }
 
@@ -1591,6 +1593,10 @@ function normalizePortDataType(value: any): PortDataType {
 }
 
 function resolveNodeSize(meta: Record<string, any>, nodeType: CanvasNodeType, fallback?: Partial<CanvasNode>) {
+  if (nodeType === 'panel') return { w: numberOr(fallback?.w, meta.w, meta.default_width, 320), h: numberOr(fallback?.h, meta.h, meta.default_height, 280) }
+  if (nodeType === 'img') return { w: numberOr(fallback?.w, meta.w, meta.default_width, 420), h: numberOr(fallback?.h, meta.h, meta.default_height, 360) }
+  if (nodeType === 'gen_img') return { w: numberOr(fallback?.w, meta.w, meta.default_width, 260), h: numberOr(fallback?.h, meta.h, meta.default_height, 210) }
+  if (nodeType === 'c_sharp') return { w: numberOr(fallback?.w, meta.w, meta.default_width, 520), h: numberOr(fallback?.h, meta.h, meta.default_height, 360) }
   if (nodeType === 'prompt') return { w: 300, h: 180 }
   if (nodeType === 'file_upload') return { w: 340, h: 210 }
   if (nodeType === 'slider') return { w: 290, h: 170 }
@@ -1601,15 +1607,56 @@ function resolveNodeSize(meta: Record<string, any>, nodeType: CanvasNodeType, fa
 }
 
 function normalizeNodeType(value: any): CanvasNodeType {
-  if (value === 'image' || value === 'prompt' || value === 'file_upload' || value === 'slider' || value === 'code' || value === 'note') {
+  if (
+    value === 'image' ||
+    value === 'prompt' ||
+    value === 'file_upload' ||
+    value === 'slider' ||
+    value === 'code' ||
+    value === 'note' ||
+    value === 'panel' ||
+    value === 'img' ||
+    value === 'gen_img' ||
+    value === 'c_sharp'
+  ) {
     return value
   }
   return 'message'
 }
 
 function getNodePorts(nodeType: CanvasNodeType, meta: Record<string, any>): NodePort[] {
+  if (Array.isArray(meta.ports) && (nodeType === 'panel' || nodeType === 'img' || nodeType === 'gen_img' || nodeType === 'c_sharp')) {
+    return meta.ports.map(normalizePort)
+  }
   if (nodeType === 'message') return []
   if (nodeType === 'image') return []
+  if (nodeType === 'panel') {
+    return [
+      { id: 'in', label: 'Input', direction: 'input', dataType: 'any', slot: 0, visible: true, required: false, dynamic: false },
+      { id: 'out', label: 'Output', direction: 'output', dataType: 'any', slot: 0, visible: true, required: false, dynamic: false },
+    ]
+  }
+  if (nodeType === 'img') {
+    return [
+      { id: 'in', label: 'image', direction: 'input', dataType: 'image', slot: 0, visible: true, required: false, dynamic: false },
+      { id: 'out', label: 'image', direction: 'output', dataType: 'image', slot: 0, visible: true, required: false, dynamic: false },
+    ]
+  }
+  if (nodeType === 'gen_img') {
+    return [
+      { id: 'txt', label: 'prompt', direction: 'input', dataType: 'text', slot: 0, visible: true, required: true, dynamic: false },
+      { id: 'img_in', label: 'image', direction: 'input', dataType: 'image', slot: 1, visible: true, required: false, dynamic: false },
+      { id: 'img_out', label: 'image', direction: 'output', dataType: 'image', slot: 0, visible: true, required: false, dynamic: false },
+    ]
+  }
+  if (nodeType === 'c_sharp') {
+    return [
+      { id: 'x', label: 'x', direction: 'input', dataType: 'any', slot: 0, visible: true, required: false, dynamic: true },
+      { id: 'y', label: 'y', direction: 'input', dataType: 'any', slot: 1, visible: true, required: false, dynamic: true },
+      { id: 'out', label: 'out', direction: 'output', dataType: 'any', slot: 0, visible: true, required: false, dynamic: true },
+      { id: 'a', label: 'a', direction: 'output', dataType: 'any', slot: 1, visible: true, required: false, dynamic: true },
+    ]
+  }
   if (nodeType === 'prompt') {
     return [
       { id: 'clip', label: 'clip', direction: 'input', dataType: 'any', slot: 0 },
@@ -1693,26 +1740,16 @@ function renderPorts(
   )
 }
 
-function renderFlowPorts(
-  node: CanvasNode,
-  pending: PendingConnection | null,
-  onPortClick: (node: CanvasNode, port: NodePort, event?: React.MouseEvent<HTMLButtonElement>) => void,
-) {
+function renderFlowPorts(node: CanvasNode) {
   const ports = Array.isArray(node.meta.ports) ? node.meta.ports : getNodePorts(node.nodeType, node.meta)
   if (!ports.length) return null
   const inputs = ports.filter((port) => port.direction === 'input')
   const outputs = ports.filter((port) => port.direction === 'output')
 
   const renderPort = (port: NodePort) => (
-    <button
+    <div
       key={port.id}
-      type="button"
-      className={`port port-${port.direction} nodrag ${pending?.nodeId === node.id && pending.portId === port.id ? 'active' : ''}`}
-      data-port-id={port.id}
-      onClick={(event) => {
-        event.stopPropagation()
-        onPortClick(node, port, event)
-      }}
+      className={`port port-${port.direction} nodrag`}
     >
       <Handle
         id={port.id}
@@ -1721,7 +1758,7 @@ function renderFlowPorts(
         className="port-handle"
       />
       <span>{port.label}</span>
-    </button>
+    </div>
   )
 
   return (
@@ -1745,12 +1782,38 @@ function renderNodeBody(
       </label>
     )
   }
+  if (node.nodeType === 'panel') {
+    return (
+      <label className="node-field">
+        <span>Panel Body</span>
+        <textarea value={node.meta.body ?? ''} onChange={(event) => updateMeta(node.sourceRef, { body: event.target.value })} />
+      </label>
+    )
+  }
+  if (node.nodeType === 'gen_img') {
+    return (
+      <label className="node-field">
+        <span>Prompt</span>
+        <textarea value={node.meta.prompt ?? ''} onChange={(event) => updateMeta(node.sourceRef, { prompt: event.target.value })} />
+      </label>
+    )
+  }
   if (node.nodeType === 'file_upload') {
     return (
       <label className="node-field">
         <span>File Path</span>
         <input value={node.meta.filePath ?? ''} onChange={(event) => updateMeta(node.sourceRef, { filePath: event.target.value })} />
       </label>
+    )
+  }
+  if (node.nodeType === 'img') {
+    return (
+      <input
+        className="node-inline-input"
+        value={node.meta.imagePath ?? ''}
+        placeholder="Image path or URL..."
+        onChange={(event) => updateMeta(node.sourceRef, { imagePath: event.target.value })}
+      />
     )
   }
   if (node.nodeType === 'slider') {
@@ -1768,7 +1831,7 @@ function renderNodeBody(
       </label>
     )
   }
-  if (node.nodeType === 'code') {
+  if (node.nodeType === 'code' || node.nodeType === 'c_sharp') {
     return (
       <label className="node-field">
         <span>C# Body</span>
@@ -1776,7 +1839,7 @@ function renderNodeBody(
       </label>
     )
   }
-  if (node.nodeType === 'image') {
+  if (node.nodeType === 'image' || node.nodeType === 'img') {
     const imageSrc = resolveCanvasImageSource(node.meta.imageDataUrl ?? node.meta.imagePath)
     return (
       <div className="node-image-field">
@@ -1811,7 +1874,27 @@ function renderInlineNodeEditor(
       />
     )
   }
-  if (node.nodeType === 'code') {
+  if (node.nodeType === 'panel') {
+    return (
+      <textarea
+        className="node-inline-textarea"
+        value={node.meta.body ?? ''}
+        placeholder="Panel text..."
+        onChange={(event) => updateMeta(node.sourceRef, { body: event.target.value })}
+      />
+    )
+  }
+  if (node.nodeType === 'gen_img') {
+    return (
+      <textarea
+        className="node-inline-textarea prompt"
+        value={node.meta.prompt ?? ''}
+        placeholder="Image prompt..."
+        onChange={(event) => updateMeta(node.sourceRef, { prompt: event.target.value })}
+      />
+    )
+  }
+  if (node.nodeType === 'code' || node.nodeType === 'c_sharp') {
     return (
       <textarea
         className="node-inline-textarea code"
@@ -1912,7 +1995,7 @@ function renderNodePreview(node: CanvasNode, onPreviewImage: (src: string, title
   if (node.nodeType === 'file_upload' && node.meta.filePath) {
     return <div className="node-preview-chip">{String(node.meta.filePath)}</div>
   }
-  if (node.nodeType === 'image' && node.meta.imagePath) {
+  if ((node.nodeType === 'image' || node.nodeType === 'img') && node.meta.imagePath) {
     const imageSrc = resolveCanvasImageSource(node.meta.imageDataUrl ?? node.meta.imagePath)
     return imageSrc ? (
       <button type="button" className="node-image-chip" onClick={() => onPreviewImage(imageSrc, String(node.meta.title ?? 'Image'))}>
@@ -1925,7 +2008,10 @@ function renderNodePreview(node: CanvasNode, onPreviewImage: (src: string, title
   if (node.nodeType === 'prompt' && node.meta.prompt) {
     return <div className="node-preview-chip">{String(node.meta.prompt).slice(0, 40)}</div>
   }
-  if (node.nodeType === 'code') {
+  if (node.nodeType === 'gen_img') {
+    return <div className="node-preview-chip">{node.meta.prompt ? String(node.meta.prompt).slice(0, 40) : 'Prompt required'}</div>
+  }
+  if (node.nodeType === 'code' || node.nodeType === 'c_sharp') {
     return <div className="node-preview-chip">{`${node.meta.inputCount ?? 2} in / ${node.meta.outputCount ?? 1} out`}</div>
   }
   return null
@@ -1934,8 +2020,9 @@ function renderNodePreview(node: CanvasNode, onPreviewImage: (src: string, title
 function getNodePreviewText(node: CanvasNode) {
   if (node.nodeType === 'prompt') return node.meta.prompt || node.meta.body || 'No prompt'
   if (node.nodeType === 'file_upload') return node.meta.filePath || 'No file path'
-  if (node.nodeType === 'image') return node.meta.imagePath || 'No image path'
+  if (node.nodeType === 'image' || node.nodeType === 'img') return node.meta.imagePath || 'No image path'
   if (node.nodeType === 'slider') return `Range ${node.meta.min ?? 0} - ${node.meta.max ?? 1}`
+  if (node.nodeType === 'gen_img') return node.meta.prompt || 'No image prompt'
   return node.meta.body || 'No content'
 }
 
@@ -2027,6 +2114,71 @@ function findPortAtPoint(clientX: number, clientY: number, nodes: CanvasNode[]) 
 }
 
 function buildDefaultNodeMeta(nodeType: CanvasNodeType, sourceRef: string) {
+  if (nodeType === 'panel') {
+    return {
+      sourceRef,
+      nodeType,
+      title: 'Panel',
+      summary: 'Display container',
+      body: 'Use this panel to show text, links, data, or connection results.',
+      role: 'note',
+      kind: 'note',
+      collapsed: false,
+      default_width: 320,
+      default_height: 280,
+      ports: getNodePorts(nodeType, {}),
+    }
+  }
+  if (nodeType === 'img') {
+    return {
+      sourceRef,
+      nodeType,
+      title: 'Image',
+      summary: 'Image preview',
+      body: 'Paste an image path, URL, or data URL.',
+      imagePath: '',
+      role: 'tool',
+      kind: 'image',
+      collapsed: false,
+      default_width: 420,
+      default_height: 360,
+      ports: getNodePorts(nodeType, {}),
+    }
+  }
+  if (nodeType === 'gen_img') {
+    return {
+      sourceRef,
+      nodeType,
+      title: 'AI Image',
+      summary: 'Generate image',
+      body: 'Generate an image from a prompt and optional reference image.',
+      prompt: '',
+      seed: 0,
+      role: 'tool',
+      kind: 'tool',
+      collapsed: false,
+      default_width: 260,
+      default_height: 210,
+      ports: getNodePorts(nodeType, {}),
+    }
+  }
+  if (nodeType === 'c_sharp') {
+    return {
+      sourceRef,
+      nodeType,
+      title: 'C#',
+      summary: 'C# script',
+      body: '// write code here',
+      inputCount: 2,
+      outputCount: 2,
+      role: 'tool',
+      kind: 'tool',
+      collapsed: false,
+      default_width: 520,
+      default_height: 360,
+      ports: getNodePorts(nodeType, {}),
+    }
+  }
   if (nodeType === 'image') {
     return {
       sourceRef,

@@ -64,9 +64,7 @@ html, body, #root {
   position: absolute;
   inset: 0;
   overflow: hidden;
-  touch-action: none;
   cursor: default;
-  user-select: none;
 }
 
 .flow-canvas {
@@ -110,34 +108,10 @@ html, body, #root {
   color: var(--button-fg);
 }
 
-.light-canvas.is-pan {
-  cursor: grabbing;
-}
-
-.light-canvas.is-drag {
-  cursor: grabbing;
-}
-
-.light-canvas.is-resize {
-  cursor: nwse-resize;
-}
-
-.light-canvas.is-select {
-  cursor: crosshair;
-}
-
 .canvas-content {
   position: absolute;
   inset: 0;
   transform-origin: 0 0;
-}
-
-.selection-marquee {
-  position: fixed;
-  z-index: 25;
-  border: 1px solid rgba(78, 136, 108, 0.72);
-  background: rgba(78, 136, 108, 0.12);
-  pointer-events: none;
 }
 
 .connection-layer {
@@ -192,8 +166,28 @@ html, body, #root {
 .canvas-node.type-file_upload,
 .canvas-node.type-slider,
 .canvas-node.type-code,
+.canvas-node.type-panel,
+.canvas-node.type-img,
+.canvas-node.type-gen_img,
+.canvas-node.type-c_sharp,
 .canvas-node.type-note,
 .canvas-node.type-message { background: rgba(42, 44, 43, 0.94); }
+
+.canvas-node.type-panel {
+  border-color: rgba(42, 173, 140, 0.45);
+}
+
+.canvas-node.type-img {
+  border-color: rgba(82, 143, 255, 0.45);
+}
+
+.canvas-node.type-gen_img {
+  border-color: rgba(215, 189, 53, 0.58);
+}
+
+.canvas-node.type-c_sharp {
+  border-color: rgba(150, 172, 255, 0.5);
+}
 
 .canvas-node:active {
   cursor: grabbing;
