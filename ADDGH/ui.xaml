@@ -263,7 +263,11 @@
                             </Grid.ColumnDefinitions>
                             
                             <Button x:Name="BtnUploadImage" Grid.Column="0" Content="+" Foreground="#A0A0A0" Background="Transparent" BorderThickness="0" FontSize="22" FontWeight="Medium" Cursor="Hand" ToolTip="上传图片" Margin="0,0,10,0"/>
-                            <Button x:Name="BtnStop" Grid.Column="1" Content="停止" Visibility="Collapsed" Foreground="#FF6B6B" Background="Transparent" BorderThickness="0" FontSize="16" Cursor="Hand" ToolTip="停止按钮" Margin="0,0,10,0"/>
+                            <Button x:Name="BtnStop" Grid.Column="1" Style="{StaticResource IconButtonStyle}" Visibility="Collapsed" Foreground="#FF6B6B" Background="Transparent" BorderThickness="0" Cursor="Hand" ToolTip="停止按钮" Margin="0,0,10,0" Width="28" Height="28" Padding="0">
+                                <Grid Width="28" Height="28">
+                                    <Border Width="8" Height="8" CornerRadius="1" Background="#FF6B6B" HorizontalAlignment="Center" VerticalAlignment="Center" SnapsToDevicePixels="True"/>
+                                </Grid>
+                            </Button>
                             <Button x:Name="BtnAgentModeDropdown" Grid.Column="2" Content="Create ▾" Foreground="#A0A0A0" Background="Transparent" BorderThickness="0" FontSize="14" Cursor="Hand" ToolTip="执行模式">
                                 <Button.ContextMenu>
                                     <ContextMenu Background="#1E1E1E" Foreground="#E0E0E0" BorderBrush="#333" BorderThickness="1" Padding="4">

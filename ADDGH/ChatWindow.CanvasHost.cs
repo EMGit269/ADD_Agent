@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Reflection;
 using System.Text;
+using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -51,9 +53,9 @@ namespace ADDGH
             _txtCanvasStatus = (TextBlock)_window.FindName("TxtCanvasStatus");
 
             if (_btnCanvasPaneView != null)
-                _btnCanvasPaneView.Click += (s, e) => SetWorkbenchPane(WorkbenchPane.Canvas);
+                _btnCanvasPaneView.Click += (s, e) => SetWorkbenchPane(WorkbenchPane.Inspector);
             if (_btnInspectorPaneView != null)
-                _btnInspectorPaneView.Click += (s, e) => SetWorkbenchPane(WorkbenchPane.Inspector);
+                _btnInspectorPaneView.Click += (s, e) => SetWorkbenchPane(WorkbenchPane.Canvas);
             if (_btnCanvasSync != null)
                 _btnCanvasSync.Click += (s, e) => NotifyCanvasConversationChanged(true);
 
@@ -84,10 +86,18 @@ namespace ADDGH
                     _canvasPane.Visibility = canvasActive ? Visibility.Visible : Visibility.Collapsed;
                 if (_inspectorPane != null)
                     _inspectorPane.Visibility = canvasActive ? Visibility.Collapsed : Visibility.Visible;
+                if (_btnCanvasPaneView != null)
+                    _btnCanvasPaneView.Visibility = _isCodeVisible && canvasActive ? Visibility.Visible : Visibility.Collapsed;
+                if (_btnInspectorPaneView != null)
+                    _btnInspectorPaneView.Visibility = _isCodeVisible && !canvasActive ? Visibility.Visible : Visibility.Collapsed;
                 if (_btnCanvasSync != null)
                     _btnCanvasSync.Visibility = _isCodeVisible && canvasActive ? Visibility.Visible : Visibility.Collapsed;
                 if (_btnToggleViewMode != null)
                     _btnToggleViewMode.Visibility = _isCodeVisible && !canvasActive ? Visibility.Visible : Visibility.Collapsed;
+                if (_chatCodeSplitter != null)
+                    _chatCodeSplitter.Visibility = _isCodeVisible ? Visibility.Visible : Visibility.Collapsed;
+                if (_splitterCol != null)
+                    _splitterCol.Width = _isCodeVisible ? new GridLength(4) : new GridLength(0);
 
                 ApplyWorkbenchTabStyle(_btnCanvasPaneView, canvasActive);
                 ApplyWorkbenchTabStyle(_btnInspectorPaneView, !canvasActive);
@@ -298,6 +308,10 @@ namespace ADDGH
                             }
                         }
                         break;
+                    case "canvas_delete":
+                        DeleteCanvasDocument(payload?["canvasId"]?.ToString());
+                        NotifyCanvasConversationChanged(true);
+                        break;
                     case "capture_rhino_view":
                         {
                             string captureJson = ExecuteCaptureRhinoViewport(
@@ -320,6 +334,12 @@ namespace ADDGH
                         break;
                     case "canvas_ai_image_config_request":
                         PostCanvasMessage("canvas_ai_image_config", BuildCanvasAiImageConfigPayload());
+                        break;
+                    case "canvas_prompt_optimize_request":
+                        _ = OptimizeCanvasPromptNodeAsync(payload);
+                        break;
+                    case "canvas_switch_to_code":
+                        SetWorkbenchPane(WorkbenchPane.Inspector);
                         break;
                     case "open_inspector_for_source":
                         SetWorkbenchPane(WorkbenchPane.Inspector);
@@ -401,18 +421,170 @@ namespace ADDGH
         {
             try
             {
-                if (_canvasWebView?.CoreWebView2 == null) return;
                 var message = new JObject
                 {
                     ["type"] = type,
                     ["payload"] = payload ?? new JObject()
                 };
-                _canvasWebView.CoreWebView2.PostWebMessageAsJson(message.ToString(Formatting.None));
+                string json = message.ToString(Formatting.None);
+                Action post = () =>
+                {
+                    if (_canvasWebView?.CoreWebView2 == null) return;
+                    _canvasWebView.CoreWebView2.PostWebMessageAsJson(json);
+                };
+
+                var dispatcher = _canvasWebView?.Dispatcher ?? _window?.Dispatcher;
+                if (dispatcher != null && !dispatcher.CheckAccess())
+                    dispatcher.BeginInvoke(post);
+                else
+                    post();
             }
             catch (Exception ex)
             {
                 AddGhLog.Debug("PostCanvasMessage failed: " + ex.Message);
             }
+        }
+
+        private static async System.Threading.Tasks.Task OptimizeCanvasPromptNodeAsync(JObject payload)
+        {
+            string sourceRef = payload?["sourceRef"]?.ToString() ?? "";
+            try
+            {
+                string prompt = payload?["prompt"]?.ToString() ?? "";
+                JObject inputPayload = payload?["input"] as JObject;
+                string input = inputPayload?["text"]?.ToString() ?? payload?["input"]?.ToString() ?? "";
+                JArray inputImages = inputPayload?["images"] as JArray ?? new JArray();
+                var providerSettings = GetCanvasPromptOptimizerProviderSettings(inputImages.Count > 0);
+                if (string.IsNullOrWhiteSpace(providerSettings?.ApiKey))
+                {
+                    PostCanvasMessage("canvas_prompt_optimize_result", new JObject
+                    {
+                        ["sourceRef"] = sourceRef,
+                        ["success"] = false,
+                        ["error"] = inputImages.Count > 0 ? "Vision/Qwen API key is empty." : "Qwen API key is empty."
+                    });
+                    return;
+                }
+
+                JObject requestBody = BuildCanvasPromptOptimizerRequestBody(providerSettings, prompt, input, inputImages);
+
+                HttpResponseMessage response = null;
+                string usedUrl = null;
+                string lastError = null;
+                using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(45)))
+                {
+                foreach (var endpoint in BuildEndpointCandidates(providerSettings.BaseUrl))
+                {
+                    usedUrl = endpoint.Url;
+                    response = await SendProviderRequestAsync(providerSettings, requestBody, endpoint.Url, cts.Token).ConfigureAwait(false);
+                    if (response.IsSuccessStatusCode) break;
+                    lastError = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    if (!ShouldTryNextEndpoint(response.StatusCode)) break;
+                }
+
+                if (response == null || !response.IsSuccessStatusCode)
+                    throw new Exception("Qwen request failed. " + (lastError ?? usedUrl ?? ""));
+
+                string responseJson = await ReadResponseTextAsync(response, cts.Token).ConfigureAwait(false);
+                if (!TryParseAssistantMessageFromResponse(responseJson, out JObject messageNode, out string parseError))
+                    throw new Exception("Qwen response parse failed: " + parseError);
+
+                string optimized = StripPromptOptimizerThinking(messageNode["content"]?.ToString());
+                if (string.IsNullOrWhiteSpace(optimized))
+                    optimized = StripPromptOptimizerThinking(messageNode["reasoning_content"]?.ToString());
+                if (string.IsNullOrWhiteSpace(optimized))
+                    throw new Exception("Qwen returned empty prompt.");
+
+                PostCanvasMessage("canvas_prompt_optimize_result", new JObject
+                {
+                    ["sourceRef"] = sourceRef,
+                    ["success"] = true,
+                    ["prompt"] = optimized.Trim()
+                });
+                }
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("OptimizeCanvasPromptNodeAsync failed: " + ex.Message);
+                PostCanvasMessage("canvas_prompt_optimize_result", new JObject
+                {
+                    ["sourceRef"] = sourceRef,
+                    ["success"] = false,
+                    ["error"] = ex.Message
+                });
+            }
+        }
+
+        private static ProviderRuntimeSettings GetCanvasPromptOptimizerProviderSettings(bool hasImages)
+        {
+            if (hasImages)
+            {
+                var visionSettings = GetVisionProviderRuntimeSettings();
+                if (!string.IsNullOrWhiteSpace(visionSettings?.ApiKey))
+                    return visionSettings;
+            }
+            return GetProviderRuntimeSettings("qwen");
+        }
+
+        private static JObject BuildCanvasPromptOptimizerRequestBody(ProviderRuntimeSettings providerSettings, string prompt, string input, JArray inputImages)
+        {
+            var userContent = new JArray
+            {
+                new JObject
+                {
+                    ["type"] = "text",
+                    ["text"] = "Canvas input-port data:\n" + (string.IsNullOrWhiteSpace(input) ? "(empty)" : input) + "\n\nUser prompt:\n" + (string.IsNullOrWhiteSpace(prompt) ? "(empty)" : prompt)
+                }
+            };
+
+            foreach (var image in inputImages.OfType<JObject>().Take(4))
+            {
+                string dataUrl = image["dataUrl"]?.ToString() ?? "";
+                if (!dataUrl.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                userContent.Add(new JObject
+                {
+                    ["type"] = "image_url",
+                    ["image_url"] = new JObject
+                    {
+                        ["url"] = dataUrl
+                    }
+                });
+            }
+
+            return new JObject
+            {
+                ["model"] = providerSettings.ModelName,
+                ["stream"] = false,
+                ["temperature"] = 0.2,
+                ["enable_thinking"] = false,
+                ["thinking"] = new JObject { ["type"] = "disabled" },
+                ["messages"] = new JArray
+                {
+                    new JObject
+                    {
+                        ["role"] = "system",
+                        ["content"] = "You are a fast prompt rewriting engine. Do not reason step by step. Do not output analysis. Use the user's original prompt and canvas input-port data, including multimodal references, to produce one clearer, executable, information-complete prompt. Return only the optimized prompt."
+                    },
+                    new JObject
+                    {
+                        ["role"] = "user",
+                        ["content"] = userContent
+                    }
+                }
+            };
+        }
+
+        private static string StripPromptOptimizerThinking(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return text;
+            string result = text.Trim();
+            int thinkEnd = result.LastIndexOf("</think>", StringComparison.OrdinalIgnoreCase);
+            if (thinkEnd >= 0)
+                result = result.Substring(thinkEnd + "</think>".Length).Trim();
+            if (result.StartsWith("<think>", StringComparison.OrdinalIgnoreCase))
+                return "";
+            return result;
         }
 
         private static JObject BuildCanvasBootstrapPayload()
@@ -462,6 +634,8 @@ namespace ADDGH
             {
                 string role = ChatMessageHelpers.TryGetRole(msg);
                 if (string.Equals(role, "system", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (string.Equals(role, "user", StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 JObject messageObj = msg as JObject;
@@ -849,6 +1023,48 @@ namespace ADDGH
                 AddGhLog.Warn("BuildCanvasHistoryItems failed: " + ex.Message);
             }
             return result;
+        }
+
+        private static void DeleteCanvasDocument(string canvasId)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(canvasId))
+                    return;
+
+                string path = GetCanvasDocumentStatePath(canvasId);
+                if (File.Exists(path))
+                    File.Delete(path);
+
+                if (string.Equals(_activeCanvasId, canvasId, StringComparison.OrdinalIgnoreCase))
+                {
+                    string nextPath = Directory.GetFiles(GetCanvasDocumentDirectory(), "*.json")
+                        .OrderByDescending(File.GetLastWriteTimeUtc)
+                        .FirstOrDefault();
+
+                    if (!string.IsNullOrWhiteSpace(nextPath))
+                    {
+                        try
+                        {
+                            JObject next = JObject.Parse(File.ReadAllText(nextPath, Encoding.UTF8));
+                            _activeCanvasId = next["canvasId"]?.ToString();
+                        }
+                        catch
+                        {
+                            _activeCanvasId = Path.GetFileNameWithoutExtension(nextPath);
+                        }
+                    }
+                    else
+                    {
+                        _activeCanvasId = GetDefaultCanvasDocumentId();
+                        EnsureCanvasDocumentExists(_activeCanvasId, "Canvas");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("DeleteCanvasDocument failed: " + ex.Message);
+            }
         }
 
         private static JObject LoadCanvasConversationEnvelope(string conversationId)

@@ -85,7 +85,12 @@ namespace ADDGH
 
         private static string RegisterCanvasUndoRecord(string funcName, string callId, string snapshotPath, string toolResult)
         {
-            if (string.IsNullOrWhiteSpace(snapshotPath) || !File.Exists(snapshotPath)) return null;
+            if (string.IsNullOrWhiteSpace(snapshotPath) || !File.Exists(snapshotPath))
+            {
+                if (IsCanvasMutatingTool(funcName))
+                    AddGhLog.Warn("Canvas undo snapshot missing for tool: " + (funcName ?? "?"));
+                return null;
+            }
             if (string.IsNullOrWhiteSpace(toolResult) || toolResult.StartsWith("Error:", StringComparison.OrdinalIgnoreCase)) return null;
 
             var record = new CanvasUndoRecord
@@ -114,6 +119,22 @@ namespace ADDGH
             string detail = (toolResult ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
             if (detail.Length > 90) detail = detail.Substring(0, 90) + "...";
             return string.IsNullOrWhiteSpace(detail) ? name : name + " · " + detail;
+        }
+
+        private static List<CanvasUndoRecord> GetUndoRecordsFrom(CanvasUndoRecord selected)
+        {
+            var records = new List<CanvasUndoRecord>();
+            if (selected == null) return records;
+
+            int start = _canvasUndoStack.IndexOf(selected);
+            if (start < 0) return records;
+            for (int i = start; i < _canvasUndoStack.Count; i++)
+            {
+                var record = _canvasUndoStack[i];
+                if (record != null && !record.IsUndone)
+                    records.Add(record);
+            }
+            return records;
         }
 
         private static CanvasUndoRecord FindLatestUndoableRecord()
@@ -156,12 +177,42 @@ namespace ADDGH
             button.FontSize = 11;
             button.Padding = new Thickness(9, 3, 9, 3);
             button.Margin = new Thickness(12, 0, 0, 0);
+            button.Content = "↶ 撤销";
             button.Template = BuildSmallUndoButtonTemplate();
             button.Click += (s, e) => TryUndoCanvasOperation(record.UndoId);
 
             Grid.SetColumn(button, 2);
             grid.Children.Add(button);
             record.UndoButton = button;
+        }
+
+        private static void AttachUnavailableUndoButtonToStatsCard(Border card)
+        {
+            if (card == null) return;
+            var grid = card.Child as Grid;
+            if (grid == null) return;
+
+            if (grid.ColumnDefinitions.Count < 3)
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var button = new Button
+            {
+                Content = "不可撤销",
+                FontSize = 11,
+                Foreground = new SolidColorBrush(Color.FromRgb(130, 130, 130)),
+                Background = Brushes.Transparent,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(55, 55, 55)),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(9, 3, 9, 3),
+                Margin = new Thickness(12, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                IsEnabled = false,
+                ToolTip = "这条统计没有可用的撤销快照，常见于历史会话刷新、工具失败或快照创建失败。"
+            };
+            button.Template = BuildSmallUndoButtonTemplate();
+
+            Grid.SetColumn(button, 2);
+            grid.Children.Add(button);
         }
 
         private static ControlTemplate BuildSmallUndoButtonTemplate()
@@ -187,6 +238,45 @@ namespace ADDGH
         {
             var record = _canvasUndoStack.FirstOrDefault(r => r != null && r.UndoId == undoId);
             if (record == null || record.IsUndone) return;
+
+            var affectedRecords = GetUndoRecordsFrom(record);
+            if (affectedRecords.Count == 0) return;
+
+            var historyConfirm = System.Windows.MessageBox.Show(
+                "将强制回滚 Grasshopper 画布到这次操作执行前的状态。\n\n这会覆盖此操作之后的手动改动，并使这次及之后的 agent 画布操作都视为已撤销。\n\n是否继续？",
+                "撤销历史 agent 画布操作",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Warning);
+            if (historyConfirm != MessageBoxResult.OK) return;
+
+            string historyError = RestoreCanvasUndoSnapshot(record);
+            if (!string.IsNullOrWhiteSpace(historyError))
+            {
+                AppendQuietDiagnosticCard("撤销画布操作", "回滚失败：" + historyError);
+                return;
+            }
+
+            foreach (var affected in affectedRecords)
+            {
+                affected.IsUndone = true;
+                if (affected.UndoButton != null)
+                {
+                    affected.UndoButton.Content = "已撤销";
+                    affected.UndoButton.IsEnabled = false;
+                }
+                PruneMessagesForUndoneTool(affected.ToolCallId);
+            }
+
+            _messages.Add(new JObject
+            {
+                ["role"] = "system",
+                ["content"] = "用户撤销了一次历史画布操作，当前 Grasshopper 画布已回退到所选操作执行前的状态；该操作及之后的 agent 画布操作不再可作为当前上下文依据。"
+            });
+            EnforceChatHistoryLimit();
+            SyncActiveHistoryConversation();
+            NotifyCanvasConversationChanged(true);
+            AppendSystemMessage("已撤销历史画布操作：" + record.Summary);
+            if (affectedRecords.Count >= 0) return;
 
             var latest = FindLatestUndoableRecord();
             if (!ReferenceEquals(record, latest))

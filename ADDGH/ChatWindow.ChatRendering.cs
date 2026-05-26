@@ -650,9 +650,11 @@ namespace ADDGH
                     string timestamp = DateTime.Now.ToString("yyyyMMddHHmmss");
                     string fileName = "ref_" + timestamp + ".json";
                     string filePath = System.IO.Path.Combine(refPath, fileName);
-                    System.IO.File.WriteAllText(filePath, canvasJson, System.Text.Encoding.UTF8);
+                    string skillFileName;
+                    string referenceJson = EnrichReferenceJsonForSave(canvasJson, description, fileName, out skillFileName);
+                    System.IO.File.WriteAllText(filePath, referenceJson, System.Text.Encoding.UTF8);
 
-                    string result = UpdateReferenceIndexSkill(description, fileName);
+                    string result = UpdateReferenceIndexSkill(description, fileName, skillFileName);
 
                     AppendSystemMessage($"参考已保存：{fileName}\n{result}\nJSON：{filePath}\n索引：{indexPath}");
                 } catch (Exception ex) {
@@ -660,6 +662,176 @@ namespace ADDGH
                     AppendQuietDiagnosticCard("保存参考", "出现异常：" + ex.Message);
                 }
             });
+        }
+
+        private static string EnrichReferenceJsonForSave(string canvasJson, string description, string fileName, out string skillFileName)
+        {
+            skillFileName = null;
+            try
+            {
+                var root = JObject.Parse(canvasJson);
+                var components = root["components"] as JArray ?? new JArray();
+                var csharpScripts = new JArray();
+
+                foreach (var componentToken in components.OfType<JObject>())
+                {
+                    if (!IsReferenceCSharpScriptComponent(componentToken)) continue;
+
+                    var scriptBodies = componentToken["script_bodies"] as JObject;
+                    string primaryCode = SelectReferencePrimaryScriptBody(scriptBodies);
+                    if (string.IsNullOrWhiteSpace(primaryCode)) continue;
+
+                    var script = new JObject
+                    {
+                        ["id"] = componentToken["id"]?.ToString() ?? "",
+                        ["guid"] = componentToken["guid"]?.ToString() ?? "",
+                        ["name"] = componentToken["name"]?.ToString() ?? "",
+                        ["nickname"] = componentToken["nickname"]?.ToString() ?? "",
+                        ["runtime_type_hint"] = componentToken["runtime_type_hint"]?.ToString() ?? "",
+                        ["pivot"] = componentToken["pivot"]?.DeepClone(),
+                        ["inputs"] = BuildReferencePortSummary(componentToken["inputs"] as JArray),
+                        ["outputs"] = BuildReferencePortSummary(componentToken["outputs"] as JArray),
+                        ["code"] = primaryCode
+                    };
+
+                    if (scriptBodies != null && scriptBodies.Count > 0)
+                        script["script_bodies"] = scriptBodies.DeepClone();
+
+                    csharpScripts.Add(script);
+                }
+
+                if (csharpScripts.Count > 0)
+                    skillFileName = WriteReferenceCSharpSkill(description, fileName, csharpScripts);
+
+                root["reference_metadata"] = new JObject
+                {
+                    ["schema"] = "addgh-reference-v2",
+                    ["description"] = description ?? "",
+                    ["file_name"] = fileName ?? "",
+                    ["skill_file"] = skillFileName ?? "",
+                    ["saved_at"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                    ["has_csharp_script_code"] = csharpScripts.Count > 0,
+                    ["csharp_script_count"] = csharpScripts.Count,
+                    ["csharp_scripts"] = csharpScripts,
+                    ["usage_hint"] = "Agent should inspect reference_metadata.csharp_scripts for reusable C# bodies before recreating script components."
+                };
+
+                return root.ToString(Newtonsoft.Json.Formatting.None);
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("EnrichReferenceJsonForSave failed: " + ex.Message);
+                return canvasJson;
+            }
+        }
+
+        private static string WriteReferenceCSharpSkill(string description, string referenceFileName, JArray csharpScripts)
+        {
+            if (csharpScripts == null || csharpScripts.Count == 0) return null;
+
+            string safeBase = System.IO.Path.GetFileNameWithoutExtension(referenceFileName ?? "");
+            if (string.IsNullOrWhiteSpace(safeBase)) safeBase = "reference";
+            string skillFileName = "reference_" + safeBase + "_csharp.md";
+            string skillPath = System.IO.Path.Combine(GetSkillsDirectory(), skillFileName);
+            if (!System.IO.Directory.Exists(GetSkillsDirectory())) System.IO.Directory.CreateDirectory(GetSkillsDirectory());
+
+            var sb = new StringBuilder();
+            sb.AppendLine("---");
+            sb.AppendLine("name: reference-" + safeBase.Replace("_", "-") + "-csharp");
+            sb.AppendLine("description: 自动拆分保存的 reference C# 代码。对应 " + referenceFileName + "；当任务需要复用该参考画布中的 C# Script 电池时读取。");
+            sb.AppendLine("---");
+            sb.AppendLine();
+            sb.AppendLine("# Reference C# Scripts");
+            sb.AppendLine();
+            sb.AppendLine("- Reference JSON: `reference/" + referenceFileName + "`");
+            sb.AppendLine("- 描述: " + ((description ?? "").Replace("\r", " ").Replace("\n", " ").Trim()));
+            sb.AppendLine("- 使用方式: 先读取 reference JSON 理解电池连接和端口，再读取本 skill 中对应 C# 代码块复用或改造。");
+            sb.AppendLine();
+
+            foreach (var script in csharpScripts.OfType<JObject>())
+            {
+                string id = script["id"]?.ToString() ?? "";
+                string nickname = script["nickname"]?.ToString() ?? "";
+                string name = script["name"]?.ToString() ?? "";
+                string title = !string.IsNullOrWhiteSpace(nickname) ? nickname : (!string.IsNullOrWhiteSpace(name) ? name : id);
+                string code = script["code"]?.ToString() ?? "";
+
+                sb.AppendLine("## " + title);
+                sb.AppendLine();
+                sb.AppendLine("- id: `" + id + "`");
+                sb.AppendLine("- guid: `" + (script["guid"]?.ToString() ?? "") + "`");
+                sb.AppendLine("- component: `" + name + "`");
+                sb.AppendLine("- runtime: `" + (script["runtime_type_hint"]?.ToString() ?? "") + "`");
+                sb.AppendLine("- inputs: " + FormatReferencePortListForSkill(script["inputs"] as JArray));
+                sb.AppendLine("- outputs: " + FormatReferencePortListForSkill(script["outputs"] as JArray));
+                sb.AppendLine();
+                sb.AppendLine("```csharp");
+                sb.AppendLine(code.TrimEnd());
+                sb.AppendLine("```");
+                sb.AppendLine();
+            }
+
+            System.IO.File.WriteAllText(skillPath, sb.ToString(), Encoding.UTF8);
+            return skillFileName;
+        }
+
+        private static string FormatReferencePortListForSkill(JArray ports)
+        {
+            if (ports == null || ports.Count == 0) return "(none)";
+            var parts = ports.OfType<JObject>()
+                .Select(p => "`" + (p["index"]?.ToString() ?? "?") + ":" + (p["name"]?.ToString() ?? "") + "`")
+                .ToList();
+            return parts.Count == 0 ? "(none)" : string.Join(", ", parts);
+        }
+
+        private static bool IsReferenceCSharpScriptComponent(JObject component)
+        {
+            if (component == null) return false;
+            string name = component["name"]?.ToString() ?? "";
+            string nickname = component["nickname"]?.ToString() ?? "";
+            string typeHint = component["runtime_type_hint"]?.ToString() ?? "";
+            string joined = (name + " " + nickname + " " + typeHint).ToLowerInvariant();
+            if (joined.Contains("c#") && joined.Contains("script")) return true;
+            if (joined.Contains("csharp") && joined.Contains("script")) return true;
+            if (joined.Contains("cs") && joined.Contains("script")) return true;
+            return false;
+        }
+
+        private static string SelectReferencePrimaryScriptBody(JObject scriptBodies)
+        {
+            if (scriptBodies == null || scriptBodies.Count == 0) return "";
+            string[] preferredKeys = { "Text", "Code", "Script", "Source", "m_code", "m_codeBlocks" };
+            foreach (string key in preferredKeys)
+            {
+                var prop = scriptBodies.Properties().FirstOrDefault(p => string.Equals(p.Name, key, StringComparison.OrdinalIgnoreCase));
+                string value = prop?.Value?.ToString();
+                if (!string.IsNullOrWhiteSpace(value)) return value;
+            }
+
+            var longest = scriptBodies.Properties()
+                .Select(p => p.Value?.ToString() ?? "")
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .OrderByDescending(v => v.Length)
+                .FirstOrDefault();
+            return longest ?? "";
+        }
+
+        private static JArray BuildReferencePortSummary(JArray ports)
+        {
+            var result = new JArray();
+            if (ports == null) return result;
+
+            foreach (var port in ports.OfType<JObject>())
+            {
+                result.Add(new JObject
+                {
+                    ["index"] = port["index"]?.DeepClone(),
+                    ["name"] = port["name"]?.ToString() ?? "",
+                    ["type"] = port["type"]?.ToString() ?? "",
+                    ["sources"] = port["sources"]?.DeepClone()
+                });
+            }
+            return result;
         }
 
         /// <summary> 仓库根（含 skills/、reference/）。插件在 Rhino 中加载时 BaseDirectory 常在 bin 下，需向上查找；也可设环境变量 ADDGH_PROJECT_ROOT。 </summary>
@@ -736,6 +908,7 @@ namespace ADDGH
         {
             public string Description { get; set; }
             public string FileName { get; set; }
+            public string SkillFileName { get; set; }
             public bool JsonExists { get; set; }
         }
 
@@ -743,13 +916,13 @@ namespace ADDGH
         {
             return "---\n" +
                 "name: reference-index\n" +
-                "description: 在完成初步 GH 建模逻辑规划之后查阅；仅当条目与已定方案相关时，再调用 read_reference_json 读取 JSON 对照实现。\n" +
+                "description: 在完成初步 GH 建模逻辑规划之后查阅；仅当条目与已定方案相关时，再调用 read_reference_json 读取 JSON 对照实现。若 reference_metadata.csharp_scripts 存在，应优先检查其中 C# 代码。\n" +
                 "---\n\n" +
                 "# Reference Index\n\n" +
                 "使用流程：\n" +
                 "1. 先规划：用简短步骤说明本任务的 GH 逻辑（数据流、关键电池、风险点等）。\n" +
                 "2. 再浏览：查阅下列参考条目，看是否与**已定方案**高度相关。\n" +
-                "3. 后读取：若相关，调用 `read_reference_json` 并传入对应 `file_name`，用 JSON 对齐细节、补充或改造实现。\n\n" +
+                "3. 后读取：若相关，调用 `read_reference_json` 并传入对应 `file_name`，用 JSON 对齐细节、补充或改造实现；若条目含 `技能：skills/reference_*_csharp.md`，先用 `read_skill_file` 读取拆分后的 C# 代码；若 JSON 含 `reference_metadata.csharp_scripts`，也要检查其中代码、端口和用途。\n\n" +
                 "## References\n";
         }
 
@@ -770,15 +943,19 @@ namespace ADDGH
             }
         }
 
-        private static string FormatReferenceEntry(string description, string jsonFileName)
+        private static string FormatReferenceEntry(string description, string jsonFileName, string skillFileName = null)
         {
             string safeDescription = (description ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
             if (string.IsNullOrWhiteSpace(safeDescription)) safeDescription = "未命名参考画布";
             string safeFileName = System.IO.Path.GetFileName(jsonFileName ?? "");
+            string safeSkillFileName = System.IO.Path.GetFileName(skillFileName ?? "");
 
-            return $"- 描述：{safeDescription}\n" +
+            string entry = $"- 描述：{safeDescription}\n" +
                 $"  文件：reference/{safeFileName}\n" +
                 $"  调用：read_reference_json(file_name=\"{safeFileName}\")\n";
+            if (!string.IsNullOrWhiteSpace(safeSkillFileName))
+                entry += $"  技能：skills/{safeSkillFileName}\n";
+            return entry;
         }
 
         private static List<ReferenceEntry> ReadReferenceIndexEntries()
@@ -789,7 +966,7 @@ namespace ADDGH
             var entries = new List<ReferenceEntry>();
             var matches = System.Text.RegularExpressions.Regex.Matches(
                 content,
-                @"-\s*描述：(?<desc>.*?)\r?\n\s*文件：reference/(?<file>[^\r\n]+)\r?\n\s*调用：read_reference_json\(file_name=""(?<call>[^""]+)""\)",
+                @"-\s*描述：(?<desc>.*?)\r?\n\s*文件：reference/(?<file>[^\r\n]+)\r?\n\s*调用：read_reference_json\(file_name=""(?<call>[^""]+)""\)(?:\r?\n\s*技能：skills/(?<skill>[^\r\n]+))?",
                 System.Text.RegularExpressions.RegexOptions.Singleline);
 
             string referencePath = GetReferenceDirectory();
@@ -802,6 +979,7 @@ namespace ADDGH
                 {
                     Description = match.Groups["desc"].Value.Trim(),
                     FileName = fileName,
+                    SkillFileName = System.IO.Path.GetFileName(match.Groups["skill"].Value.Trim()),
                     JsonExists = System.IO.File.Exists(System.IO.Path.Combine(referencePath, fileName))
                 });
             }
@@ -816,13 +994,13 @@ namespace ADDGH
 
             foreach (var entry in entries)
             {
-                sb.Append(FormatReferenceEntry(entry.Description, entry.FileName));
+                sb.Append(FormatReferenceEntry(entry.Description, entry.FileName, entry.SkillFileName));
             }
 
             System.IO.File.WriteAllText(GetReferenceIndexPath(), sb.ToString(), Encoding.UTF8);
         }
 
-        private static string UpdateReferenceIndexSkill(string description, string jsonFileName)
+        private static string UpdateReferenceIndexSkill(string description, string jsonFileName, string skillFileName = null)
         {
             EnsureReferenceIndexSkill();
             string indexPath = GetReferenceIndexPath();
@@ -847,7 +1025,7 @@ namespace ADDGH
                 content += "\n## References\n";
             }
             if (!content.EndsWith("\n")) content += "\n";
-            content += FormatReferenceEntry(description, safeFileName);
+            content += FormatReferenceEntry(description, safeFileName, skillFileName);
             System.IO.File.WriteAllText(indexPath, content, Encoding.UTF8);
 
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => { UpdateSkillLibraryUI(); }));
@@ -1095,6 +1273,17 @@ namespace ADDGH
 
             if (System.IO.File.Exists(jsonPath)) System.IO.File.Delete(jsonPath);
 
+            string companionSkill = ReadReferenceIndexEntries()
+                .FirstOrDefault(entry => entry.FileName.Equals(safeFileName, StringComparison.OrdinalIgnoreCase))
+                ?.SkillFileName;
+            if (!string.IsNullOrWhiteSpace(companionSkill))
+            {
+                string skillPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(GetSkillsDirectory(), System.IO.Path.GetFileName(companionSkill)));
+                string skillsFullPath = System.IO.Path.GetFullPath(GetSkillsDirectory());
+                if (skillPath.StartsWith(skillsFullPath, StringComparison.OrdinalIgnoreCase) && System.IO.File.Exists(skillPath))
+                    System.IO.File.Delete(skillPath);
+            }
+
             var remaining = ReadReferenceIndexEntries()
                 .Where(entry => !entry.FileName.Equals(safeFileName, StringComparison.OrdinalIgnoreCase))
                 .ToList();
@@ -1113,6 +1302,8 @@ namespace ADDGH
             _isGenerating = true;
             ApplySendButtonGeneratingState();
             _txtInput.Text = "";
+            UpdateEmptyChatLayout(false);
+            ScheduleChatContentWidthUpdate();
 
             if (_messages.Count == 0) {
                 _messages.AddRange(BuildInitialSystemMessages());
@@ -1120,6 +1311,7 @@ namespace ADDGH
 
             _messages.Add(new { role = "user", content = actualPrompt });
             AppendBubble(displayText, true);
+            UpdateEmptyChatLayout(false);
 
             SyncActiveHistoryConversation(string.IsNullOrWhiteSpace(displayText) ? actualPrompt : displayText);
 
@@ -1199,6 +1391,8 @@ namespace ADDGH
                 card.Child = grid;
                 if (!string.IsNullOrWhiteSpace(undoId))
                     AttachUndoButtonToStatsCard(card, undoId);
+                else
+                    AttachUnavailableUndoButtonToStatsCard(card);
 
                 if (_thinkingBubble != null) { _chatPanel.Children.Remove(_thinkingBubble); _chatPanel.Children.Add(card); _chatPanel.Children.Add(_thinkingBubble); }
                 else _chatPanel.Children.Add(card);

@@ -522,7 +522,7 @@ namespace ADDGH
                     type = "function",
                     function = new {
                         name = "read_reference_json",
-                        description = "读取 reference 目录中的参考画布 JSON。应在建模/连线逻辑已规划清楚之后再调用；可先 read_skill_file 读取 reference_index.md 选定 file_name。不要在尚未形成方案时抢先读参考。",
+                        description = "读取 reference 目录中的参考画布 JSON。应在建模/连线逻辑已规划清楚之后再调用；可先 read_skill_file 读取 reference_index.md 选定 file_name。若索引条目含 技能：skills/reference_*_csharp.md，优先用 read_skill_file 读取拆分后的 C# 代码；若 JSON 含 reference_metadata.csharp_scripts，也必须检查其中的 C# 代码、输入输出和用途。不要在尚未形成方案时抢先读参考。",
                         parameters = new {
                             type = "object",
                             properties = new {

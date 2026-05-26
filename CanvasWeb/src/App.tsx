@@ -47,7 +47,7 @@ type Viewport = {
   z: number
 }
 
-type CanvasNodeType = 'message' | 'note' | 'image' | 'prompt' | 'file_upload' | 'slider' | 'code' | 'panel' | 'img' | 'gen_img' | 'c_sharp'
+type CanvasNodeType = 'message' | 'note' | 'image' | 'prompt' | 'file_upload' | 'slider' | 'code' | 'panel' | 'img' | 'gen_img' | 'gen_video' | 'c_sharp'
 
 type PortDirection = 'input' | 'output'
 
@@ -91,6 +91,21 @@ type PendingAiImageRun = {
   size?: string
   count?: number
   image: any
+}
+
+type PendingAiVideoRun = {
+  sourceRef: string
+  prompt: string
+  model: string
+  ratio: string
+  duration: number
+  resolution: string
+  seed?: number
+  watermark: boolean
+  cameraFixed: boolean
+  returnLastFrame: boolean
+  generateAudio: boolean
+  images: any[]
 }
 
 type CanvasHistoryItem = {
@@ -248,6 +263,7 @@ function CanvasWorkbench() {
   const [imagePreviewSrc, setImagePreviewSrc] = useState<string | null>(null)
   const [imagePreviewTitle, setImagePreviewTitle] = useState<string>('Image Preview')
   const [captureStatus, setCaptureStatus] = useState('')
+  const [canvasManageOpen, setCanvasManageOpen] = useState(false)
   const [marqueeRect, setMarqueeRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
   const surfaceRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<DragState>(null)
@@ -267,6 +283,8 @@ function CanvasWorkbench() {
   const shiftKeyRef = useRef(false)
   const aiImageConfigRef = useRef<AiImageConfig | null>(null)
   const pendingAiImageRunRef = useRef<PendingAiImageRun | null>(null)
+  const pendingAiVideoRunRef = useRef<PendingAiVideoRun | null>(null)
+  const promptOptimizeTimeoutsRef = useRef<Record<string, number>>({})
   const isDarkMode = themeMode === 'dark'
 
   useEffect(() => {
@@ -466,11 +484,18 @@ function CanvasWorkbench() {
         applyAiImageResult(envelope.payload ?? {})
       }
 
+      if (envelope.type === 'canvas_prompt_optimize_result') {
+        applyPromptOptimizeResult(envelope.payload ?? {})
+      }
+
       if (envelope.type === 'canvas_ai_image_config') {
         aiImageConfigRef.current = envelope.payload ?? null
         const pending = pendingAiImageRunRef.current
         pendingAiImageRunRef.current = null
         if (pending) void runAiImageInBrowser(pending, aiImageConfigRef.current)
+        const pendingVideo = pendingAiVideoRunRef.current
+        pendingAiVideoRunRef.current = null
+        if (pendingVideo) void runAiVideoInBrowser(pendingVideo, aiImageConfigRef.current)
       }
     }
 
@@ -551,7 +576,7 @@ function CanvasWorkbench() {
         targetHandle: connection.toPortId,
         type: 'default',
         className: `connection-path${isRunningInput ? ' connection-path-running' : ''}`,
-        style: { '--connection-color': portColor(portType) } as React.CSSProperties,
+        style: { '--connection-color': `var(--port-${portType})` } as React.CSSProperties,
       }
     }),
     [connections, nodes],
@@ -1046,7 +1071,16 @@ function CanvasWorkbench() {
 
   function onRunAiImage(sourceRef: string) {
     const node = nodesRef.current.find((item) => item.sourceRef === sourceRef)
-    if (!node || node.nodeType !== 'gen_img') return
+    if (!node) return
+    if (node.nodeType === 'prompt') {
+      onOptimizePromptNode(sourceRef)
+      return
+    }
+    if (node.nodeType === 'gen_video') {
+      onRunAiVideo(sourceRef)
+      return
+    }
+    if (node.nodeType !== 'gen_img') return
     const prompt = String(getNodeInputValue(node, 'txt', nodesRef.current, connectionsRef.current) ?? node.meta.prompt ?? '').trim()
     const imageInput = getNodeInputImage(node, 'img_in', nodesRef.current, connectionsRef.current)
     if (!prompt) {
@@ -1058,15 +1092,91 @@ function CanvasWorkbench() {
       sourceRef,
       prompt,
       intent: imageInput ? 'edit' : 'generate',
-      aspectRatio: node.meta.aspectRatio ?? '',
-      size: normalizeAiImageSize(node.meta.imageSize ?? node.meta.size ?? '1024x1024'),
+      aspectRatio: normalizeAiImageAspectRatio(node.meta.aspectRatio ?? '1:1'),
+      size: resolveAiImageRequestSize(node.meta, imageInput),
       count: clamp(Math.round(Number(node.meta.imageCount ?? node.meta.count ?? 1)), 1, 4),
+      imageSize: normalizeNanoBananaImageSize(node.meta.imageSize ?? '4K'),
       image: imageInput,
-    }
+    } as PendingAiImageRun & { imageSize: string }
     if (aiImageConfigRef.current?.apiKey) {
       void runAiImageInBrowser(run, aiImageConfigRef.current)
     } else {
       pendingAiImageRunRef.current = run
+      postHostMessage('canvas_ai_image_config_request', { canvasId: canvasIdRef.current })
+    }
+  }
+
+  function onOptimizePromptNode(sourceRef: string) {
+    const node = nodesRef.current.find((item) => item.sourceRef === sourceRef)
+    if (!node || node.nodeType !== 'prompt') return
+    const inputValue = getNodeInputValue(node, 'in', nodesRef.current, connectionsRef.current)
+    const currentPrompt = String(node.meta.prompt ?? node.meta.body ?? '').trim()
+    applyNodeMetaPatch(sourceRef, { runStatus: 'Optimizing...', isRunning: true, error: '' })
+    window.clearTimeout(promptOptimizeTimeoutsRef.current[sourceRef])
+    promptOptimizeTimeoutsRef.current[sourceRef] = window.setTimeout(() => {
+      applyNodeMetaPatch(sourceRef, {
+        isRunning: false,
+        runStatus: 'Timeout',
+        error: 'Prompt optimization timed out. Check the vision/Qwen model settings and network.',
+      })
+      delete promptOptimizeTimeoutsRef.current[sourceRef]
+    }, 50000)
+    postHostMessage('canvas_prompt_optimize_request', {
+      canvasId: canvasIdRef.current,
+      sourceRef,
+      prompt: currentPrompt,
+      input: buildPromptOptimizerInput(inputValue),
+    })
+  }
+
+  function applyPromptOptimizeResult(payload: any) {
+    const sourceRef = String(payload?.sourceRef ?? '')
+    if (!sourceRef) return
+    window.clearTimeout(promptOptimizeTimeoutsRef.current[sourceRef])
+    delete promptOptimizeTimeoutsRef.current[sourceRef]
+    if (payload?.error || payload?.success === false) {
+      applyNodeMetaPatch(sourceRef, {
+        isRunning: false,
+        runStatus: 'Failed',
+        error: String(payload?.error ?? 'Prompt optimization failed'),
+      })
+      return
+    }
+    const prompt = String(payload?.prompt ?? '').trim()
+    applyNodeMetaPatch(sourceRef, {
+      isRunning: false,
+      runStatus: 'Optimized',
+      error: '',
+      prompt,
+      body: prompt,
+    })
+  }
+
+  function onRunAiVideo(sourceRef: string) {
+    const node = nodesRef.current.find((item) => item.sourceRef === sourceRef)
+    if (!node || node.nodeType !== 'gen_video') return
+    const prompt = String(getNodeInputValue(node, 'txt', nodesRef.current, connectionsRef.current) ?? node.meta.prompt ?? '').trim() || defaultAiVideoPrompt(node)
+    const imageInput = getNodeInputImage(node, 'img_in', nodesRef.current, connectionsRef.current)
+    const seed = Number(node.meta.seed ?? 0)
+    const run: PendingAiVideoRun = {
+      sourceRef,
+      prompt,
+      model: String(node.meta.videoModel ?? node.meta.model ?? 'doubao-seedance-1-0-pro-250528'),
+      ratio: normalizeAiVideoRatio(node.meta.ratio ?? node.meta.aspectRatio ?? (imageInput ? 'adaptive' : '16:9'), Boolean(imageInput)),
+      duration: clamp(Math.round(Number(node.meta.duration ?? 5)), 5, 10),
+      resolution: normalizeAiVideoResolution(node.meta.resolution ?? '480p'),
+      seed: Number.isFinite(seed) && seed > 0 ? clamp(Math.round(seed), 0, 2147483647) : undefined,
+      watermark: Boolean(node.meta.watermark),
+      cameraFixed: Boolean(node.meta.cameraFixed ?? node.meta.camerafixed),
+      returnLastFrame: Boolean(node.meta.returnLastFrame ?? node.meta.return_last_frame),
+      generateAudio: Boolean(node.meta.generateAudio ?? node.meta.generate_audio),
+      images: imageInput ? [imageInput] : [],
+    }
+    applyNodeMetaPatch(sourceRef, { runStatus: 'Submitting...', isRunning: true, error: '', videoUrl: '', taskId: '' })
+    if (aiImageConfigRef.current?.apiKey) {
+      void runAiVideoInBrowser(run, aiImageConfigRef.current)
+    } else {
+      pendingAiVideoRunRef.current = run
       postHostMessage('canvas_ai_image_config_request', { canvasId: canvasIdRef.current })
     }
   }
@@ -1131,6 +1241,39 @@ function CanvasWorkbench() {
       generatedAtUtc: payload.generatedAtUtc ?? new Date().toISOString(),
       error: '',
     })
+  }
+
+  async function runAiVideoInBrowser(run: PendingAiVideoRun, config: AiImageConfig | null) {
+    try {
+      if (!config?.apiKey) throw new Error(config?.error || 'Video API key is empty.')
+      const result = await createCanvasAiVideo(run, config, (status, progress) => {
+        applyNodeMetaPatch(run.sourceRef, {
+          runStatus: progress ? `${status} ${progress}` : status,
+          isRunning: status !== 'SUCCESS' && status !== 'FAILURE',
+        })
+      })
+      applyNodeMetaPatch(run.sourceRef, {
+        isRunning: false,
+        runStatus: result.status === 'SUCCESS' ? 'Generated' : result.status,
+        error: result.error ?? '',
+        videoUrl: result.videoUrl ?? '',
+        taskId: result.taskId ?? '',
+        lastFrameUrl: result.lastFrameUrl ?? '',
+        provider: config.provider ?? '',
+        model: run.model,
+        prompt: run.prompt,
+        ratio: result.ratio ?? run.ratio,
+        resolution: result.resolution ?? run.resolution,
+        seed: result.seed ?? run.seed,
+        generatedAtUtc: new Date().toISOString(),
+      })
+    } catch (error) {
+      applyNodeMetaPatch(run.sourceRef, {
+        isRunning: false,
+        runStatus: 'Failed',
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
   }
 
   function onPointerMove(event: React.PointerEvent<HTMLDivElement>) {
@@ -1349,13 +1492,39 @@ function CanvasWorkbench() {
     postHostMessage('canvas_ready', { reason: 'manual-sync' })
   }
 
+  function saveCanvasNow() {
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+    }
+    const snapshot: LightweightSnapshot = {
+      kind: snapshotKind,
+      viewport: viewportRef.current,
+      nodes: nodesRef.current,
+      connections: connectionsRef.current,
+    }
+    postHostMessage('document_snapshot_save', { canvasId: canvasIdRef.current, snapshot })
+    postHostMessage('canvas_ready', { reason: 'manual-save' })
+    setCaptureStatus('Canvas saved')
+    window.setTimeout(() => setCaptureStatus(''), 1600)
+  }
+
   function onNewCanvas() {
+    saveCanvasNow()
     postHostMessage('canvas_new', { title: `Canvas ${new Date().toLocaleTimeString()}` })
   }
 
   function onOpenCanvas(nextCanvasId: string) {
     if (!nextCanvasId || nextCanvasId === canvasId) return
+    saveCanvasNow()
     postHostMessage('canvas_open', { canvasId: nextCanvasId })
+  }
+
+  function onDeleteCanvas() {
+    if (!canvasId) return
+    const title = canvasTitle || canvasId
+    if (!window.confirm(`Delete canvas "${title}"?`)) return
+    postHostMessage('canvas_delete', { canvasId })
   }
 
   function onOpenNodeSettings(sourceRef: string) {
@@ -1521,13 +1690,30 @@ function CanvasWorkbench() {
         </ReactFlow>
       </div>
 
+      <button className="canvas-code-switch" type="button" onClick={() => postHostMessage('canvas_switch_to_code', { canvasId: canvasIdRef.current })}>
+        Code
+      </button>
+
+      <div className="canvas-file-menu">
+        <button type="button" onClick={() => setCanvasManageOpen((current) => !current)}>Canvas</button>
+        {canvasManageOpen ? (
+          <div className="canvas-file-popover">
+            <div className="canvas-file-title">{canvasTitle || 'Canvas'}</div>
+            <select value={canvasId} onChange={(event) => onOpenCanvas(event.target.value)}>
+              {canvasHistory.length ? canvasHistory.map((item) => (
+                <option key={item.canvasId} value={item.canvasId}>{item.title || item.canvasId}</option>
+              )) : <option value={canvasId}>{canvasTitle || canvasId}</option>}
+            </select>
+            <div className="canvas-file-actions">
+              <button type="button" onClick={saveCanvasNow}>Save</button>
+              <button type="button" onClick={onNewCanvas}>New</button>
+              <button type="button" onClick={onDeleteCanvas} disabled={canvasHistory.length <= 1 && canvasId === 'canvas-default'}>Delete</button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+
       <div className="floating-toolbar">
-        <select className="canvas-history-select" value={canvasId} onChange={(event) => onOpenCanvas(event.target.value)}>
-          {canvasHistory.length ? canvasHistory.map((item) => (
-            <option key={item.canvasId} value={item.canvasId}>{item.title || item.canvasId}</option>
-          )) : <option value={canvasId}>{canvasTitle}</option>}
-        </select>
-        <button onClick={onNewCanvas}>New Canvas</button>
         <button onClick={() => setThemeMode((current) => current === 'dark' ? 'light' : 'dark')}>
           {isDarkMode ? 'Light' : 'Dark'}
         </button>
@@ -1535,7 +1721,6 @@ function CanvasWorkbench() {
         <button onClick={onCaptureRhinoView}>Capture Rhino</button>
         <button onClick={onNewNote}>Note</button>
         <button onClick={onCollapse} disabled={!selectedNode}>Collapse</button>
-        <button onClick={onSync}>Sync</button>
       </div>
 
       <div className="status-pill">
@@ -1567,6 +1752,7 @@ function CanvasWorkbench() {
               <button onClick={() => runContextMenuAction(() => createTypedNodeAt('panel', contextMenu.worldX, contextMenu.worldY))}>Panel</button>
               <button onClick={() => runContextMenuAction(() => createTypedNodeAt('image', contextMenu.worldX, contextMenu.worldY))}>Image</button>
               <button onClick={() => runContextMenuAction(() => createTypedNodeAt('gen_img', contextMenu.worldX, contextMenu.worldY))}>AI Image</button>
+              <button onClick={() => runContextMenuAction(() => createTypedNodeAt('gen_video', contextMenu.worldX, contextMenu.worldY))}>AI Video</button>
               <button onClick={() => runContextMenuAction(() => createTypedNodeAt('slider', contextMenu.worldX, contextMenu.worldY))}>Slider Node</button>
               <button onClick={() => runContextMenuAction(() => createTypedNodeAt('c_sharp', contextMenu.worldX, contextMenu.worldY))}>C# Node</button>
               <button onClick={() => runContextMenuAction(() => createTypedNodeAt('note', contextMenu.worldX, contextMenu.worldY))}>New Note</button>
@@ -1623,7 +1809,7 @@ function ColoredConnectionLine({
     <path
       d={path}
       className="connection-path connection-path-pending"
-      style={{ '--connection-color': portColor(dataType) } as React.CSSProperties}
+      style={{ '--connection-color': `var(--port-${dataType})` } as React.CSSProperties}
     />
   )
 }
@@ -1632,11 +1818,14 @@ function CanvasFlowNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
   const node = data.node
   const isImage = node.nodeType === 'image'
   const isAiImage = node.nodeType === 'gen_img'
+  const isAiVideo = node.nodeType === 'gen_video'
   const imageSrc = isImage || node.nodeType === 'gen_img' ? resolveCanvasImageSource(node.meta.imageDataUrl ?? node.meta.imagePath) : ''
+  const aiImageSources = isAiImage ? getAiImageSources(node) : []
+  const videoSrc = isAiVideo ? resolveCanvasImageSource(node.meta.videoUrl ?? node.meta.videoPath) : ''
 
   return (
     <article
-      className={`canvas-node flow-node node-${nodeKind(node.meta)} type-${node.nodeType} ${selected ? 'selected' : ''} ${isImage || isAiImage ? 'is-image-node' : ''}`}
+      className={`canvas-node flow-node node-${nodeKind(node.meta)} type-${node.nodeType} ${selected ? 'selected' : ''} ${isImage || isAiImage || isAiVideo ? 'is-image-node' : ''}`}
       style={{ width: node.w, height: node.h }}
       data-source-ref={node.sourceRef}
     >
@@ -1652,14 +1841,42 @@ function CanvasFlowNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
         onResize={(_, params) => data.onNodeResize(node.sourceRef, params.width, params.height, false)}
         onResizeEnd={(_, params) => data.onNodeResize(node.sourceRef, params.width, params.height, true)}
       />
-      {isImage || isAiImage ? (
+      {isImage || isAiImage || isAiVideo ? (
         <>
           <header className="node-header">
-            <strong className="node-title-text">{node.meta.title ?? (isAiImage ? 'AI Image' : 'Image')}</strong>
+            <strong className="node-title-text">{node.meta.title ?? (isAiVideo ? 'AI Video' : isAiImage ? 'AI Image' : 'Image')}</strong>
             <small>{node.nodeType}</small>
           </header>
-          <div className={`node-image-plain ${isAiImage ? 'ai-image-plain' : ''}`}>
-            {imageSrc ? (
+          <div className={`node-image-plain ${isAiImage ? 'ai-image-plain' : ''} ${isAiVideo ? 'ai-video-plain' : ''}`}>
+            {isAiVideo ? (
+              videoSrc ? (
+                <video src={videoSrc} controls playsInline loop />
+              ) : (
+                <div className="node-image-empty node-image-plain-empty">{node.meta.runStatus ? String(node.meta.runStatus) : null}</div>
+              )
+            ) : isAiImage && aiImageSources.length > 1 ? (
+              <div className="ai-image-grid" data-count={Math.min(aiImageSources.length, 4)}>
+                {aiImageSources.slice(0, 4).map((item, index) => (
+                  <button
+                    type="button"
+                    key={`${item.index}-${item.src.slice(0, 48)}`}
+                    className={`ai-image-grid-item ${index === 0 ? 'primary' : ''}`}
+                    onDoubleClick={(event) => {
+                      event.stopPropagation()
+                      data.onPreviewImage(item.src, `${String(node.meta.title ?? 'AI Image')} ${index + 1}`)
+                    }}
+                  >
+                    <img
+                      src={item.src}
+                      alt={`${String(node.meta.title ?? 'AI Image')} ${index + 1}`}
+                      loading="lazy"
+                      decoding="async"
+                      draggable={false}
+                    />
+                  </button>
+                ))}
+              </div>
+            ) : imageSrc ? (
               <img
                 src={imageSrc}
                 alt={String(node.meta.title ?? (isAiImage ? 'AI Image' : 'Image'))}
@@ -1735,8 +1952,8 @@ function NodeActionBar({
   onDownload: (sourceRef: string) => void
   onGenerate: (sourceRef: string) => void
 }) {
-  const canDownload = Boolean(resolveCanvasImageSource(node.meta.imageDataUrl ?? node.meta.imagePath))
-  const canGenerate = node.nodeType === 'gen_img'
+  const canDownload = Boolean(resolveCanvasImageSource(node.meta.imageDataUrl ?? node.meta.imagePath ?? node.meta.videoUrl ?? node.meta.videoPath))
+  const canGenerate = node.nodeType === 'gen_img' || node.nodeType === 'gen_video' || node.nodeType === 'prompt'
   return (
     <div className="node-action-bar nodrag">
       <button type="button" className="node-action-icon" title="Settings" onClick={() => onSettings(node.sourceRef)}>⚙</button>
@@ -1897,7 +2114,7 @@ function normalizeNode(node: any): CanvasNode {
 
 function shouldUseStoredPorts(nodeType: CanvasNodeType, ports: any) {
   if (!Array.isArray(ports)) return false
-  return nodeType === 'code' || nodeType === 'c_sharp' || nodeType === 'panel' || nodeType === 'image' || nodeType === 'gen_img'
+  return nodeType === 'code' || nodeType === 'c_sharp' || nodeType === 'panel' || nodeType === 'image' || nodeType === 'gen_img' || nodeType === 'gen_video'
 }
 
 function normalizeConnection(connection: any): CanvasConnection {
@@ -1955,6 +2172,7 @@ function portColor(dataType: PortDataType) {
 function resolveNodeSize(meta: Record<string, any>, nodeType: CanvasNodeType, fallback?: Partial<CanvasNode>) {
   if (nodeType === 'panel') return { w: numberOr(fallback?.w, meta.w, meta.default_width ?? 320), h: numberOr(fallback?.h, meta.h, meta.default_height ?? 280) }
   if (nodeType === 'gen_img') return { w: numberOr(meta.w, fallback?.w, meta.default_width ?? 260), h: numberOr(meta.h, fallback?.h, meta.default_height ?? 180) }
+  if (nodeType === 'gen_video') return { w: numberOr(meta.w, fallback?.w, meta.default_width ?? 360), h: numberOr(meta.h, fallback?.h, meta.default_height ?? 220) }
   if (nodeType === 'c_sharp') return { w: numberOr(fallback?.w, meta.w, meta.default_width ?? 520), h: numberOr(fallback?.h, meta.h, meta.default_height ?? 360) }
   if (nodeType === 'prompt') return { w: 300, h: 180 }
   if (nodeType === 'file_upload') return { w: 340, h: 210 }
@@ -1976,6 +2194,7 @@ function normalizeNodeType(value: any): CanvasNodeType {
     value === 'panel' ||
     value === 'img' ||
     value === 'gen_img' ||
+    value === 'gen_video' ||
     value === 'c_sharp'
   ) {
     return value === 'img' ? 'image' : value
@@ -1992,7 +2211,7 @@ function getNodePorts(nodeType: CanvasNodeType, meta: Record<string, any>): Node
     for (let i = 0; i < outputCount; i += 1) ports.push({ id: nodeType === 'c_sharp' && i < 2 ? ['out', 'a'][i] : `out-${i}`, label: nodeType === 'c_sharp' && i < 2 ? ['out', 'a'][i] : `Out ${i + 1}`, direction: 'output', dataType: 'any', slot: i, visible: true, required: false, dynamic: true })
     return ports
   }
-  if (Array.isArray(meta.ports) && (nodeType === 'panel' || nodeType === 'gen_img')) {
+  if (Array.isArray(meta.ports) && (nodeType === 'panel' || nodeType === 'gen_img' || nodeType === 'gen_video')) {
     return meta.ports.map(normalizePort)
   }
   if (nodeType === 'message') return []
@@ -2015,8 +2234,16 @@ function getNodePorts(nodeType: CanvasNodeType, meta: Record<string, any>): Node
       { id: 'img_out', label: 'image', direction: 'output', dataType: 'image', slot: 0, visible: true, required: false, dynamic: false },
     ]
   }
+  if (nodeType === 'gen_video') {
+    return [
+      { id: 'txt', label: 'prompt', direction: 'input', dataType: 'text', slot: 0, visible: true, required: true, dynamic: false },
+      { id: 'img_in', label: 'image', direction: 'input', dataType: 'image', slot: 1, visible: true, required: false, dynamic: false },
+      { id: 'video_out', label: 'video', direction: 'output', dataType: 'path', slot: 0, visible: true, required: false, dynamic: false },
+    ]
+  }
   if (nodeType === 'prompt') {
     return [
+      { id: 'in', label: 'input', direction: 'input', dataType: 'any', slot: 0, visible: true, required: false, dynamic: false },
       { id: 'out', label: 'prompt', direction: 'output', dataType: 'text', slot: 0, visible: true, required: false, dynamic: false },
     ]
   }
@@ -2058,6 +2285,14 @@ function getNodeOutputValue(node: CanvasNode, portId: string) {
   if (node.nodeType === 'image' || node.nodeType === 'img' || node.nodeType === 'gen_img') {
     return getImagePayload(node)
   }
+  if (node.nodeType === 'gen_video') {
+    return {
+      path: String(node.meta.videoUrl ?? node.meta.videoPath ?? ''),
+      videoUrl: String(node.meta.videoUrl ?? ''),
+      taskId: String(node.meta.taskId ?? ''),
+      title: String(node.meta.title ?? 'AI Video'),
+    }
+  }
   if (portId && node.meta.outputs && Object.prototype.hasOwnProperty.call(node.meta.outputs, portId)) {
     return node.meta.outputs[portId]
   }
@@ -2074,13 +2309,85 @@ function getNodeInputImage(node: CanvasNode, portId: string, nodes: CanvasNode[]
   return null
 }
 
+function buildPromptOptimizerInput(value: any) {
+  if (value == null) return { text: '', images: [] }
+  const images = collectPromptInputImages(value)
+  return {
+    text: serializePromptInputText(value),
+    images,
+  }
+}
+
+function collectPromptInputImages(value: any): Array<{ dataUrl: string; mimeType: string; title: string }> {
+  if (!value || typeof value !== 'object') return []
+  const candidates = Array.isArray(value.images) && value.images.length ? value.images : [value]
+  return candidates
+    .map((item: any, index: number) => {
+      const dataUrl = normalizeImageSourceValue(item?.dataUrl ?? item?.imageDataUrl ?? item?.b64_json ?? item?.base64 ?? item?.url ?? item?.path ?? '')
+      if (!dataUrl.startsWith('data:image/')) return null
+      return {
+        dataUrl,
+        mimeType: getMimeTypeFromDataUrl(dataUrl) ?? item?.mimeType ?? 'image/png',
+        title: String(item?.title ?? value?.title ?? `Image ${index + 1}`),
+      }
+    })
+    .filter(Boolean) as Array<{ dataUrl: string; mimeType: string; title: string }>
+}
+
+function serializePromptInputText(value: any) {
+  if (value == null) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'object') {
+    const clone: any = Array.isArray(value) ? [...value] : { ...value }
+    for (const key of ['dataUrl', 'imageDataUrl', 'b64_json', 'base64']) {
+      if (typeof clone[key] === 'string' && clone[key].length > 200) {
+        clone[key] = `[${key} omitted; image is attached separately]`
+      }
+    }
+    if (Array.isArray(clone.images)) {
+      clone.images = clone.images.map((item: any) => {
+        if (!item || typeof item !== 'object') return item
+        const next = { ...item }
+        for (const key of ['dataUrl', 'imageDataUrl', 'b64_json', 'base64']) {
+          if (typeof next[key] === 'string' && next[key].length > 200) {
+            next[key] = `[${key} omitted; image is attached separately]`
+          }
+        }
+        return next
+      })
+    }
+    try {
+      return JSON.stringify(clone, null, 2)
+    } catch {
+      return String(value)
+    }
+  }
+  return String(value)
+}
+
 function getImagePayload(node: CanvasNode) {
   return {
     path: String(node.meta.imagePath ?? ''),
     dataUrl: String(node.meta.imageDataUrl ?? ''),
     mimeType: String(node.meta.mimeType ?? 'image/png'),
     title: String(node.meta.title ?? 'Image'),
+    images: Array.isArray(node.meta.images) ? node.meta.images : [],
   }
+}
+
+function getAiImageSources(node: CanvasNode) {
+  const images = Array.isArray(node.meta.images) ? node.meta.images : []
+  const sources = images
+    .map((image: any, index: number) => {
+      const src = resolveCanvasImageSource(image?.dataUrl ?? image?.imageDataUrl ?? image?.b64_json ?? image?.base64 ?? image?.url ?? image?.path ?? '')
+      return src ? { src, index } : null
+    })
+    .filter(Boolean) as Array<{ src: string; index: number }>
+
+  if (sources.length) return sources
+
+  const fallback = resolveCanvasImageSource(node.meta.imageDataUrl ?? node.meta.imagePath)
+  return fallback ? [{ src: fallback, index: 0 }] : []
 }
 
 function getImageSizeFromPayload(image: any) {
@@ -2105,6 +2412,57 @@ function normalizeAiImageSize(value: unknown) {
   const text = String(value ?? '').trim().toLowerCase().replace(/\s+/g, '')
   if (/^\d{2,4}x\d{2,4}$/.test(text)) return text
   return '1024x1024'
+}
+
+function normalizeAiImageAspectRatio(value: unknown) {
+  const text = String(value ?? '').trim().toLowerCase().replace(/\s+/g, '')
+  if (text === 'original' || text === 'source') return 'original'
+  if (/^\d{1,2}:\d{1,2}$/.test(text)) return text
+  return '1:1'
+}
+
+function normalizeAiImageFreedom(value: unknown) {
+  const n = Number(value)
+  return Number.isFinite(n) ? clamp(n, 0, 1) : 0.5
+}
+
+function normalizeAiVideoRatio(value: unknown, hasImage = false) {
+  const text = String(value ?? '').trim().toLowerCase().replace(/\s+/g, '')
+  const allowed = ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16', '9:21', 'keep_ratio', 'adaptive']
+  if (allowed.includes(text)) return text
+  return hasImage ? 'adaptive' : '16:9'
+}
+
+function normalizeAiVideoResolution(value: unknown) {
+  const text = String(value ?? '').trim().toLowerCase()
+  return text === '720p' || text === '1080p' ? text : '480p'
+}
+
+function defaultAiVideoPrompt(node?: CanvasNode) {
+  return String(node?.meta.defaultPrompt ?? 'Create a smooth cinematic video with natural motion, stable composition, and coherent lighting.').trim()
+}
+
+function aspectRatioToSize(aspectRatio: string, sourceImage?: any) {
+  const normalized = normalizeAiImageAspectRatio(aspectRatio)
+  if (normalized === 'original') {
+    const sourceSize = getImageSizeFromPayload(sourceImage)
+    if (sourceSize) return `${Math.round(sourceSize.w)}x${Math.round(sourceSize.h)}`
+    return '1024x1024'
+  }
+
+  const [rawW, rawH] = normalized.split(':').map((item) => Number(item))
+  if (!Number.isFinite(rawW) || !Number.isFinite(rawH) || rawW <= 0 || rawH <= 0) return '1024x1024'
+  const maxSide = 1024
+  if (rawW >= rawH) {
+    return `${maxSide}x${Math.max(256, Math.round(maxSide * rawH / rawW))}`
+  }
+  return `${Math.max(256, Math.round(maxSide * rawW / rawH))}x${maxSide}`
+}
+
+function resolveAiImageRequestSize(meta: Record<string, any>, sourceImage?: any) {
+  const mode = String(meta.imageSizeMode ?? meta.sizeMode ?? 'ratio')
+  if (mode === 'fixed') return normalizeAiImageSize(meta.imageSize ?? meta.size ?? '1024x1024')
+  return aspectRatioToSize(meta.aspectRatio ?? '1:1', sourceImage)
 }
 
 function parseAiImageSize(value: unknown) {
@@ -2134,6 +2492,7 @@ function buildImageEndpoint(baseUrl: string, isEdit: boolean) {
   let raw = String(baseUrl || '').trim().replace(/\/+$/, '')
   if (!raw) raw = 'https://api.openai.com/v1'
 
+  if (/\/v1\/chat\/completions$/i.test(raw)) raw = raw.replace(/\/v1\/chat\/completions$/i, '')
   if (/\/v1\/images\/(generations|edits)$/i.test(raw)) {
     raw = raw.replace(/\/v1\/images\/(generations|edits)$/i, '')
   }
@@ -2146,10 +2505,10 @@ async function sendCanvasImageGenerationRequest(endpoint: string, run: PendingAi
   const body: Record<string, any> = {
     model: config.model ?? '',
     prompt: run.prompt,
-    response_format: 'b64_json',
+    response_format: 'url',
   }
   if (run.aspectRatio) body.aspect_ratio = run.aspectRatio
-  if (run.size) body.size = run.size
+  body.image_size = normalizeNanoBananaImageSize((run as any).imageSize ?? '4K')
   if (run.count) body.n = clamp(Math.round(run.count), 1, 4)
   if (run.image) {
     const imageDataUrl = await resolveImageDataUrl(run.image)
@@ -2173,9 +2532,9 @@ async function sendCanvasImageEditRequest(endpoint: string, run: PendingAiImageR
   const form = new FormData()
   form.append('model', config.model ?? '')
   form.append('prompt', run.prompt)
-  form.append('response_format', 'b64_json')
+  form.append('response_format', 'url')
   if (run.aspectRatio) form.append('aspect_ratio', run.aspectRatio)
-  if (run.size) form.append('size', run.size)
+  form.append('image_size', normalizeNanoBananaImageSize((run as any).imageSize ?? '4K'))
   if (run.count) form.append('n', String(clamp(Math.round(run.count), 1, 4)))
   form.append('image', blob, `canvas-input.${mimeTypeToExtension(mimeType)}`)
 
@@ -2186,6 +2545,11 @@ async function sendCanvasImageEditRequest(endpoint: string, run: PendingAiImageR
     },
     body: form,
   })
+}
+
+function normalizeNanoBananaImageSize(value: unknown) {
+  const text = String(value ?? '').trim().toUpperCase()
+  return text === '1K' || text === '2K' || text === '4K' || text === '512' ? text : '4K'
 }
 
 async function parseCanvasImageResponse(responseText: string, run: PendingAiImageRun, config: AiImageConfig) {
@@ -2234,8 +2598,104 @@ function collectImageResponseItems(root: any) {
   if (Array.isArray(root?.data)) return root.data
   if (Array.isArray(root?.images)) return root.images
   if (Array.isArray(root?.output)) return root.output
+  const choices = Array.isArray(root?.choices) ? root.choices : []
+  if (choices.length) {
+    return choices.flatMap((choice: any) => collectImagesFromChatContent(choice?.message?.content ?? choice?.delta?.content ?? choice?.content))
+  }
   if (root?.b64_json || root?.base64 || root?.image_base64 || root?.url || root?.image_url || root?.image) return [root]
   return []
+}
+
+function collectImagesFromChatContent(content: any): any[] {
+  if (!content) return []
+  if (Array.isArray(content)) {
+    return content.flatMap((part) => collectImagesFromChatContent(part?.image_url?.url ?? part?.url ?? part?.text ?? part))
+  }
+  if (typeof content === 'object') {
+    return collectImagesFromChatContent(content.url ?? content.image_url ?? content.image ?? content.b64_json ?? content.base64 ?? '')
+  }
+  const text = String(content)
+  const urls = Array.from(text.matchAll(/https?:\/\/[^\s"'<>)]*\.(?:png|jpe?g|webp|gif)(?:\?[^\s"'<>)]*)?/gi)).map((match) => ({ url: match[0] }))
+  const dataUrls = Array.from(text.matchAll(/data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+/gi)).map((match) => ({ b64_json: match[0] }))
+  return [...dataUrls, ...urls]
+}
+
+async function createCanvasAiVideo(run: PendingAiVideoRun, config: AiImageConfig, onProgress?: (status: string, progress?: string) => void) {
+  const endpoint = buildVideoEndpoint(config.baseUrl ?? '')
+  const images = await Promise.all(run.images.map((image) => resolveImageDataUrl(image)))
+  const body: Record<string, any> = {
+    prompt: run.prompt,
+    model: run.model,
+    duration: run.duration,
+    resolution: run.resolution,
+    ratio: run.ratio,
+    watermark: run.watermark,
+    camerafixed: run.cameraFixed,
+    return_last_frame: run.returnLastFrame,
+    generate_audio: run.generateAudio,
+  }
+  const filteredImages = images.filter(Boolean)
+  if (filteredImages.length) body.images = filteredImages
+  if (typeof run.seed === 'number') body.seed = run.seed
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.apiKey ?? ''}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+  const responseText = await response.text()
+  if (!response.ok) throw new Error(`Video request failed: HTTP ${response.status} ${response.statusText}\n${responseText.slice(0, 1200)}`)
+  const created = JSON.parse(responseText)
+  const taskId = String(created?.task_id ?? created?.id ?? '')
+  if (!taskId) throw new Error(`Video API returned no task_id.\n${responseText.slice(0, 1200)}`)
+  onProgress?.('Submitted')
+  return pollCanvasAiVideo(taskId, endpoint, config, onProgress)
+}
+
+function buildVideoEndpoint(baseUrl: string) {
+  let raw = String(baseUrl || '').trim().replace(/\/+$/, '')
+  if (!raw) raw = 'https://api.openai.com'
+  raw = raw.replace(/\/v1\/chat\/completions$/i, '').replace(/\/v1\/images\/(generations|edits)$/i, '')
+  if (/\/v2\/videos\/generations$/i.test(raw)) return raw
+  if (/\/v2$/i.test(raw)) return `${raw}/videos/generations`
+  return `${raw}/v2/videos/generations`
+}
+
+async function pollCanvasAiVideo(taskId: string, endpoint: string, config: AiImageConfig, onProgress?: (status: string, progress?: string) => void) {
+  const url = `${endpoint.replace(/\/+$/, '')}/${encodeURIComponent(taskId)}`
+  let last: any = null
+  for (let attempt = 0; attempt < 90; attempt += 1) {
+    if (attempt > 0) await delay(4000)
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${config.apiKey ?? ''}`, Accept: 'application/json' } })
+    const text = await response.text()
+    if (!response.ok) throw new Error(`Video status failed: HTTP ${response.status} ${response.statusText}\n${text.slice(0, 1200)}`)
+    last = JSON.parse(text)
+    const status = String(last?.status ?? '').toUpperCase()
+    onProgress?.(status || 'IN_PROGRESS', last?.progress ? String(last.progress) : '')
+    if (status === 'SUCCESS') {
+      return {
+        status,
+        taskId,
+        videoUrl: String(last?.data?.output ?? last?.output ?? last?.video_url ?? ''),
+        lastFrameUrl: String(last?.data?.last_frame_url ?? ''),
+        ratio: last?.data?.ratio,
+        resolution: last?.data?.resolution,
+        seed: last?.data?.seed,
+      }
+    }
+    if (status === 'FAILURE') {
+      return { status, taskId, error: String(last?.fail_reason ?? 'Video generation failed') }
+    }
+  }
+  return { status: String(last?.status ?? 'TIMEOUT'), taskId, error: 'Video generation timed out.' }
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
 }
 
 async function resolveImageDataUrl(image: any) {
@@ -2451,7 +2911,11 @@ function renderNodeSettings(
         {header}
         <label className="node-field">
           <span>Prompt</span>
-          <textarea value={node.meta.prompt ?? ''} onChange={(event) => updateMeta(node.sourceRef, { prompt: event.target.value })} />
+          <textarea
+            value={node.meta.prompt ?? ''}
+            placeholder={defaultAiVideoPrompt(node)}
+            onChange={(event) => updateMeta(node.sourceRef, { prompt: event.target.value })}
+          />
         </label>
       </>
     )
@@ -2477,13 +2941,25 @@ function renderNodeSettings(
           <textarea value={node.meta.prompt ?? ''} onChange={(event) => updateMeta(node.sourceRef, { prompt: event.target.value })} />
         </label>
         <label className="node-field">
-          <span>Generation Size</span>
-          <select value={normalizeAiImageSize(node.meta.imageSize ?? node.meta.size ?? '1024x1024')} onChange={(event) => updateMeta(node.sourceRef, { imageSize: event.target.value })}>
-            <option value="512x512">512 x 512</option>
-            <option value="768x768">768 x 768</option>
-            <option value="1024x1024">1024 x 1024</option>
-            <option value="1024x1536">1024 x 1536</option>
-            <option value="1536x1024">1536 x 1024</option>
+          <span>Generation Ratio</span>
+          <select value={normalizeAiImageAspectRatio(node.meta.aspectRatio ?? '1:1')} onChange={(event) => updateMeta(node.sourceRef, { aspectRatio: event.target.value, imageSizeMode: 'ratio' })}>
+            <option value="original">Original image</option>
+            <option value="1:1">1:1</option>
+            <option value="4:3">4:3</option>
+            <option value="3:4">3:4</option>
+            <option value="16:9">16:9</option>
+            <option value="9:16">9:16</option>
+            <option value="3:2">3:2</option>
+            <option value="2:3">2:3</option>
+          </select>
+        </label>
+        <label className="node-field">
+          <span>Image Size</span>
+          <select value={normalizeNanoBananaImageSize(node.meta.imageSize ?? '4K')} onChange={(event) => updateMeta(node.sourceRef, { imageSize: event.target.value })}>
+            <option value="1K">1K</option>
+            <option value="2K">2K</option>
+            <option value="4K">4K</option>
+            <option value="512">512</option>
           </select>
         </label>
         <label className="node-field">
@@ -2498,6 +2974,71 @@ function renderNodeSettings(
         </label>
         {node.meta.runStatus || node.meta.error ? (
           <div className="node-readonly-stack">
+            {node.meta.runStatus ? <span>Status: {String(node.meta.runStatus)}</span> : null}
+            {node.meta.error ? <span className="node-error-text">Error: {String(node.meta.error)}</span> : null}
+          </div>
+        ) : null}
+      </>
+    )
+  }
+  if (node.nodeType === 'gen_video') {
+    return (
+      <>
+        {header}
+        <label className="node-field">
+          <span>Prompt</span>
+          <textarea value={node.meta.prompt ?? ''} onChange={(event) => updateMeta(node.sourceRef, { prompt: event.target.value })} />
+        </label>
+        <label className="node-field">
+          <span>Seedance Model</span>
+          <select value={String(node.meta.videoModel ?? node.meta.model ?? 'doubao-seedance-1-0-pro-250528')} onChange={(event) => updateMeta(node.sourceRef, { videoModel: event.target.value })}>
+            <option value="doubao-seedance-1-0-pro-250528">seedance pro</option>
+            <option value="doubao-seedance-1-0-lite-t2v-250428">seedance lite t2v</option>
+            <option value="doubao-seedance-1-0-lite-i2v-250428">seedance lite i2v</option>
+          </select>
+        </label>
+        <label className="node-field">
+          <span>Ratio</span>
+          <select value={normalizeAiVideoRatio(node.meta.ratio ?? '16:9')} onChange={(event) => updateMeta(node.sourceRef, { ratio: event.target.value })}>
+            <option value="16:9">16:9</option>
+            <option value="9:16">9:16</option>
+            <option value="1:1">1:1</option>
+            <option value="4:3">4:3</option>
+            <option value="3:4">3:4</option>
+            <option value="21:9">21:9</option>
+            <option value="9:21">9:21</option>
+            <option value="adaptive">adaptive</option>
+            <option value="keep_ratio">keep ratio</option>
+          </select>
+        </label>
+        <label className="node-field">
+          <span>Resolution</span>
+          <select value={normalizeAiVideoResolution(node.meta.resolution ?? '480p')} onChange={(event) => updateMeta(node.sourceRef, { resolution: event.target.value })}>
+            <option value="480p">480p</option>
+            <option value="720p">720p</option>
+            <option value="1080p">1080p</option>
+          </select>
+        </label>
+        <label className="node-field">
+          <span>Duration</span>
+          <select value={String(clamp(Math.round(Number(node.meta.duration ?? 5)), 5, 10))} onChange={(event) => updateMeta(node.sourceRef, { duration: Number(event.target.value) })}>
+            <option value="5">5s</option>
+            <option value="10">10s</option>
+          </select>
+        </label>
+        <label className="node-field">
+          <span>Seed</span>
+          <input type="number" min={0} max={2147483647} value={Number(node.meta.seed ?? 0)} onChange={(event) => updateMeta(node.sourceRef, { seed: Number(event.target.value) })} />
+        </label>
+        <div className="checkbox-grid">
+          <label className="checkbox-row"><input type="checkbox" checked={Boolean(node.meta.cameraFixed)} onChange={(event) => updateMeta(node.sourceRef, { cameraFixed: event.target.checked })} /><span>Camera fixed</span></label>
+          <label className="checkbox-row"><input type="checkbox" checked={Boolean(node.meta.generateAudio)} onChange={(event) => updateMeta(node.sourceRef, { generateAudio: event.target.checked })} /><span>Generate audio</span></label>
+          <label className="checkbox-row"><input type="checkbox" checked={Boolean(node.meta.returnLastFrame)} onChange={(event) => updateMeta(node.sourceRef, { returnLastFrame: event.target.checked })} /><span>Return last frame</span></label>
+          <label className="checkbox-row"><input type="checkbox" checked={Boolean(node.meta.watermark)} onChange={(event) => updateMeta(node.sourceRef, { watermark: event.target.checked })} /><span>Watermark</span></label>
+        </div>
+        {node.meta.taskId || node.meta.runStatus || node.meta.error ? (
+          <div className="node-readonly-stack">
+            {node.meta.taskId ? <span>Task: {String(node.meta.taskId)}</span> : null}
             {node.meta.runStatus ? <span>Status: {String(node.meta.runStatus)}</span> : null}
             {node.meta.error ? <span className="node-error-text">Error: {String(node.meta.error)}</span> : null}
           </div>
@@ -2717,7 +3258,7 @@ function renderInlineNodeEditor(
       />
     )
   }
-  if (node.nodeType === 'gen_img') {
+  if (node.nodeType === 'gen_img' || node.nodeType === 'gen_video') {
     return (
       <div className="ai-image-node-body">
         {node.meta.runStatus ? <span className="ai-image-status">{String(node.meta.runStatus)}</span> : null}
@@ -2842,7 +3383,7 @@ function renderNodePreview(node: CanvasNode, onPreviewImage: (src: string, title
   if (node.nodeType === 'prompt' && node.meta.prompt) {
     return <div className="node-preview-chip">{String(node.meta.prompt).slice(0, 40)}</div>
   }
-  if (node.nodeType === 'gen_img') {
+  if (node.nodeType === 'gen_img' || node.nodeType === 'gen_video') {
     return <div className="node-preview-chip">{node.meta.prompt ? String(node.meta.prompt).slice(0, 40) : 'Prompt required'}</div>
   }
   if (node.nodeType === 'code' || node.nodeType === 'c_sharp') {
@@ -2857,6 +3398,7 @@ function getNodePreviewText(node: CanvasNode) {
   if (node.nodeType === 'image' || node.nodeType === 'img') return node.meta.imagePath || 'No image path'
   if (node.nodeType === 'slider') return `Range ${node.meta.min ?? 0} - ${node.meta.max ?? 1}`
   if (node.nodeType === 'gen_img') return node.meta.prompt || 'No image prompt'
+  if (node.nodeType === 'gen_video') return node.meta.prompt || 'No video prompt'
   return node.meta.body || 'No content'
 }
 
@@ -2889,7 +3431,7 @@ function renderConnection(connection: CanvasConnection, nodes: CanvasNode[], vie
       key={connection.id}
       d={createConnectionPath(from, to)}
       className={`connection-path${isRunningInput ? ' connection-path-running' : ''}`}
-      style={{ '--connection-color': portColor(portType) } as React.CSSProperties}
+      style={{ '--connection-color': `var(--port-${portType})` } as React.CSSProperties}
     />
   )
 }
@@ -2911,7 +3453,7 @@ function renderPendingConnection(
     <path
       d={createConnectionPath(from, point)}
       className="connection-path connection-path-pending"
-      style={{ '--connection-color': portColor(portType) } as React.CSSProperties}
+      style={{ '--connection-color': `var(--port-${portType})` } as React.CSSProperties}
     />
   )
 }
@@ -2968,6 +3510,32 @@ function buildDefaultNodeMeta(nodeType: CanvasNodeType, sourceRef: string) {
       ports: getNodePorts(nodeType, {}),
     }
   }
+  if (nodeType === 'gen_video') {
+    return {
+      sourceRef,
+      nodeType,
+      title: 'AI Video',
+      summary: 'Generate video',
+      body: 'Generate a Seedance video from a prompt and optional reference image.',
+      prompt: '',
+      defaultPrompt: 'Create a smooth cinematic video with natural motion, stable composition, and coherent lighting.',
+      videoModel: 'doubao-seedance-1-0-pro-250528',
+      ratio: '16:9',
+      duration: 5,
+      resolution: '480p',
+      seed: 0,
+      watermark: false,
+      cameraFixed: false,
+      returnLastFrame: false,
+      generateAudio: false,
+      role: 'tool',
+      kind: 'tool',
+      collapsed: false,
+      default_width: 360,
+      default_height: 220,
+      ports: getNodePorts(nodeType, {}),
+    }
+  }
   if (nodeType === 'image' || nodeType === 'img') {
     return {
       sourceRef,
@@ -2992,7 +3560,9 @@ function buildDefaultNodeMeta(nodeType: CanvasNodeType, sourceRef: string) {
       summary: 'Generate image',
       body: 'Generate an image from a prompt and optional reference image.',
       prompt: '',
-      imageSize: '1024x1024',
+      imageSizeMode: 'ratio',
+      aspectRatio: '1:1',
+      imageSize: '4K',
       imageCount: 1,
       seed: 0,
       role: 'tool',

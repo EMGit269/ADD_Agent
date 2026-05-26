@@ -159,8 +159,17 @@ namespace ADDGH
                 {
                     ProviderId = "nanobanana-relay",
                     DisplayName = "Nano-banana / Relay",
-                    DefaultBaseUrl = "https://your-relay-host/v1",
-                    DefaultModel = "Nano-banana-3.1-Flash",
+                    DefaultBaseUrl = "https://your-relay-host/v1/images/generations",
+                    DefaultModel = "gemini-3.1-flash-image-preview",
+                    SupportsTools = false,
+                    SupportsVision = true
+                },
+                new ModelProviderConfig
+                {
+                    ProviderId = "seedance-relay",
+                    DisplayName = "Seedance Video / Relay",
+                    DefaultBaseUrl = "https://your-relay-host",
+                    DefaultModel = "doubao-seedance-1-0-pro-250528",
                     SupportsTools = false,
                     SupportsVision = true
                 }

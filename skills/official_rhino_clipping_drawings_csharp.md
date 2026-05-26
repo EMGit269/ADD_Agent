@@ -1,4 +1,4 @@
----
+﻿---
 name: official-rhino-clipping-drawings-csharp
 description: 官方 reference。Rhino 8 / Grasshopper C# Script 电池组，用于 ClippingDrawings 出图整理、图层剖切样式、打印线宽和玻璃对象归类。
 ---
@@ -7,6 +7,8 @@ description: 官方 reference。Rhino 8 / Grasshopper C# Script 电池组，用�
 
 ## Reference
 - 画布文件：`reference/RHINO PLP.gh`
+- 官方批量 ClippingDrawing JSON：`reference/official_clippingdrawing_batch_csharp.json`
+- 官方批量 ClippingDrawing C#：`skills/official_rhino_clippingdrawing_batch_csharp.md`
 - 适用环境：Rhino 8、Grasshopper、Rhino 文档中的真实对象或图层
 - 触发方式：所有执行类输入建议接 `Button`，实现点一次执行一次
 
@@ -15,6 +17,8 @@ description: 官方 reference。Rhino 8 / Grasshopper C# Script 电池组，用�
 - 修改图层打印线宽
 - 按颜色筛选物件并归类到同级 `玻璃` 图层
 - 运行 ClippingDrawings 后自动整理新生成图层和物件
+
+如果任务是批量执行 ClippingDrawing、自动整理结果图层、设置普通/Curve 图层线宽、隐藏 Solid 图层，优先读取 `skills/official_rhino_clippingdrawing_batch_csharp.md` 获取完整 C# Script；需要对照电池连接和参数默认值时再读取 `reference/official_clippingdrawing_batch_csharp.json`。
 
 ## 1. Set Layer Section Style
 

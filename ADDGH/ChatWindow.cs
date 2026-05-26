@@ -94,7 +94,9 @@ namespace ADDGH
         private static Button _btnToggleViewMode;
         private static ColumnDefinition _historyCol;
         private static ColumnDefinition _chatCol;
+        private static ColumnDefinition _splitterCol;
         private static ColumnDefinition _codeCol;
+        private static GridSplitter _chatCodeSplitter;
         private static GH_Canvas _codeSurfaceHookedCanvas;
         private static GH_Document _codeSurfaceHookedDoc;
         private static System.Windows.Threading.DispatcherTimer _codeSurfaceDebounceTimer;
@@ -943,7 +945,7 @@ namespace ADDGH
                 ? _chatCol.ActualWidth
                 : (_isCodeVisible ? Math.Max(ChatPaneMinWidth, fallbackWidth / 3.0) : fallbackWidth);
             double maxContentWidth = _isCodeVisible ? ChatContentMaxWidth : ChatContentCollapsedMaxWidth;
-            double contentWidth = Math.Max(0, Math.Min(maxContentWidth, availableWidth - ChatScrollbarGutter));
+            double contentWidth = Math.Max(0, Math.Min(maxContentWidth, availableWidth - 24));
 
             SetElementWidth(_chatScroll, contentWidth, animate);
             SetElementWidth(_inputAreaBorder, contentWidth, animate);
@@ -1331,14 +1333,27 @@ namespace ADDGH
         <Style TargetType=""Button"" x:Key=""IconButtonStyle"">
             <Setter Property=""Background"" Value=""Transparent""/>
             <Setter Property=""BorderThickness"" Value=""0""/>
+            <Setter Property=""MinWidth"" Value=""28""/>
+            <Setter Property=""Height"" Value=""28""/>
+            <Setter Property=""Padding"" Value=""8,0""/>
+            <Setter Property=""HorizontalContentAlignment"" Value=""Center""/>
+            <Setter Property=""VerticalContentAlignment"" Value=""Center""/>
+            <Setter Property=""VerticalAlignment"" Value=""Center""/>
             <Setter Property=""Cursor"" Value=""Hand""/>
             <Setter Property=""Template"">
                 <Setter.Value>
                     <ControlTemplate TargetType=""Button"">
-                        <Border Background=""{TemplateBinding Background}"" CornerRadius=""6"">
-                            <ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/>
+                        <Border x:Name=""Bd"" Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""14"" MinWidth=""{TemplateBinding MinWidth}"" Height=""{TemplateBinding Height}"" Padding=""{TemplateBinding Padding}"">
+                            <ContentPresenter HorizontalAlignment=""{TemplateBinding HorizontalContentAlignment}"" VerticalAlignment=""{TemplateBinding VerticalContentAlignment}"" RecognizesAccessKey=""True""/>
                         </Border>
-
+                        <ControlTemplate.Triggers>
+                            <Trigger Property=""IsMouseOver"" Value=""True"">
+                                <Setter TargetName=""Bd"" Property=""Background"" Value=""#1AFFFFFF""/>
+                            </Trigger>
+                            <Trigger Property=""IsPressed"" Value=""True"">
+                                <Setter TargetName=""Bd"" Property=""Background"" Value=""#26FFFFFF""/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -1480,6 +1495,7 @@ namespace ADDGH
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width=""0"" x:Name=""HistoryCol""/>
                     <ColumnDefinition Width=""*"" MinWidth=""386"" x:Name=""ChatCol""/>
+                    <ColumnDefinition Width=""0"" x:Name=""SplitterCol""/>
                     <ColumnDefinition Width=""0"" x:Name=""CodeCol""/>
                 </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
@@ -1489,7 +1505,7 @@ namespace ADDGH
                     <RowDefinition Height=""0"" x:Name=""LibraryRow""/>
                 </Grid.RowDefinitions>
 
-                <Grid Grid.Row=""0"" Grid.Column=""0"" Grid.ColumnSpan=""3"" x:Name=""ChatToolbar"" Panel.ZIndex=""12"" Margin=""16,8,16,8"" MinHeight=""52"">
+                <Grid Grid.Row=""0"" Grid.Column=""0"" Grid.ColumnSpan=""4"" x:Name=""ChatToolbar"" Panel.ZIndex=""12"" Margin=""16,8,16,8"" MinHeight=""52"">
                     <StackPanel Orientation=""Horizontal"" HorizontalAlignment=""Left"" VerticalAlignment=""Center"">
                         <Button x:Name=""BtnToggleHistory"" Style=""{StaticResource ToolbarIconButtonStyle}"" ToolTip=""对话历史"">
                             <Viewbox Width=""{DynamicResource ToolbarIconSize}"" Height=""{DynamicResource ToolbarIconSize}"">
@@ -1509,7 +1525,7 @@ namespace ADDGH
                         <TextBlock Text=""Squirrel"" Foreground=""#DDE1E7"" FontSize=""17"" FontWeight=""SemiBold"" VerticalAlignment=""Center"" Margin=""12,0,0,0""/>
                     </StackPanel>
                     <StackPanel Orientation=""Horizontal"" HorizontalAlignment=""Right"">
-                        <Button x:Name=""BtnToggleViewMode"" Content=""JSON"" Foreground=""#B8B8B8"" Background=""Transparent"" BorderThickness=""0"" BorderBrush=""Transparent"" FontSize=""10"" Padding=""8,4"" Cursor=""Hand"" VerticalAlignment=""Center"" Margin=""0,0,8,0"" Visibility=""Collapsed"">
+                        <Button x:Name=""BtnToggleViewMode"" Content=""JSON"" Foreground=""#B8B8B8"" Background=""#242A32"" BorderThickness=""1"" BorderBrush=""#3A404A"" FontSize=""10"" Padding=""9,5"" Cursor=""Hand"" VerticalAlignment=""Center"" Margin=""0"" Visibility=""Collapsed"">
                             <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" CornerRadius=""6""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
                         </Button>
                         <Button x:Name=""BtnSettings"" Style=""{StaticResource ToolbarIconButtonStyle}"" ToolTip=""配置"" Margin=""0,0,4,0"">
@@ -1530,7 +1546,7 @@ namespace ADDGH
                         </Button>
                     </StackPanel>
                 </Grid>
-                <Border Grid.Row=""0"" Grid.Column=""0"" Grid.ColumnSpan=""3"" x:Name=""ToolbarDivider"" Panel.ZIndex=""11"" Height=""1"" VerticalAlignment=""Bottom"" Background=""#1FFFFFFF"" Visibility=""Collapsed""/>
+                <Border Grid.Row=""0"" Grid.Column=""0"" Grid.ColumnSpan=""4"" x:Name=""ToolbarDivider"" Panel.ZIndex=""11"" Height=""1"" VerticalAlignment=""Bottom"" Background=""#1FFFFFFF"" Visibility=""Collapsed""/>
 
                 <Border x:Name=""HistorySidebar"" Grid.Row=""1"" Grid.Column=""0"" Grid.RowSpan=""3"" Panel.ZIndex=""9"" HorizontalAlignment=""Stretch"" VerticalAlignment=""Stretch"" Visibility=""Collapsed"" Margin=""0"" Background=""#171717"" BorderBrush=""#2A2A2A"" BorderThickness=""0,0,1,1"" CornerRadius=""0"" ClipToBounds=""True"">
                     <Border.Effect>
@@ -1601,9 +1617,13 @@ namespace ADDGH
                                 <ColumnDefinition Width=""Auto""/>
                             </Grid.ColumnDefinitions>
 
-                            <Button x:Name=""BtnUploadImage"" Grid.Column=""0"" Style=""{StaticResource IconButtonStyle}"" Content=""+"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""22"" FontWeight=""Medium"" Cursor=""Hand"" ToolTip=""上传图片或文件"" Margin=""0,0,10,0""/>
-                            <Button x:Name=""BtnStop"" Grid.Column=""1"" Content=""停止"" Visibility=""Collapsed"" Foreground=""#FF6B6B"" Background=""Transparent"" BorderThickness=""0"" FontSize=""16"" Cursor=""Hand"" ToolTip=""停止按钮"" Margin=""0,0,10,0""/>
-                            <Button x:Name=""BtnAgentModeDropdown"" Grid.Column=""2"" Style=""{StaticResource IconButtonStyle}"" Content=""Create ▾"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""执行模式"">
+                            <Button x:Name=""BtnUploadImage"" Grid.Column=""0"" Style=""{StaticResource IconButtonStyle}"" Content=""+"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""18"" FontWeight=""Medium"" Cursor=""Hand"" ToolTip=""上传图片或文件"" Margin=""0,0,6,0""/>
+                            <Button x:Name=""BtnStop"" Grid.Column=""1"" Style=""{StaticResource IconButtonStyle}"" Visibility=""Collapsed"" Foreground=""#FF6B6B"" Background=""Transparent"" BorderThickness=""0"" Cursor=""Hand"" ToolTip=""停止按钮"" Margin=""0,0,10,0"" Width=""28"" Height=""28"" Padding=""0"">
+                                <Grid Width=""28"" Height=""28"">
+                                    <Border Width=""8"" Height=""8"" CornerRadius=""1"" Background=""#FF6B6B"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"" SnapsToDevicePixels=""True""/>
+                                </Grid>
+                            </Button>
+                            <Button x:Name=""BtnAgentModeDropdown"" Grid.Column=""2"" Style=""{StaticResource IconButtonStyle}"" Content=""Create ▾"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""13"" Cursor=""Hand"" ToolTip=""执行模式"" Margin=""0,0,2,0"">
                                 <Button.ContextMenu>
                                     <ContextMenu Background=""#1E1E1E"" Foreground=""#E0E0E0"" BorderBrush=""#333"" BorderThickness=""1"" Padding=""4"">
                                         <ContextMenu.Template>
@@ -1639,7 +1659,7 @@ namespace ADDGH
                                     </ContextMenu>
                                 </Button.ContextMenu>
                             </Button>
-                            <Button x:Name=""BtnReference"" Grid.Column=""3"" Style=""{StaticResource IconButtonStyle}"" Content=""参考"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""参考菜单"" Margin=""8,0,0,0"">
+                            <Button x:Name=""BtnReference"" Grid.Column=""3"" Style=""{StaticResource IconButtonStyle}"" Content=""参考"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""13"" Cursor=""Hand"" ToolTip=""参考菜单"" Margin=""2,0,0,0"">
                                 <Button.ContextMenu>
                                     <ContextMenu Background=""#1E1E1E"" Foreground=""#E0E0E0"" BorderBrush=""#333"" BorderThickness=""1"" Padding=""4"">
                                         <ContextMenu.Template>
@@ -1719,39 +1739,11 @@ namespace ADDGH
                     </Grid>
                 </Border>
 
-                <Border Grid.Row=""1"" Grid.Column=""2"" Grid.RowSpan=""2"" x:Name=""CodeViewBorder"" Background=""#141414"" CornerRadius=""0"" BorderBrush=""#2A2A2A"" BorderThickness=""1,0,0,0"">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height=""Auto""/>
-                            <RowDefinition Height=""*""/>
-                        </Grid.RowDefinitions>
-
-                        <Border Grid.Row=""0"" Background=""#171A1F"" BorderBrush=""#232830"" BorderThickness=""0,0,0,1"" Padding=""14,10,14,10"">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width=""*""/>
-                                    <ColumnDefinition Width=""Auto""/>
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Orientation=""Horizontal"" VerticalAlignment=""Center"">
-                                    <TextBlock Text=""WORKBENCH"" Foreground=""#E5E7EB"" FontSize=""12"" FontWeight=""SemiBold"" VerticalAlignment=""Center""/>
-                                    <Button x:Name=""BtnCanvasPaneView"" Content=""Canvas"" Margin=""12,0,0,0"" Padding=""10,4"" Foreground=""#E5E7EB"" Background=""#2B313A"" BorderBrush=""#3A404A"" BorderThickness=""1"" Cursor=""Hand"">
-                                        <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""7""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
-                                    </Button>
-                                    <Button x:Name=""BtnInspectorPaneView"" Content=""Inspector"" Margin=""8,0,0,0"" Padding=""10,4"" Foreground=""#AEB4BD"" Background=""Transparent"" BorderBrush=""#323843"" BorderThickness=""1"" Cursor=""Hand"">
-                                        <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""7""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
-                                    </Button>
-                                </StackPanel>
-                                <StackPanel Grid.Column=""1"" Orientation=""Horizontal"" VerticalAlignment=""Center"">
-                                    <Button x:Name=""BtnCanvasSync"" Content=""Sync"" Foreground=""#D0D4DB"" Background=""Transparent"" BorderBrush=""#323843"" BorderThickness=""1"" FontSize=""10"" Padding=""8,4"" Cursor=""Hand"" Margin=""0,0,8,0"">
-                                        <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""7""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
-                                    </Button>
-                                </StackPanel>
-                            </Grid>
-                        </Border>
-
-                        <Grid Grid.Row=""1"">
+                <Border Grid.Row=""1"" Grid.Column=""3"" Grid.RowSpan=""2"" x:Name=""CodeViewBorder"" Background=""#141414"" CornerRadius=""0"" BorderBrush=""#2A2A2A"" BorderThickness=""1,0,0,0"">
+                    <Grid ClipToBounds=""True"">
+                        <Grid>
                             <Grid x:Name=""CanvasPane"" Background=""#141414"">
-                                <Border Margin=""15,12,15,15"" Background=""#12161C"" BorderBrush=""#2A2F38"" BorderThickness=""1"" CornerRadius=""12"">
+                                <Border Margin=""0"" Background=""#12161C"" BorderBrush=""Transparent"" BorderThickness=""0"" CornerRadius=""0"">
                                     <Grid x:Name=""CanvasSurfaceHost"">
                                         <Border x:Name=""CanvasStatusHost"" Background=""Transparent"" Padding=""22"">
                                             <StackPanel VerticalAlignment=""Center"" HorizontalAlignment=""Center"" Width=""280"">
@@ -1768,16 +1760,26 @@ namespace ADDGH
                                     <RowDefinition Height=""*""/>
                                     <RowDefinition Height=""Auto""/>
                                 </Grid.RowDefinitions>
-                                <Border Grid.Row=""0"" Margin=""15,10,15,0"" Background=""Transparent""><RichTextBox x:Name=""RichCodeView"" Background=""Transparent"" Foreground=""#B8B8B8"" BorderThickness=""0"" FontSize=""12"" FontFamily=""Consolas, Monaco, Courier New"" IsReadOnly=""True"" IsDocumentEnabled=""True"" VerticalScrollBarVisibility=""Auto"" HorizontalScrollBarVisibility=""Disabled"" CaretBrush=""#888"" Padding=""0""/></Border>
+                                <Border Grid.Row=""0"" Margin=""0"" Background=""Transparent""><RichTextBox x:Name=""RichCodeView"" Background=""Transparent"" Foreground=""#B8B8B8"" BorderThickness=""0"" FontSize=""12"" FontFamily=""Consolas, Monaco, Courier New"" IsReadOnly=""True"" IsDocumentEnabled=""True"" VerticalScrollBarVisibility=""Auto"" HorizontalScrollBarVisibility=""Disabled"" CaretBrush=""#888"" Padding=""16,42,16,12""/></Border>
                                 <Border Grid.Row=""1"" x:Name=""CodeCanvasIssuesHost"" Background=""#1E1E1E"" CornerRadius=""0"" BorderBrush=""#2A2A2A"" BorderThickness=""0,1,0,0"" MinHeight=""120""><DockPanel Margin=""15,10,15,12"" LastChildFill=""True""><TextBlock DockPanel.Dock=""Top"" Text=""画布诊断"" Foreground=""#888"" FontSize=""11"" FontWeight=""SemiBold"" Margin=""0,0,0,8""/><ScrollViewer VerticalScrollBarVisibility=""Auto"" HorizontalScrollBarVisibility=""Disabled""><TextBox x:Name=""TxtCanvasIssues"" IsReadOnly=""True"" TextWrapping=""Wrap"" AcceptsReturn=""True"" Background=""Transparent"" Foreground=""#C8C8C8"" BorderThickness=""0"" FontSize=""12"" Padding=""0"" CaretBrush=""#888""/></ScrollViewer></DockPanel></Border>
                             </Grid>
                         </Grid>
+                        <Button x:Name=""BtnCanvasPaneView"" Content=""Code"" HorizontalAlignment=""Left"" VerticalAlignment=""Top"" Margin=""14,12,0,0"" Padding=""10,5"" Foreground=""#E5E7EB"" Background=""#AA1B2027"" BorderBrush=""#3A404A"" BorderThickness=""1"" Cursor=""Hand"" Panel.ZIndex=""20"">
+                            <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""8""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
+                        </Button>
+                        <Button x:Name=""BtnInspectorPaneView"" Content=""Canvas"" HorizontalAlignment=""Left"" VerticalAlignment=""Top"" Margin=""14,12,0,0"" Padding=""10,5"" Foreground=""#E5E7EB"" Background=""#AA1B2027"" BorderBrush=""#3A404A"" BorderThickness=""1"" Cursor=""Hand"" Panel.ZIndex=""20"" Visibility=""Collapsed"">
+                            <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""8""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
+                        </Button>
+                        <Button x:Name=""BtnCanvasSync"" Content=""Sync"" HorizontalAlignment=""Right"" VerticalAlignment=""Top"" Foreground=""#D0D4DB"" Background=""#AA1B2027"" BorderBrush=""#3A404A"" BorderThickness=""1"" FontSize=""10"" Padding=""9,5"" Cursor=""Hand"" Margin=""0,12,14,0"" Panel.ZIndex=""20"">
+                            <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""8""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
+                        </Button>
                     </Grid>
                 </Border>
+                <GridSplitter x:Name=""ChatCodeSplitter"" Grid.Row=""1"" Grid.Column=""2"" Grid.RowSpan=""2"" Width=""4"" HorizontalAlignment=""Stretch"" VerticalAlignment=""Stretch"" ResizeDirection=""Columns"" ResizeBehavior=""PreviousAndNext"" Background=""Transparent"" Cursor=""SizeWE"" Panel.ZIndex=""2"" Visibility=""Collapsed""/>
         </Grid> <!-- End MainLayout Grid -->
 
     <!-- 配置悬浮层 -->
-            <Grid x:Name=""SettingsOverlay"" Grid.ColumnSpan=""2"" Panel.ZIndex=""999"" Margin=""0"" Background=""Transparent"" Visibility=""Collapsed"">
+            <Grid x:Name=""SettingsOverlay"" Grid.ColumnSpan=""4"" Panel.ZIndex=""999"" Margin=""0"" Background=""Transparent"" Visibility=""Collapsed"">
             <Border x:Name=""SettingsPanel"" Background=""#1E1E1E"" CornerRadius=""14"" MaxWidth=""450"" MaxHeight=""680"" HorizontalAlignment=""Right"" VerticalAlignment=""Top"" Margin=""12,68,18,12"" Padding=""18"">
                 <Grid>
                     <Grid.RowDefinitions>
@@ -2132,9 +2134,17 @@ namespace ADDGH
                 _richCodeView.SizeChanged += (s, ev) => SyncFlowDocumentPageWidthToViewport(_richCodeView);
             _btnToggleViewMode = (Button)_window.FindName("BtnToggleViewMode");
             InitializeCanvasWorkbenchBindings();
+            MoveViewModeButtonIntoWorkbenchOverlay();
             _historyCol = (ColumnDefinition)_window.FindName("HistoryCol");
             _chatCol = (ColumnDefinition)_window.FindName("ChatCol");
+            _splitterCol = (ColumnDefinition)_window.FindName("SplitterCol");
             _codeCol = (ColumnDefinition)_window.FindName("CodeCol");
+            _chatCodeSplitter = (GridSplitter)_window.FindName("ChatCodeSplitter");
+            if (_chatCodeSplitter != null)
+            {
+                _chatCodeSplitter.DragDelta += (s, ev) => UpdateChatContentWidth();
+                _chatCodeSplitter.DragCompleted += (s, ev) => ScheduleChatContentWidthUpdate();
+            }
             _window.SizeChanged += (s, e) =>
             {
                 UpdateChatContentWidth();
@@ -2159,6 +2169,7 @@ namespace ADDGH
                 _isCodeVisible = !_isCodeVisible;
                 if (_isCodeVisible) {
                         if (_chatCol != null) _chatCol.MinWidth = ChatPaneMinWidth;
+                        if (_splitterCol != null) _splitterCol.Width = new GridLength(4);
                         if (_codeCol != null) {
                             _codeCol.MinWidth = CodePaneMinWidth;
                             _codeCol.Width = new GridLength(2, GridUnitType.Star);
@@ -2193,6 +2204,7 @@ namespace ADDGH
                             _codeCol.MinWidth = 0;
                             _codeCol.Width = new GridLength(0);
                         }
+                        if (_splitterCol != null) _splitterCol.Width = new GridLength(0);
                         UpdateWindowMinWidthForVisiblePanes();
                         if (!double.IsNaN(_widthBeforeCodeView) && _widthBeforeCodeView >= _window.MinWidth)
                             _window.Width = _widthBeforeCodeView;
@@ -3340,6 +3352,25 @@ namespace ADDGH
             _settingsPanel.Margin = new Thickness(left, top, right, bottom);
             _settingsPanel.Width = Math.Min(450, availableWidth);
             _settingsPanel.Height = Math.Min(680, availableHeight);
+        }
+
+        private static void MoveViewModeButtonIntoWorkbenchOverlay()
+        {
+            if (_btnToggleViewMode == null || _codeViewBorder == null) return;
+            var target = _codeViewBorder.Child as Grid;
+            if (target == null) return;
+
+            var parentPanel = _btnToggleViewMode.Parent as Panel;
+            if (parentPanel != null)
+                parentPanel.Children.Remove(_btnToggleViewMode);
+
+            _btnToggleViewMode.HorizontalAlignment = HorizontalAlignment.Right;
+            _btnToggleViewMode.VerticalAlignment = VerticalAlignment.Top;
+            _btnToggleViewMode.Margin = new Thickness(0, 12, 14, 0);
+            _btnToggleViewMode.Padding = new Thickness(9, 5, 9, 5);
+            Panel.SetZIndex(_btnToggleViewMode, 21);
+            if (!target.Children.Contains(_btnToggleViewMode))
+                target.Children.Add(_btnToggleViewMode);
         }
 
         private static ImageIntentRoute ResolveImageIntentRoute(string input, List<AttachmentItem> attachments)

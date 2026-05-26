@@ -554,36 +554,6 @@ namespace ADDGH
             double originX = 120;
             double originY = 100;
 
-            if (!string.IsNullOrWhiteSpace(promptText))
-            {
-                string promptSourceRef = "input_prompt:" + conversationId;
-                freshNodes.Add(NormalizeCanvasImageNode(new JObject
-                {
-                    ["id"] = "node:" + promptSourceRef.Replace(":", "_"),
-                    ["sourceRef"] = promptSourceRef,
-                    ["nodeType"] = "prompt",
-                    ["x"] = originX,
-                    ["y"] = originY,
-                    ["w"] = 320,
-                    ["h"] = 180,
-                    ["meta"] = new JObject
-                    {
-                        ["sourceRef"] = promptSourceRef,
-                        ["nodeType"] = "prompt",
-                        ["title"] = "Prompt",
-                        ["summary"] = "User prompt",
-                        ["body"] = promptText ?? "",
-                        ["prompt"] = promptText ?? "",
-                        ["ports"] = new JArray
-                        {
-                            new JObject { ["id"] = "out", ["label"] = "Prompt", ["direction"] = "output", ["dataType"] = "text", ["slot"] = 0 }
-                        },
-                        ["w"] = 320,
-                        ["h"] = 180
-                    }
-                }));
-            }
-
             var imageAttachments = (attachments ?? new List<AttachmentItem>())
                 .Where(a => a != null && a.Kind == AttachmentKind.Image && !string.IsNullOrWhiteSpace(a.Path) && File.Exists(a.Path))
                 .ToList();
@@ -607,10 +577,8 @@ namespace ADDGH
                         ["nodeType"] = "image",
                         ["title"] = "Input Image",
                         ["summary"] = "User reference image",
-                        ["body"] = promptText ?? "",
                         ["imagePath"] = item.Path,
                         ["imageDataUrl"] = BuildImageDataUrl(item.Path, item.MimeType),
-                        ["prompt"] = promptText ?? "",
                         ["intent"] = "input",
                         ["ports"] = new JArray
                         {

@@ -172,12 +172,12 @@ namespace ADDGH
                         argsObj["from_index"]?.ToObject<int>() ?? 0,
                         ResolveToolObjectId(argsObj["to_id"]?.ToString()),
                         argsObj["to_index"]?.ToObject<int>() ?? 0);
-                    result.AddConn++;
+                    if (!result.ToolResult.StartsWith("Error:", StringComparison.OrdinalIgnoreCase)) result.AddConn++;
                 }
                 else if (funcName == "remove_gh_component")
                 {
                     result.ToolResult = ExecuteRemoveGhComponent(ResolveToolObjectId(argsObj["id"]?.ToString()));
-                    result.DelComp++;
+                    if (!result.ToolResult.StartsWith("Error:", StringComparison.OrdinalIgnoreCase)) result.DelComp++;
                 }
                 else if (funcName == "set_gh_component_value")
                 {
@@ -197,7 +197,7 @@ namespace ADDGH
                         argsObj["from_index"]?.ToObject<int>() ?? 0,
                         ResolveToolObjectId(argsObj["to_id"]?.ToString()),
                         argsObj["to_index"]?.ToObject<int>() ?? 0);
-                    result.DelConn++;
+                    if (!result.ToolResult.StartsWith("Error:", StringComparison.OrdinalIgnoreCase)) result.DelConn++;
                 }
                 else if (funcName == "create_component_graph")
                 {
@@ -209,8 +209,11 @@ namespace ADDGH
                         argsObj["components"] as JArray,
                         argsObj["connections"] as JArray,
                         groupName);
-                    if (argsObj["components"] is JArray comps) result.AddComp += comps.Count;
-                    if (argsObj["connections"] is JArray conns) result.AddConn += conns.Count;
+                    if (!result.ToolResult.StartsWith("Error:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (argsObj["components"] is JArray comps) result.AddComp += comps.Count;
+                        if (argsObj["connections"] is JArray conns) result.AddConn += conns.Count;
+                    }
                 }
                 else if (funcName == "create_csharp_script_component")
                 {
