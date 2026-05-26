@@ -373,13 +373,13 @@ namespace ADDGH
             for (int r = 0; r < rows.Count; r++) {
                 var tableRow = new TableRow();
                 for (int c = 0; c < cols; c++) {
-                    var paragraph = new Paragraph {
-                        Margin = new Thickness(0),
-                        FontSize = 14,
-                        LineHeight = 22,
-                        Foreground = new SolidColorBrush(Color.FromRgb(235, 235, 235)),
-                        FontWeight = r == 0 ? FontWeights.SemiBold : FontWeights.Normal
-                    };
+                var paragraph = new Paragraph {
+                    Margin = new Thickness(0),
+                    FontSize = ChatBodyFontSize,
+                    LineHeight = ChatBodyLineHeight,
+                    Foreground = new SolidColorBrush(Color.FromRgb(235, 235, 235)),
+                    FontWeight = r == 0 ? FontWeights.SemiBold : FontWeights.Normal
+                };
                     AppendMarkdownInlines(paragraph.Inlines, rows[r][c]);
                     var cell = new TableCell(paragraph) {
                         BorderBrush = borderBrush,
@@ -440,8 +440,8 @@ namespace ADDGH
             Color codeBodyColor = subdued ? Color.FromRgb(220, 220, 220) : Color.FromRgb(230, 230, 230);
             Color codeHeaderColor = subdued ? Color.FromRgb(190, 190, 190) : Color.FromRgb(224, 224, 224);
             Color codeGutterColor = subdued ? Color.FromRgb(88, 88, 88) : Color.FromRgb(100, 100, 100);
-            double bodyFontSize = subdued ? 12 : 14;
-            double bodyLineHeight = subdued ? 19 : 22;
+            double bodyFontSize = subdued ? 12 : ChatBodyFontSize;
+            double bodyLineHeight = subdued ? 19 : ChatBodyLineHeight;
 
             var doc = new FlowDocument {
                 PagePadding = new Thickness(0),
@@ -589,20 +589,20 @@ namespace ADDGH
                 };
 
                 if (trimmed.StartsWith("### ")) {
-                    paragraph.FontSize = 15;
+                    paragraph.FontSize = subdued ? 15 : bodyFontSize + 1;
                     paragraph.FontWeight = FontWeights.SemiBold;
                     paragraph.Foreground = new SolidColorBrush(subdued ? Color.FromRgb(205, 205, 205) : Color.FromRgb(255, 220, 150));
                     paragraph.TextAlignment = alignRight ? TextAlignment.Right : TextAlignment.Left;
                     AppendMarkdownInlines(paragraph.Inlines, trimmed.Substring(4));
                 } else if (trimmed.StartsWith("## ")) {
-                    paragraph.FontSize = subdued ? 13 : 16;
+                    paragraph.FontSize = subdued ? 13 : bodyFontSize + 2;
                     paragraph.FontWeight = FontWeights.SemiBold;
                     paragraph.Foreground = new SolidColorBrush(subdued ? Color.FromRgb(205, 205, 205) : Color.FromRgb(255, 220, 150));
                     paragraph.Margin = new Thickness(0, 8, 0, 4);
                     paragraph.TextAlignment = alignRight ? TextAlignment.Right : TextAlignment.Left;
                     AppendMarkdownInlines(paragraph.Inlines, trimmed.Substring(3));
                 } else if (trimmed.StartsWith("# ")) {
-                    paragraph.FontSize = subdued ? 14 : 17;
+                    paragraph.FontSize = subdued ? 14 : bodyFontSize + 3;
                     paragraph.FontWeight = FontWeights.Bold;
                     paragraph.Foreground = new SolidColorBrush(subdued ? Color.FromRgb(205, 205, 205) : Color.FromRgb(255, 220, 150));
                     paragraph.Margin = new Thickness(0, 8, 0, 4);
@@ -1151,7 +1151,7 @@ namespace ADDGH
             }
         }
 
-        private static void AppendColoredStatsMessage(int addComp, int delComp, int addConn, int delConn)
+        private static void AppendColoredStatsMessage(int addComp, int delComp, int addConn, int delConn, int addCodeLines = 0, int delCodeLines = 0, string undoId = null)
         {
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
                 var card = new Border {
@@ -1167,6 +1167,7 @@ namespace ADDGH
                 var grid = new Grid();
                 grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Auto) });
                 grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
                 var titleStack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
                 titleStack.Children.Add(new TextBlock {
@@ -1190,9 +1191,14 @@ namespace ADDGH
                 if (addConn > 0) stack.Children.Add(CreateStatBadge("连线", $"+{addConn}", Color.FromRgb(46, 204, 113)));
                 if (delConn > 0) stack.Children.Add(CreateStatBadge("连线", $"-{delConn}", Color.FromRgb(231, 76, 60)));
 
+                if (addCodeLines > 0) stack.Children.Add(CreateStatBadge("C# 代码", $"+{addCodeLines}", Color.FromRgb(46, 204, 113)));
+                if (delCodeLines > 0) stack.Children.Add(CreateStatBadge("C# 代码", $"-{delCodeLines}", Color.FromRgb(231, 76, 60)));
+
                 Grid.SetColumn(stack, 1);
                 grid.Children.Add(stack);
                 card.Child = grid;
+                if (!string.IsNullOrWhiteSpace(undoId))
+                    AttachUndoButtonToStatsCard(card, undoId);
 
                 if (_thinkingBubble != null) { _chatPanel.Children.Remove(_thinkingBubble); _chatPanel.Children.Add(card); _chatPanel.Children.Add(_thinkingBubble); }
                 else _chatPanel.Children.Add(card);

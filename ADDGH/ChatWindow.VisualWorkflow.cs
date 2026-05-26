@@ -167,7 +167,7 @@ namespace ADDGH
                 return null;
             }
 
-            var providerSettings = GetProviderRuntimeSettings(GetCurrentVisionProviderId());
+            var providerSettings = GetVisionProviderRuntimeSettings();
             if (string.IsNullOrWhiteSpace(providerSettings.ApiKey))
             {
                 string diag = BuildProviderDiagnostic(providerSettings, "最终视觉复核失败：请先配置 " + providerSettings.Config.DisplayName + " 的 API Key。");

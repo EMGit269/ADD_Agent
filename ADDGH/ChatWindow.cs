@@ -59,6 +59,7 @@ namespace ADDGH
                 new PropertyMetadata(0.0, OnSmoothVerticalOffsetChanged));
 
         private static Grid _settingsOverlay;
+        private static Border _settingsPanel;
         private static TextBox _txtApiKey;
         private static ComboBox _comboProvider;
         private static ComboBox _comboVisionProvider;
@@ -66,6 +67,10 @@ namespace ADDGH
         private static TextBox _txtApiBaseUrl;
         private static TextBox _txtModel;
         private static TextBox _txtProxyUrl;
+        private static TextBox _txtVisionApiKey;
+        private static TextBox _txtVisionApiBaseUrl;
+        private static TextBox _txtVisionModel;
+        private static TextBox _txtVisionProxyUrl;
         private static TextBox _txtImageApiKey;
         private static TextBox _txtImageApiBaseUrl;
         private static TextBox _txtImageModel;
@@ -123,6 +128,8 @@ namespace ADDGH
         private static Button _btnModeBattery;
         private static Button _btnModeCSharp;
         private static Button _btnModeMixed;
+        private static Button _btnDisplayNormal;
+        private static Button _btnDisplayLarge;
         private static MenuItem _menuAgentModeCreate;
         private static MenuItem _menuAgentModePlan;
         private static MenuItem _menuModeBattery;
@@ -153,10 +160,18 @@ namespace ADDGH
             Plan
         }
 
+        private enum DisplayMode
+        {
+            Normal,
+            Large
+        }
+
         private const string LayoutModeSettingKey = "ADDGH_LayoutMode";
         private const string AgentModeSettingKey = "ADDGH_AgentMode";
+        private const string DisplayModeSettingKey = "ADDGH_DisplayMode";
         private static LayoutMode _layoutMode = LayoutMode.Mixed;
         private static AgentMode _agentMode = AgentMode.Create;
+        private static DisplayMode _displayMode = DisplayMode.Normal;
 
         private const string SYSTEM_PROMPT = @"你是 GH 参数化专家。
 
@@ -419,6 +434,20 @@ namespace ADDGH
             return AgentMode.Create;
         }
 
+        private static DisplayMode ReadDisplayModeSetting()
+        {
+            try
+            {
+                string raw = Grasshopper.Instances.Settings.GetValue(DisplayModeSettingKey, DisplayMode.Normal.ToString());
+                if (Enum.TryParse(raw, true, out DisplayMode mode)) return mode;
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("Read display mode failed: " + ex.Message);
+            }
+            return DisplayMode.Normal;
+        }
+
         private static void SaveLayoutModeSetting()
         {
             try { Grasshopper.Instances.Settings.SetValue(LayoutModeSettingKey, _layoutMode.ToString()); }
@@ -429,6 +458,12 @@ namespace ADDGH
         {
             try { Grasshopper.Instances.Settings.SetValue(AgentModeSettingKey, _agentMode.ToString()); }
             catch (Exception ex) { AddGhLog.Warn("Save agent mode failed: " + ex.Message); }
+        }
+
+        private static void SaveDisplayModeSetting()
+        {
+            try { Grasshopper.Instances.Settings.SetValue(DisplayModeSettingKey, _displayMode.ToString()); }
+            catch (Exception ex) { AddGhLog.Warn("Save display mode failed: " + ex.Message); }
         }
 
         private static void ReplaceCurrentSystemPrompt()
@@ -457,6 +492,62 @@ namespace ADDGH
             SaveAgentModeSetting();
             UpdateAgentModeButtons();
             ReplaceCurrentSystemPrompt();
+        }
+
+        private static void SetDisplayMode(DisplayMode mode)
+        {
+            _displayMode = mode;
+            SaveDisplayModeSetting();
+            ApplyDisplayMode();
+            RefreshUI();
+        }
+
+        private static double ChatBodyFontSize => _displayMode == DisplayMode.Large ? 18 : 14;
+        private static double ChatBodyLineHeight => _displayMode == DisplayMode.Large ? 28 : 22;
+
+        private static void ApplyDisplayMode()
+        {
+            if (_txtInput != null)
+            {
+                _txtInput.FontSize = _displayMode == DisplayMode.Large ? 18 : 14;
+                _txtInput.MinHeight = _displayMode == DisplayMode.Large ? 58 : 44;
+                _txtInput.MaxHeight = _displayMode == DisplayMode.Large ? 168 : 128;
+            }
+
+            if (_emptyChatPrompt != null)
+                _emptyChatPrompt.FontSize = _displayMode == DisplayMode.Large ? 28 : 24;
+
+            if (_window != null)
+            {
+                _window.Resources["ToolbarButtonSize"] = 42.0;
+                _window.Resources["ToolbarIconSize"] = 21.0;
+            }
+
+            if (_btnSend != null)
+            {
+                _btnSend.Width = 28;
+                _btnSend.Height = 28;
+                _btnSend.FontSize = 13;
+            }
+
+            if (_contextMeterHost != null)
+            {
+                _contextMeterHost.Width = 21;
+                _contextMeterHost.Height = 21;
+            }
+
+            void PaintDisplay(Button button, bool selected)
+            {
+                if (button == null) return;
+                button.Background = new SolidColorBrush(selected ? Color.FromRgb(238, 238, 238) : Color.FromRgb(30, 30, 30));
+                button.Foreground = new SolidColorBrush(selected ? Color.FromRgb(18, 18, 18) : Color.FromRgb(160, 160, 160));
+                button.BorderBrush = new SolidColorBrush(selected ? Color.FromRgb(238, 238, 238) : Color.FromRgb(58, 58, 58));
+                button.FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal;
+            }
+
+            PaintDisplay(_btnDisplayNormal, _displayMode == DisplayMode.Normal);
+            PaintDisplay(_btnDisplayLarge, _displayMode == DisplayMode.Large);
+            UpdateChatBottomInset();
         }
 
         private static void ResetTransientConversationState()
@@ -1177,6 +1268,8 @@ namespace ADDGH
         WindowStyle=""SingleBorderWindow"" Background=""#141414""
         Topmost=""True"" WindowStartupLocation=""CenterScreen"" x:Name=""SquirrelWindow"">
     <Window.Resources>
+        <sys:Double x:Key=""ToolbarButtonSize"" xmlns:sys=""clr-namespace:System;assembly=mscorlib"">42</sys:Double>
+        <sys:Double x:Key=""ToolbarIconSize"" xmlns:sys=""clr-namespace:System;assembly=mscorlib"">21</sys:Double>
         <Style TargetType=""ScrollBar"">
             <Setter Property=""Background"" Value=""Transparent""/>
             <Setter Property=""MinWidth"" Value=""0""/>
@@ -1251,8 +1344,8 @@ namespace ADDGH
             </Setter>
         </Style>
         <Style TargetType=""Button"" x:Key=""ToolbarIconButtonStyle"">
-            <Setter Property=""Width"" Value=""34""/>
-            <Setter Property=""Height"" Value=""32""/>
+            <Setter Property=""Width"" Value=""{DynamicResource ToolbarButtonSize}""/>
+            <Setter Property=""Height"" Value=""{DynamicResource ToolbarButtonSize}""/>
             <Setter Property=""Background"" Value=""Transparent""/>
             <Setter Property=""Foreground"" Value=""#D7D9DD""/>
             <Setter Property=""BorderBrush"" Value=""Transparent""/>
@@ -1262,7 +1355,7 @@ namespace ADDGH
             <Setter Property=""Template"">
                 <Setter.Value>
                     <ControlTemplate TargetType=""Button"">
-                        <Border x:Name=""Bd"" Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""8"" SnapsToDevicePixels=""True"">
+                        <Border x:Name=""Bd"" Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""10"" SnapsToDevicePixels=""True"">
                             <ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/>
                         </Border>
                         <ControlTemplate.Triggers>
@@ -1396,31 +1489,31 @@ namespace ADDGH
                     <RowDefinition Height=""0"" x:Name=""LibraryRow""/>
                 </Grid.RowDefinitions>
 
-                <Grid Grid.Row=""0"" Grid.Column=""0"" Grid.ColumnSpan=""3"" x:Name=""ChatToolbar"" Panel.ZIndex=""12"" Margin=""12,5,12,5"">
+                <Grid Grid.Row=""0"" Grid.Column=""0"" Grid.ColumnSpan=""3"" x:Name=""ChatToolbar"" Panel.ZIndex=""12"" Margin=""16,8,16,8"" MinHeight=""52"">
                     <StackPanel Orientation=""Horizontal"" HorizontalAlignment=""Left"" VerticalAlignment=""Center"">
                         <Button x:Name=""BtnToggleHistory"" Style=""{StaticResource ToolbarIconButtonStyle}"" ToolTip=""对话历史"">
-                            <Viewbox Width=""17"" Height=""17"">
+                            <Viewbox Width=""{DynamicResource ToolbarIconSize}"" Height=""{DynamicResource ToolbarIconSize}"">
                                 <Grid Width=""20"" Height=""20"">
                                     <Path Data=""M4.5,4.5 L15.5,4.5 Q17,4.5 17,6 L17,14 Q17,15.5 15.5,15.5 L7.5,15.5 L4,18 L4,6 Q4,4.5 5.5,4.5"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""1.7"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" StrokeLineJoin=""Round"" Fill=""Transparent""/>
                                     <Path Data=""M8,8.5 L13,8.5 M8,11.5 L12,11.5"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""1.7"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round""/>
                                 </Grid>
                             </Viewbox>
                         </Button>
-                        <Button x:Name=""BtnNewChat"" Style=""{StaticResource ToolbarIconButtonStyle}"" ToolTip=""新对话"" Margin=""4,0,0,0"">
-                            <Viewbox Width=""17"" Height=""17"">
+                        <Button x:Name=""BtnNewChat"" Style=""{StaticResource ToolbarIconButtonStyle}"" ToolTip=""新对话"" Margin=""6,0,0,0"">
+                            <Viewbox Width=""{DynamicResource ToolbarIconSize}"" Height=""{DynamicResource ToolbarIconSize}"">
                                 <Grid Width=""20"" Height=""20"">
                                     <Path Data=""M10,4 L10,16 M4,10 L16,10"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""2"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round""/>
                                 </Grid>
                             </Viewbox>
                         </Button>
-                        <TextBlock Text=""Squirrel"" Foreground=""#C9CDD3"" FontSize=""13"" FontWeight=""SemiBold"" VerticalAlignment=""Center"" Margin=""8,0,0,0""/>
+                        <TextBlock Text=""Squirrel"" Foreground=""#DDE1E7"" FontSize=""17"" FontWeight=""SemiBold"" VerticalAlignment=""Center"" Margin=""12,0,0,0""/>
                     </StackPanel>
                     <StackPanel Orientation=""Horizontal"" HorizontalAlignment=""Right"">
                         <Button x:Name=""BtnToggleViewMode"" Content=""JSON"" Foreground=""#B8B8B8"" Background=""Transparent"" BorderThickness=""0"" BorderBrush=""Transparent"" FontSize=""10"" Padding=""8,4"" Cursor=""Hand"" VerticalAlignment=""Center"" Margin=""0,0,8,0"" Visibility=""Collapsed"">
                             <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" CornerRadius=""6""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
                         </Button>
                         <Button x:Name=""BtnSettings"" Style=""{StaticResource ToolbarIconButtonStyle}"" ToolTip=""配置"" Margin=""0,0,4,0"">
-                            <Viewbox Width=""17"" Height=""17"">
+                            <Viewbox Width=""{DynamicResource ToolbarIconSize}"" Height=""{DynamicResource ToolbarIconSize}"">
                                 <Grid Width=""20"" Height=""20"">
                                     <Path Data=""M10,3.5 L11.4,3.5 L11.9,5.4 C12.5,5.6 13.1,5.9 13.6,6.2 L15.4,5.4 L16.1,6.6 L14.8,8 C15,8.6 15.1,9.3 15.1,10 C15.1,10.7 15,11.4 14.8,12 L16.1,13.4 L15.4,14.6 L13.6,13.8 C13.1,14.1 12.5,14.4 11.9,14.6 L11.4,16.5 L8.6,16.5 L8.1,14.6 C7.5,14.4 6.9,14.1 6.4,13.8 L4.6,14.6 L3.9,13.4 L5.2,12 C5,11.4 4.9,10.7 4.9,10 C4.9,9.3 5,8.6 5.2,8 L3.9,6.6 L4.6,5.4 L6.4,6.2 C6.9,5.9 7.5,5.6 8.1,5.4 L8.6,3.5 L10,3.5 Z"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""1.45"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" StrokeLineJoin=""Round"" Fill=""Transparent""/>
                                     <Ellipse Width=""4.6"" Height=""4.6"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""1.45"" Fill=""Transparent"" HorizontalAlignment=""Center"" VerticalAlignment=""Center""/>
@@ -1428,7 +1521,7 @@ namespace ADDGH
                             </Viewbox>
                         </Button>
                         <Button x:Name=""BtnToggleCode"" Style=""{StaticResource ToolbarIconButtonStyle}"" ToolTip=""切换代码视图"">
-                            <Viewbox Width=""17"" Height=""17"">
+                            <Viewbox Width=""{DynamicResource ToolbarIconSize}"" Height=""{DynamicResource ToolbarIconSize}"">
                                 <Grid Width=""20"" Height=""20"">
                                     <Path Data=""M3.5,6.5 L8,10 L3.5,13.5"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""1.8"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" StrokeLineJoin=""Round"" Fill=""Transparent""/>
                                     <Path Data=""M16.5,6.5 L12,10 L16.5,13.5"" Stroke=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"" StrokeThickness=""1.8"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" StrokeLineJoin=""Round"" Fill=""Transparent""/>
@@ -1473,11 +1566,11 @@ namespace ADDGH
                 <StackPanel>
                     <TextBlock x:Name=""EmptyChatPrompt"" Text=""要用Squirrel创造什么？"" Foreground=""#F3F3F3"" FontSize=""24"" FontWeight=""SemiBold"" TextAlignment=""Center"" HorizontalAlignment=""Center"" Margin=""0,0,0,24""/>
                     <!-- Warning Bar -->
-                    <Border x:Name=""WarningBar"" Visibility=""Collapsed"" Background=""#33CC9900"" BorderBrush=""#66CC9900"" BorderThickness=""1"" CornerRadius=""8"" Padding=""12,8"" Margin=""0,0,0,10"">
+                    <Border x:Name=""WarningBar"" Visibility=""Collapsed"" Background=""#2A2A2A"" BorderBrush=""Transparent"" BorderThickness=""0"" CornerRadius=""8"" Padding=""12,8"" Margin=""0,0,0,10"">
                     <Grid>
                         <StackPanel Orientation=""Horizontal"">
-                            <TextBlock Text=""⚠️"" Margin=""0,0,8,0"" VerticalAlignment=""Center""/>
-                            <TextBlock x:Name=""TxtWarning"" Text=""正在执行复杂任务，已连续操作..."" Foreground=""#FFE0B2"" FontSize=""11"" VerticalAlignment=""Center""/>
+                            <TextBlock Text=""⚠️"" Foreground=""#A8A8A8"" Margin=""0,0,8,0"" VerticalAlignment=""Center""/>
+                            <TextBlock x:Name=""TxtWarning"" Text=""正在执行复杂任务，已连续操作..."" Foreground=""#C8C8C8"" FontSize=""11"" VerticalAlignment=""Center""/>
                         </StackPanel>
                         <Button x:Name=""BtnCloseWarning"" Content=""✕"" HorizontalAlignment=""Right"" Background=""Transparent"" BorderThickness=""0"" Foreground=""#AAA"" Cursor=""Hand""/>
                     </Grid>
@@ -1499,7 +1592,6 @@ namespace ADDGH
                         </Border>
                         <Grid Grid.Row=""2"" Margin=""0,8,0,0"">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width=""Auto""/>
                                 <ColumnDefinition Width=""Auto""/>
                                 <ColumnDefinition Width=""Auto""/>
                                 <ColumnDefinition Width=""Auto""/>
@@ -1547,8 +1639,7 @@ namespace ADDGH
                                     </ContextMenu>
                                 </Button.ContextMenu>
                             </Button>
-                            <Button x:Name=""BtnToggleLibrary"" Grid.Column=""3"" Style=""{StaticResource IconButtonStyle}"" Content=""电池库"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""展开/收起电池库"" Margin=""8,0,0,0""/>
-                            <Button x:Name=""BtnReference"" Grid.Column=""4"" Style=""{StaticResource IconButtonStyle}"" Content=""参考"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""参考菜单"" Margin=""8,0,0,0"">
+                            <Button x:Name=""BtnReference"" Grid.Column=""3"" Style=""{StaticResource IconButtonStyle}"" Content=""参考"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""参考菜单"" Margin=""8,0,0,0"">
                                 <Button.ContextMenu>
                                     <ContextMenu Background=""#1E1E1E"" Foreground=""#E0E0E0"" BorderBrush=""#333"" BorderThickness=""1"" Padding=""4"">
                                         <ContextMenu.Template>
@@ -1585,50 +1676,12 @@ namespace ADDGH
                                 </Button.ContextMenu>
                             </Button>
 
-                            <Button x:Name=""BtnModeDropdown"" Grid.Column=""5"" Style=""{StaticResource IconButtonStyle}"" Content=""混合模式 ▾"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""14"" Cursor=""Hand"" ToolTip=""排布模式"" HorizontalAlignment=""Left"" VerticalAlignment=""Center"" Margin=""10,0,0,0"">
-                                <Button.ContextMenu>
-                                    <ContextMenu Background=""#1E1E1E"" Foreground=""#E0E0E0"" BorderBrush=""#333"" BorderThickness=""1"" Padding=""4"">
-                                        <ContextMenu.Template>
-                                            <ControlTemplate TargetType=""ContextMenu"">
-                                                <Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""4"" Padding=""{TemplateBinding Padding}"">
-                                                    <ItemsPresenter/>
-                                                </Border>
-                                            </ControlTemplate>
-                                        </ContextMenu.Template>
-                                        <ContextMenu.Resources>
-                                            <Style TargetType=""MenuItem"">
-                                                <Setter Property=""Foreground"" Value=""#E0E0E0""/>
-                                                <Setter Property=""Background"" Value=""Transparent""/>
-                                                <Setter Property=""Padding"" Value=""12,8""/>
-                                                <Setter Property=""Template"">
-                                                    <Setter.Value>
-                                                        <ControlTemplate TargetType=""MenuItem"">
-                                                            <Border x:Name=""Bg"" Background=""{TemplateBinding Background}"" CornerRadius=""4"">
-                                                                <ContentPresenter Content=""{TemplateBinding Header}"" Margin=""{TemplateBinding Padding}""/>
-                                                            </Border>
-                                                            <ControlTemplate.Triggers>
-                                                                <Trigger Property=""IsHighlighted"" Value=""True"">
-                                                                    <Setter TargetName=""Bg"" Property=""Background"" Value=""#333333""/>
-                                                                </Trigger>
-                                                            </ControlTemplate.Triggers>
-                                                        </ControlTemplate>
-                                                    </Setter.Value>
-                                                </Setter>
-                                            </Style>
-                                        </ContextMenu.Resources>
-                                        <MenuItem x:Name=""MenuModeBattery"" Header=""电池模式""/>
-                                        <MenuItem x:Name=""MenuModeMixed"" Header=""混合模式""/>
-                                        <MenuItem x:Name=""MenuModeCSharp"" Header=""C# 优先""/>
-                                    </ContextMenu>
-                                </Button.ContextMenu>
-                            </Button>
-
-                            <Grid x:Name=""ContextMeterHost"" Grid.Column=""6"" Width=""17"" Height=""17"" Margin=""0,0,10,0"" VerticalAlignment=""Center"" ToolTip=""上下文使用情况"">
+                            <Grid x:Name=""ContextMeterHost"" Grid.Column=""5"" Width=""17"" Height=""17"" Margin=""0,0,10,0"" VerticalAlignment=""Center"" ToolTip=""上下文使用情况"">
                                 <Ellipse Stroke=""#4A4A4A"" StrokeThickness=""1.3"" Fill=""Transparent""/>
                                 <Path x:Name=""ContextRingProgress"" Stroke=""#D8D8D8"" StrokeThickness=""1.3"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" Fill=""Transparent""/>
                             </Grid>
 
-                            <Button x:Name=""BtnSend"" Grid.Column=""7"" Content=""➤"" Foreground=""Black"" FontSize=""11"" Margin=""0"" Width=""22"" Height=""22"" Cursor=""Hand"" VerticalAlignment=""Center"">
+                            <Button x:Name=""BtnSend"" Grid.Column=""6"" Content=""➤"" Foreground=""Black"" FontSize=""11"" Margin=""0"" Width=""22"" Height=""22"" Cursor=""Hand"" VerticalAlignment=""Center"">
                                 <Button.Template>
                                     <ControlTemplate TargetType=""Button"">
                                         <Border x:Name=""bg"" Background=""White"" CornerRadius=""11"">
@@ -1724,8 +1777,8 @@ namespace ADDGH
         </Grid> <!-- End MainLayout Grid -->
 
     <!-- 配置悬浮层 -->
-            <Grid x:Name=""SettingsOverlay"" Grid.ColumnSpan=""2"" Panel.ZIndex=""999"" Margin=""0"" Background=""#A5000000"" Visibility=""Collapsed"">
-            <Border Background=""#1E1E1E"" CornerRadius=""12"" Width=""410"" Height=""680"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"" Padding=""18"">
+            <Grid x:Name=""SettingsOverlay"" Grid.ColumnSpan=""2"" Panel.ZIndex=""999"" Margin=""0"" Background=""Transparent"" Visibility=""Collapsed"">
+            <Border x:Name=""SettingsPanel"" Background=""#1E1E1E"" CornerRadius=""14"" MaxWidth=""450"" MaxHeight=""680"" HorizontalAlignment=""Right"" VerticalAlignment=""Top"" Margin=""12,68,18,12"" Padding=""18"">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height=""Auto""/>
@@ -1734,93 +1787,124 @@ namespace ADDGH
                     </Grid.RowDefinitions>
 
                     <StackPanel Grid.Row=""0"" Margin=""0,0,0,12"">
-                        <TextBlock Text=""配置 API"" Foreground=""White"" FontSize=""16"" FontWeight=""SemiBold""/>
-                        <TextBlock Text=""按用途分组显示，常用项优先展开。"" Foreground=""#8D96A5"" FontSize=""11"" Margin=""0,6,0,0""/>
+                        <TextBlock Text=""设置"" Foreground=""White"" FontSize=""18"" FontWeight=""SemiBold""/>
+                        <TextBlock Text=""大模型接入设置、电池库与优先模式。"" Foreground=""#8D96A5"" FontSize=""11"" Margin=""0,6,0,0""/>
                     </StackPanel>
 
                     <ScrollViewer Grid.Row=""1"" VerticalScrollBarVisibility=""Auto"" HorizontalScrollBarVisibility=""Disabled"" Padding=""0,0,4,0"">
                         <StackPanel>
-                            <Border Background=""#242424"" CornerRadius=""10"" Padding=""12"" Margin=""0,0,0,12"" BorderBrush=""#343434"" BorderThickness=""1"">
-                                <StackPanel>
-                                    <TextBlock Text=""模型分工"" Foreground=""#EAEAEA"" FontSize=""13"" FontWeight=""SemiBold"" Margin=""0,0,0,10""/>
+                            <Expander Header=""大模型接入设置"" IsExpanded=""True"" Foreground=""#ECECEC"" Background=""#242424"" Margin=""0,0,0,10"">
+                                <StackPanel Margin=""0,8,0,0"">
+                                    <Border Background=""#242424"" CornerRadius=""10"" Padding=""12"" Margin=""0,0,0,12"" BorderBrush=""#343434"" BorderThickness=""1"">
+                                        <StackPanel>
+                                            <TextBlock Text=""工作主模型"" Foreground=""#EAEAEA"" FontSize=""13"" FontWeight=""SemiBold"" Margin=""0,0,0,4""/>
+                                            <TextBlock Text=""负责主对话、工具调用和 Grasshopper 执行规划。"" Foreground=""#8D96A5"" FontSize=""11"" Margin=""0,0,0,10"" TextWrapping=""Wrap""/>
+                                            <ComboBox x:Name=""ComboProvider"" Height=""36"" Margin=""0,0,0,10"" Style=""{StaticResource DarkComboBoxStyle}""/>
+                                                <TextBlock Text=""API Base URL"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                                <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
+                                                    <TextBox x:Name=""TxtApiBaseUrl"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
+                                                </Border>
 
-                                    <TextBlock Text=""主对话模型"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
-                                    <ComboBox x:Name=""ComboProvider"" Height=""36"" Margin=""0,0,0,10"" Style=""{StaticResource DarkComboBoxStyle}""/>
+                                                <TextBlock Text=""API Key"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                                <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
+                                                    <TextBox x:Name=""TxtApiKey"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
+                                                </Border>
 
-                                    <TextBlock Text=""图片理解模型"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
-                                    <ComboBox x:Name=""ComboVisionProvider"" Height=""36"" Margin=""0,0,0,10"" Style=""{StaticResource DarkComboBoxStyle}""/>
+                                                <TextBlock Text=""Model Name"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                                <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
+                                                    <TextBox x:Name=""TxtModel"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
+                                                </Border>
 
-                                    <TextBlock Text=""图片生成模型"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
-                                    <ComboBox x:Name=""ComboImageProvider"" Height=""36"" Margin=""0,0,0,0"" Style=""{StaticResource DarkComboBoxStyle}""/>
+                                                <Expander Header=""代理与网络"" IsExpanded=""False"" Foreground=""#D6D6D6"" Background=""#242424"">
+                                                    <StackPanel Margin=""0,10,0,0"">
+                                                        <TextBlock Text=""HTTPS Proxy (可选)"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                                        <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,4"">
+                                                            <TextBox x:Name=""TxtProxyUrl"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White"" ToolTip=""留空时自动尝试 ADDGH_HTTPS_PROXY / HTTPS_PROXY / HTTP_PROXY 和系统代理""/>
+                                                        </Border>
+                                                        <TextBlock Text=""留空时自动尝试环境变量和系统代理"" Foreground=""#777777"" FontSize=""11"" Margin=""0,0,0,0""/>
+                                                    </StackPanel>
+                                                </Expander>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <Border Background=""#242424"" CornerRadius=""10"" Padding=""12"" Margin=""0,0,0,12"" BorderBrush=""#343434"" BorderThickness=""1"">
+                                        <StackPanel>
+                                            <TextBlock Text=""视觉模型"" Foreground=""#EAEAEA"" FontSize=""13"" FontWeight=""SemiBold"" Margin=""0,0,0,4""/>
+                                            <TextBlock Text=""负责图片理解、视觉审查和图像驱动建模判断。"" Foreground=""#8D96A5"" FontSize=""11"" Margin=""0,0,0,10"" TextWrapping=""Wrap""/>
+                                            <ComboBox x:Name=""ComboVisionProvider"" Height=""36"" Margin=""0,0,0,10"" Style=""{StaticResource DarkComboBoxStyle}""/>
+
+                                            <TextBlock Text=""Vision API Base URL"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                            <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
+                                                <TextBox x:Name=""TxtVisionApiBaseUrl"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
+                                            </Border>
+
+                                            <TextBlock Text=""Vision API Key"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                            <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
+                                                <TextBox x:Name=""TxtVisionApiKey"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
+                                            </Border>
+
+                                            <TextBlock Text=""Vision Model Name"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                            <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
+                                                <TextBox x:Name=""TxtVisionModel"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
+                                            </Border>
+
+                                            <Expander Header=""视觉代理"" IsExpanded=""False"" Foreground=""#D6D6D6"" Background=""#242424"">
+                                                <StackPanel Margin=""0,10,0,0"">
+                                                    <TextBlock Text=""Vision HTTPS Proxy (可选)"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                                    <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"">
+                                                        <TextBox x:Name=""TxtVisionProxyUrl"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
+                                                    </Border>
+                                                </StackPanel>
+                                            </Expander>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <Border Background=""#242424"" CornerRadius=""10"" Padding=""12"" BorderBrush=""#343434"" BorderThickness=""1"">
+                                        <StackPanel>
+                                            <TextBlock Text=""生图模型"" Foreground=""#EAEAEA"" FontSize=""13"" FontWeight=""SemiBold"" Margin=""0,0,0,4""/>
+                                            <TextBlock Text=""负责画布 AI Image、文生图、图生图和改图工作流。"" Foreground=""#8D96A5"" FontSize=""11"" Margin=""0,0,0,10"" TextWrapping=""Wrap""/>
+                                            <ComboBox x:Name=""ComboImageProvider"" Height=""36"" Margin=""0,0,0,10"" Style=""{StaticResource DarkComboBoxStyle}""/>
+
+                                            <TextBlock Text=""Image API Base URL"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                            <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
+                                                <TextBox x:Name=""TxtImageApiBaseUrl"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
+                                            </Border>
+
+                                            <TextBlock Text=""Image API Key"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                            <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
+                                                <TextBox x:Name=""TxtImageApiKey"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
+                                            </Border>
+
+                                            <TextBlock Text=""Image Model Name"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                            <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
+                                                <TextBox x:Name=""TxtImageModel"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
+                                            </Border>
+
+                                            <Expander Header=""图片生成代理"" IsExpanded=""False"" Foreground=""#D6D6D6"" Background=""#242424"">
+                                                <StackPanel Margin=""0,10,0,0"">
+                                                    <TextBlock Text=""Image HTTPS Proxy (可选)"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
+                                                    <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"">
+                                                        <TextBox x:Name=""TxtImageProxyUrl"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
+                                                    </Border>
+                                                </StackPanel>
+                                            </Expander>
+                                        </StackPanel>
+                                    </Border>
                                 </StackPanel>
-                            </Border>
-
-                            <Expander Header=""主对话模型连接参数"" IsExpanded=""True"" Foreground=""#ECECEC"" Background=""#242424"" Margin=""0,0,0,10"">
-                                <Border Background=""#242424"" CornerRadius=""10"" Padding=""12"" BorderBrush=""#343434"" BorderThickness=""1"">
-                                    <StackPanel>
-                                        <TextBlock Text=""API Base URL"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
-                                        <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
-                                            <TextBox x:Name=""TxtApiBaseUrl"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
-                                        </Border>
-
-                                        <TextBlock Text=""API Key"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
-                                        <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
-                                            <TextBox x:Name=""TxtApiKey"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
-                                        </Border>
-
-                                        <TextBlock Text=""Model Name"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
-                                        <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
-                                            <TextBox x:Name=""TxtModel"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
-                                        </Border>
-
-                                        <Expander Header=""代理与网络"" IsExpanded=""False"" Foreground=""#D6D6D6"" Background=""#242424"">
-                                            <StackPanel Margin=""0,10,0,0"">
-                                                <TextBlock Text=""HTTPS Proxy (可选)"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
-                                                <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,4"">
-                                                    <TextBox x:Name=""TxtProxyUrl"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White"" ToolTip=""留空时自动尝试 ADDGH_HTTPS_PROXY / HTTPS_PROXY / HTTP_PROXY 和系统代理""/>
-                                                </Border>
-                                                <TextBlock Text=""留空时自动尝试环境变量和系统代理"" Foreground=""#777777"" FontSize=""11"" Margin=""0,0,0,0""/>
-                                            </StackPanel>
-                                        </Expander>
-                                    </StackPanel>
-                                </Border>
                             </Expander>
 
-                            <Expander Header=""图片生成独立配置"" IsExpanded=""False"" Foreground=""#ECECEC"" Background=""#242424"" Margin=""0,0,0,10"">
+                            <Expander Header=""电池库"" IsExpanded=""False"" Foreground=""#ECECEC"" Background=""#242424"" Margin=""0,0,0,10"">
                                 <Border Background=""#242424"" CornerRadius=""10"" Padding=""12"" BorderBrush=""#343434"" BorderThickness=""1"">
                                     <StackPanel>
-                                        <TextBlock Text=""这部分只影响文生图 / 图生图 / 改图，不影响主对话模型。"" Foreground=""#8D96A5"" FontSize=""11"" Margin=""0,0,0,10"" TextWrapping=""Wrap""/>
-
-                                        <TextBlock Text=""Image API Base URL"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
-                                        <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
-                                            <TextBox x:Name=""TxtImageApiBaseUrl"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
-                                        </Border>
-
-                                        <TextBlock Text=""Image API Key"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
-                                        <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
-                                            <TextBox x:Name=""TxtImageApiKey"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
-                                        </Border>
-
-                                        <TextBlock Text=""Image Model Name"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
-                                        <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"" Margin=""0,0,0,10"">
-                                            <TextBox x:Name=""TxtImageModel"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
-                                        </Border>
-
-                                        <Expander Header=""图片生成代理"" IsExpanded=""False"" Foreground=""#D6D6D6"" Background=""#242424"">
-                                            <StackPanel Margin=""0,10,0,0"">
-                                                <TextBlock Text=""Image HTTPS Proxy (可选)"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
-                                                <Border Background=""#2A2A2A"" CornerRadius=""8"" Padding=""5"">
-                                                    <TextBox x:Name=""TxtImageProxyUrl"" Background=""Transparent"" Foreground=""White"" BorderThickness=""0"" FontSize=""13"" Padding=""5"" CaretBrush=""White""/>
-                                                </Border>
-                                            </StackPanel>
-                                        </Expander>
-                                    </StackPanel>
-                                </Border>
-                            </Expander>
-
-                            <Expander Header=""高级选项"" IsExpanded=""False"" Foreground=""#ECECEC"" Background=""#242424"" Margin=""0,0,0,4"">
-                                <Border Background=""#242424"" CornerRadius=""10"" Padding=""12"" BorderBrush=""#343434"" BorderThickness=""1"">
-                                    <StackPanel>
+                                        <Button x:Name=""BtnToggleLibrary"" Content=""打开/收起电池库"" Background=""#2E2E2E"" Foreground=""#E8E8E8"" BorderBrush=""#444444"" BorderThickness=""1"" Height=""34"" FontSize=""12"" Cursor=""Hand"" Margin=""0,0,0,12"">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType=""Button"">
+                                                    <Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""9"">
+                                                        <ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/>
+                                                    </Border>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                        </Button>
                                         <TextBlock Text=""电池库存储路径"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,5""/>
                                         <Grid Margin=""0,0,0,0"">
                                             <Grid.ColumnDefinitions>
@@ -1839,6 +1923,47 @@ namespace ADDGH
                                                         </Border>
                                                     </ControlTemplate>
                                                 </Button.Template>
+                                            </Button>
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
+                            </Expander>
+
+                            <Expander Header=""优先模式"" IsExpanded=""True"" Foreground=""#ECECEC"" Background=""#242424"" Margin=""0,0,0,4"">
+                                <Border Background=""#242424"" CornerRadius=""10"" Padding=""12"" BorderBrush=""#343434"" BorderThickness=""1"">
+                                    <Grid Background=""#1E1E1E"">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width=""*""/>
+                                            <ColumnDefinition Width=""*""/>
+                                            <ColumnDefinition Width=""*""/>
+                                        </Grid.ColumnDefinitions>
+                                        <Button x:Name=""BtnModeBattery"" Grid.Column=""0"" Content=""电池模式"" Background=""#1E1E1E"" Foreground=""#A0A0A0"" BorderBrush=""#3A3A3A"" BorderThickness=""1"" Height=""34"" FontSize=""12"" Cursor=""Hand"">
+                                            <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""9,0,0,9""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
+                                        </Button>
+                                        <Button x:Name=""BtnModeMixed"" Grid.Column=""1"" Content=""混合模式"" Background=""#1E1E1E"" Foreground=""#A0A0A0"" BorderBrush=""#3A3A3A"" BorderThickness=""0,1,0,1"" Height=""34"" FontSize=""12"" Cursor=""Hand"">
+                                            <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
+                                        </Button>
+                                        <Button x:Name=""BtnModeCSharp"" Grid.Column=""2"" Content=""C# 优先"" Background=""#1E1E1E"" Foreground=""#A0A0A0"" BorderBrush=""#3A3A3A"" BorderThickness=""1"" Height=""34"" FontSize=""12"" Cursor=""Hand"">
+                                            <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""0,9,9,0""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
+                                        </Button>
+                                    </Grid>
+                                </Border>
+                            </Expander>
+
+                            <Expander Header=""界面显示"" IsExpanded=""True"" Foreground=""#ECECEC"" Background=""#242424"" Margin=""0,0,0,4"">
+                                <Border Background=""#242424"" CornerRadius=""10"" Padding=""12"" BorderBrush=""#343434"" BorderThickness=""1"">
+                                    <StackPanel>
+                                        <TextBlock Text=""对话输入与输出字号"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,8""/>
+                                        <Grid Background=""#1E1E1E"">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width=""*""/>
+                                                <ColumnDefinition Width=""*""/>
+                                            </Grid.ColumnDefinitions>
+                                            <Button x:Name=""BtnDisplayNormal"" Grid.Column=""0"" Content=""正常显示"" Background=""#1E1E1E"" Foreground=""#A0A0A0"" BorderBrush=""#3A3A3A"" BorderThickness=""1"" Height=""34"" FontSize=""12"" Cursor=""Hand"">
+                                                <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""9,0,0,9""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
+                                            </Button>
+                                            <Button x:Name=""BtnDisplayLarge"" Grid.Column=""1"" Content=""放大显示"" Background=""#1E1E1E"" Foreground=""#A0A0A0"" BorderBrush=""#3A3A3A"" BorderThickness=""1"" Height=""34"" FontSize=""12"" Cursor=""Hand"">
+                                                <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""0,9,9,0""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
                                             </Button>
                                         </Grid>
                                     </StackPanel>
@@ -1902,6 +2027,7 @@ namespace ADDGH
                 _window = null;
             };
             _window.SourceInitialized += (s, e) => ApplyDarkSystemTitleBar();
+            _window.SizeChanged += (s, e) => UpdateSettingsPanelBounds();
             InitializeFloatingScrollbars();
 
             _chatPanel = (StackPanel)_window.FindName("ChatPanel");
@@ -1923,6 +2049,8 @@ namespace ADDGH
             _btnModeBattery = (Button)_window.FindName("BtnModeBattery");
             _btnModeCSharp = (Button)_window.FindName("BtnModeCSharp");
             _btnModeMixed = (Button)_window.FindName("BtnModeMixed");
+            _btnDisplayNormal = (Button)_window.FindName("BtnDisplayNormal");
+            _btnDisplayLarge = (Button)_window.FindName("BtnDisplayLarge");
             _menuAgentModeCreate = (MenuItem)_window.FindName("MenuAgentModeCreate");
             _menuAgentModePlan = (MenuItem)_window.FindName("MenuAgentModePlan");
             _menuModeBattery = (MenuItem)_window.FindName("MenuModeBattery");
@@ -1930,6 +2058,7 @@ namespace ADDGH
             _menuModeMixed = (MenuItem)_window.FindName("MenuModeMixed");
             _layoutMode = ReadLayoutModeSetting();
             _agentMode = ReadAgentModeSetting();
+            _displayMode = ReadDisplayModeSetting();
             if (_btnAgentModeDropdown != null) {
                 _btnAgentModeDropdown.Click += (s, e) => {
                     if (_btnAgentModeDropdown.ContextMenu != null) {
@@ -1953,11 +2082,14 @@ namespace ADDGH
             if (_btnModeBattery != null) _btnModeBattery.Click += (s, e) => SetLayoutMode(LayoutMode.Battery);
             if (_btnModeMixed != null) _btnModeMixed.Click += (s, e) => SetLayoutMode(LayoutMode.Mixed);
             if (_btnModeCSharp != null) _btnModeCSharp.Click += (s, e) => SetLayoutMode(LayoutMode.CSharpFirst);
+            if (_btnDisplayNormal != null) _btnDisplayNormal.Click += (s, e) => SetDisplayMode(DisplayMode.Normal);
+            if (_btnDisplayLarge != null) _btnDisplayLarge.Click += (s, e) => SetDisplayMode(DisplayMode.Large);
             if (_menuModeBattery != null) _menuModeBattery.Click += (s, e) => SetLayoutMode(LayoutMode.Battery);
             if (_menuModeMixed != null) _menuModeMixed.Click += (s, e) => SetLayoutMode(LayoutMode.Mixed);
             if (_menuModeCSharp != null) _menuModeCSharp.Click += (s, e) => SetLayoutMode(LayoutMode.CSharpFirst);
             UpdateAgentModeButtons();
             UpdateLayoutModeButtons();
+            ApplyDisplayMode();
             _historySidebar = (Border)_window.FindName("HistorySidebar");
             _historyListPanel = (StackPanel)_window.FindName("HistoryListPanel");
             _historyCountText = (TextBlock)_window.FindName("TxtHistoryCount");
@@ -2094,6 +2226,7 @@ namespace ADDGH
 
             var btnSettings = (Button)_window.FindName("BtnSettings");
             _settingsOverlay = (Grid)_window.FindName("SettingsOverlay");
+            _settingsPanel = (Border)_window.FindName("SettingsPanel");
             _txtApiKey = (TextBox)_window.FindName("TxtApiKey");
             _comboProvider = (ComboBox)_window.FindName("ComboProvider");
             _comboVisionProvider = (ComboBox)_window.FindName("ComboVisionProvider");
@@ -2101,6 +2234,10 @@ namespace ADDGH
             _txtApiBaseUrl = (TextBox)_window.FindName("TxtApiBaseUrl");
             _txtModel = (TextBox)_window.FindName("TxtModel");
             _txtProxyUrl = (TextBox)_window.FindName("TxtProxyUrl");
+            _txtVisionApiKey = (TextBox)_window.FindName("TxtVisionApiKey");
+            _txtVisionApiBaseUrl = (TextBox)_window.FindName("TxtVisionApiBaseUrl");
+            _txtVisionModel = (TextBox)_window.FindName("TxtVisionModel");
+            _txtVisionProxyUrl = (TextBox)_window.FindName("TxtVisionProxyUrl");
             _txtImageApiKey = (TextBox)_window.FindName("TxtImageApiKey");
             _txtImageApiBaseUrl = (TextBox)_window.FindName("TxtImageApiBaseUrl");
             _txtImageModel = (TextBox)_window.FindName("TxtImageModel");
@@ -2113,6 +2250,13 @@ namespace ADDGH
                 _comboProvider.SelectionChanged += (s, e) => {
                     if (_isLoadingProviderSettings) return;
                     LoadProviderSettingsToUI(GetSelectedProviderId());
+                };
+            }
+
+            if (_comboVisionProvider != null) {
+                _comboVisionProvider.SelectionChanged += (s, e) => {
+                    if (_isLoadingProviderSettings) return;
+                    LoadVisionProviderSettingsToUI(GetSelectedVisionProviderId());
                 };
             }
 
@@ -2130,6 +2274,7 @@ namespace ADDGH
                     SelectVisionProviderComboItem(GetCurrentVisionProviderId());
                     SelectImageProviderComboItem(GetCurrentImageProviderId());
                     LoadProviderSettingsToUI(providerId);
+                    LoadVisionProviderSettingsToUI(GetCurrentVisionProviderId());
                     LoadImageProviderSettingsToUI(GetCurrentImageProviderId());
                     if (txtLibraryPath != null) txtLibraryPath.Text = Grasshopper.Instances.Settings.GetValue("Library_Path", "");
                     SetSettingsOverlayVisible(true);
@@ -3152,6 +3297,9 @@ namespace ADDGH
 
         private static void SetSettingsOverlayVisible(bool visible)
         {
+            if (visible)
+                UpdateSettingsPanelBounds();
+
             if (_settingsOverlay != null)
             {
                 Panel.SetZIndex(_settingsOverlay, visible ? 999 : 20);
@@ -3167,6 +3315,31 @@ namespace ADDGH
             {
                 if (_window?.FindName(name) is Button button) button.IsEnabled = !visible;
             }
+        }
+
+        private static void UpdateSettingsPanelBounds()
+        {
+            if (_settingsPanel == null || _window == null) return;
+
+            double width = _settingsOverlay != null && _settingsOverlay.ActualWidth > 0
+                ? _settingsOverlay.ActualWidth
+                : (_window.ActualWidth > 0 ? _window.ActualWidth : _window.Width);
+            double height = _settingsOverlay != null && _settingsOverlay.ActualHeight > 0
+                ? _settingsOverlay.ActualHeight
+                : (_window.ActualHeight > 0 ? _window.ActualHeight : _window.Height);
+
+            double left = width < 430 ? 8 : 12;
+            double right = width < 430 ? 8 : 18;
+            double top = height < 620 ? 48 : 68;
+            double bottom = height < 620 ? 10 : 14;
+            double safetyInset = 10;
+
+            double availableWidth = Math.Max(260, width - left - right - safetyInset);
+            double availableHeight = Math.Max(260, height - top - bottom - safetyInset);
+
+            _settingsPanel.Margin = new Thickness(left, top, right, bottom);
+            _settingsPanel.Width = Math.Min(450, availableWidth);
+            _settingsPanel.Height = Math.Min(680, availableHeight);
         }
 
         private static ImageIntentRoute ResolveImageIntentRoute(string input, List<AttachmentItem> attachments)
@@ -3951,6 +4124,12 @@ namespace ADDGH
 
         private static StackPanel BuildToolOperationCardsPanel(List<(string primary, string secondary)> entries)
         {
+            var typed = entries?.Select(e => (e.primary, e.secondary, (string)null)).ToList();
+            return BuildToolOperationCardsPanel(typed);
+        }
+
+        private static StackPanel BuildToolOperationCardsPanel(List<(string primary, string secondary, string undoId)> entries)
+        {
             if (entries == null || entries.Count == 0) return null;
             var stack = new StackPanel {
                 Orientation = Orientation.Vertical,
@@ -3961,6 +4140,7 @@ namespace ADDGH
             foreach (var tup in entries) {
                 string primary = tup.primary ?? "";
                 string secondary = tup.secondary ?? "";
+                string undoId = tup.undoId;
                 if (string.IsNullOrWhiteSpace(primary)) continue;
 
                 var row = new Border {
@@ -4029,6 +4209,13 @@ namespace ADDGH
         }
 
         private static void AppendToolOperationCards(List<(string primary, string secondary)> entries)
+        {
+            StackPanel stack = BuildToolOperationCardsPanel(entries);
+            if (stack == null) return;
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => InsertChatElementBeforeThinking(stack)));
+        }
+
+        private static void AppendToolOperationCards(List<(string primary, string secondary, string undoId)> entries)
         {
             StackPanel stack = BuildToolOperationCardsPanel(entries);
             if (stack == null) return;
@@ -4195,13 +4382,14 @@ namespace ADDGH
                 _messages.Add(messageNode);
                 EnforceChatHistoryLimit();
 
-                int addComp = 0, delComp = 0, addConn = 0, delConn = 0;
+                int addComp = 0, delComp = 0, addConn = 0, delConn = 0, addCodeLines = 0, delCodeLines = 0;
+                string latestStatsUndoId = null;
 
                 if (fullToolCalls.Count > 0)
                 {
                     _currentTurnHadToolExecution = true;
                     ShowThinkingAnimation("工作中...");
-                    var operationCards = new List<(string primary, string secondary)>();
+                    var operationCards = new List<(string primary, string secondary, string undoId)>();
 
                     foreach (var toolCall in fullToolCalls)
                     {
@@ -4211,8 +4399,12 @@ namespace ADDGH
                         string callId = toolCall["id"]?.ToString();
 
                         JObject argsObj = ChatMessageHelpers.ParseToolArgumentsForExecution(funcName, argsJson, out string cardSum, out string cardDet);
+                        int operationCardIndex = -1;
                         if (!string.IsNullOrWhiteSpace(cardSum))
-                            operationCards.Add((cardSum, string.IsNullOrWhiteSpace(cardDet) ? "" : cardDet));
+                        {
+                            operationCards.Add((cardSum, string.IsNullOrWhiteSpace(cardDet) ? "" : cardDet, null));
+                            operationCardIndex = operationCards.Count - 1;
+                        }
 
                         var dispatch = await ExecuteToolCallAsync(
                             funcName,
@@ -4221,7 +4413,7 @@ namespace ADDGH
                             callId,
                             fullContent,
                             fullReasoning,
-                            operationCards,
+                            operationCards.Select(c => (c.primary, c.secondary)).ToList(),
                             ct);
 
                         if (dispatch.EndApiRoundAwaitingUser)
@@ -4235,6 +4427,13 @@ namespace ADDGH
                         delComp += dispatch.DelComp;
                         addConn += dispatch.AddConn;
                         delConn += dispatch.DelConn;
+                        addCodeLines += dispatch.AddCodeLines;
+                        delCodeLines += dispatch.DelCodeLines;
+                        dispatch.UndoId = RegisterCanvasUndoRecord(funcName, callId, dispatch.UndoSnapshotPath, toolResult);
+                        if (!string.IsNullOrWhiteSpace(dispatch.UndoId))
+                        {
+                            latestStatsUndoId = dispatch.UndoId;
+                        }
 
                         _messages.Add(new { role = "tool", tool_call_id = callId, name = funcName, content = toolResult });
                     }
@@ -4244,8 +4443,8 @@ namespace ADDGH
                     if (operationCards.Count > 0)
                         AppendToolOperationCards(operationCards);
 
-                    if (addComp > 0 || delComp > 0 || addConn > 0 || delConn > 0) {
-                        AppendColoredStatsMessage(addComp, delComp, addConn, delConn);
+                    if (addComp > 0 || delComp > 0 || addConn > 0 || delConn > 0 || addCodeLines > 0 || delCodeLines > 0) {
+                        AppendColoredStatsMessage(addComp, delComp, addConn, delConn, addCodeLines, delCodeLines, latestStatsUndoId);
                     }
 
                     SyncActiveHistoryConversation();

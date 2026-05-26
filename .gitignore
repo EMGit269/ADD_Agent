@@ -6,6 +6,7 @@ CanvasWeb/.pnpm-store/
 CanvasWeb/runtime/
 .tools/
 .codex-tools/
+.addgh/
 *.suo
 *.user
 .vs/

@@ -1549,46 +1549,10 @@ function CanvasWorkbench() {
       {detailMeta?.sourceRef ? (
         <div className="detail-panel-anchor">
           <aside className="detail-modal">
-            <div className="detail-header">
-              <h3>{detailNode?.meta.title ?? 'Node'}</h3>
-              <button type="button" onClick={() => setDetailSourceRef(null)}>Close</button>
-            </div>
-            <label>
-              <span>Title</span>
-              <input
-                value={detailMeta.title ?? ''}
-                onChange={(event) => updateNodeMeta(detailMeta.sourceRef, { title: event.target.value, userEditedTitle: true })}
-              />
-            </label>
-            <label>
-              <span>Tags</span>
-              <input
-                value={Array.isArray(detailMeta.tags) ? detailMeta.tags.join(', ') : ''}
-                onChange={(event) =>
-                  updateNodeMeta(detailMeta.sourceRef, {
-                    tags: event.target.value.split(',').map((tag) => tag.trim()).filter(Boolean),
-                  })}
-              />
-            </label>
-            {detailNode ? renderNodeBody(detailNode, updateNodeMeta, (src, title) => {
+            {detailNode ? renderNodeSettings(detailNode, updateNodeMeta, (src, title) => {
               setImagePreviewSrc(src)
               setImagePreviewTitle(title)
-            }) : null}
-            <label>
-              <span>Body</span>
-              <textarea
-                value={detailMeta.body ?? ''}
-                onChange={(event) => updateNodeMeta(detailMeta.sourceRef, { body: event.target.value })}
-              />
-            </label>
-            <label className="checkbox-row">
-              <input
-                type="checkbox"
-                checked={Boolean(detailMeta.collapsed)}
-                onChange={(event) => updateNodeMeta(detailMeta.sourceRef, { collapsed: event.target.checked })}
-              />
-              <span>Collapsed</span>
-            </label>
+            }, () => setDetailSourceRef(null)) : null}
           </aside>
         </div>
       ) : null}
@@ -2020,7 +1984,15 @@ function normalizeNodeType(value: any): CanvasNodeType {
 }
 
 function getNodePorts(nodeType: CanvasNodeType, meta: Record<string, any>): NodePort[] {
-  if (Array.isArray(meta.ports) && (nodeType === 'panel' || nodeType === 'gen_img' || nodeType === 'c_sharp')) {
+  if (nodeType === 'code' || nodeType === 'c_sharp') {
+    const inputCount = clamp(Math.round(numberOr(meta.inputCount, meta.ports?.filter?.((port: any) => port.direction === 'input').length, nodeType === 'c_sharp' ? 2 : 2)), 0, 12)
+    const outputCount = clamp(Math.round(numberOr(meta.outputCount, meta.ports?.filter?.((port: any) => port.direction === 'output').length, nodeType === 'c_sharp' ? 2 : 1)), 1, 12)
+    const ports: NodePort[] = []
+    for (let i = 0; i < inputCount; i += 1) ports.push({ id: nodeType === 'c_sharp' && i < 2 ? ['x', 'y'][i] : `in-${i}`, label: nodeType === 'c_sharp' && i < 2 ? ['x', 'y'][i] : `In ${i + 1}`, direction: 'input', dataType: 'any', slot: i, visible: true, required: false, dynamic: true })
+    for (let i = 0; i < outputCount; i += 1) ports.push({ id: nodeType === 'c_sharp' && i < 2 ? ['out', 'a'][i] : `out-${i}`, label: nodeType === 'c_sharp' && i < 2 ? ['out', 'a'][i] : `Out ${i + 1}`, direction: 'output', dataType: 'any', slot: i, visible: true, required: false, dynamic: true })
+    return ports
+  }
+  if (Array.isArray(meta.ports) && (nodeType === 'panel' || nodeType === 'gen_img')) {
     return meta.ports.map(normalizePort)
   }
   if (nodeType === 'message') return []
@@ -2043,14 +2015,6 @@ function getNodePorts(nodeType: CanvasNodeType, meta: Record<string, any>): Node
       { id: 'img_out', label: 'image', direction: 'output', dataType: 'image', slot: 0, visible: true, required: false, dynamic: false },
     ]
   }
-  if (nodeType === 'c_sharp') {
-    return [
-      { id: 'x', label: 'x', direction: 'input', dataType: 'any', slot: 0, visible: true, required: false, dynamic: true },
-      { id: 'y', label: 'y', direction: 'input', dataType: 'any', slot: 1, visible: true, required: false, dynamic: true },
-      { id: 'out', label: 'out', direction: 'output', dataType: 'any', slot: 0, visible: true, required: false, dynamic: true },
-      { id: 'a', label: 'a', direction: 'output', dataType: 'any', slot: 1, visible: true, required: false, dynamic: true },
-    ]
-  }
   if (nodeType === 'prompt') {
     return [
       { id: 'out', label: 'prompt', direction: 'output', dataType: 'text', slot: 0, visible: true, required: false, dynamic: false },
@@ -2061,14 +2025,6 @@ function getNodePorts(nodeType: CanvasNodeType, meta: Record<string, any>): Node
   }
   if (nodeType === 'slider') {
     return [{ id: 'out', label: 'Value', direction: 'output', dataType: 'number', slot: 0 }]
-  }
-  if (nodeType === 'code') {
-    const inputCount = Math.max(2, numberOr(meta.inputCount, meta.ports?.filter?.((port: any) => port.direction === 'input').length, 2))
-    const outputCount = Math.max(1, numberOr(meta.outputCount, meta.ports?.filter?.((port: any) => port.direction === 'output').length, 1))
-    const ports: NodePort[] = []
-    for (let i = 0; i < inputCount; i += 1) ports.push({ id: `in-${i}`, label: `In ${i + 1}`, direction: 'input', dataType: 'any', slot: i })
-    for (let i = 0; i < outputCount; i += 1) ports.push({ id: `out-${i}`, label: `Out ${i + 1}`, direction: 'output', dataType: 'any', slot: i })
-    return ports
   }
   if (nodeType === 'note') return []
   return [
@@ -2459,30 +2415,63 @@ function renderFlowPorts(node: CanvasNode) {
   )
 }
 
-function renderNodeBody(
+function renderNodeSettings(
   node: CanvasNode,
   updateMeta: (sourceRef: string, patch: Record<string, unknown>) => void,
   onPreviewImage: (src: string, title: string) => void,
+  onClose: () => void,
 ) {
+  const updateTitle = (title: string) => updateMeta(node.sourceRef, { title, userEditedTitle: true })
+  const header = (
+    <>
+      <div className="detail-header">
+        <h3>{node.meta.title ?? 'Node'}</h3>
+        <button type="button" onClick={onClose}>Close</button>
+      </div>
+      <label>
+        <span>Title</span>
+        <input value={node.meta.title ?? ''} onChange={(event) => updateTitle(event.target.value)} />
+      </label>
+    </>
+  )
+  const collapsedToggle = (
+    <label className="checkbox-row">
+      <input
+        type="checkbox"
+        checked={Boolean(node.meta.collapsed)}
+        onChange={(event) => updateMeta(node.sourceRef, { collapsed: event.target.checked })}
+      />
+      <span>Collapsed</span>
+    </label>
+  )
+
   if (node.nodeType === 'prompt') {
     return (
-      <label className="node-field">
-        <span>Prompt</span>
-        <textarea value={node.meta.prompt ?? ''} onChange={(event) => updateMeta(node.sourceRef, { prompt: event.target.value })} />
-      </label>
+      <>
+        {header}
+        <label className="node-field">
+          <span>Prompt</span>
+          <textarea value={node.meta.prompt ?? ''} onChange={(event) => updateMeta(node.sourceRef, { prompt: event.target.value })} />
+        </label>
+      </>
     )
   }
   if (node.nodeType === 'panel') {
     return (
-      <label className="node-field">
-        <span>Panel Body</span>
-        <textarea value={node.meta.body ?? ''} onChange={(event) => updateMeta(node.sourceRef, { body: event.target.value })} />
-      </label>
+      <>
+        {header}
+        <label className="node-field">
+          <span>Panel Body</span>
+          <textarea value={node.meta.body ?? ''} onChange={(event) => updateMeta(node.sourceRef, { body: event.target.value })} />
+        </label>
+        {collapsedToggle}
+      </>
     )
   }
   if (node.nodeType === 'gen_img') {
     return (
       <>
+        {header}
         <label className="node-field">
           <span>Prompt</span>
           <textarea value={node.meta.prompt ?? ''} onChange={(event) => updateMeta(node.sourceRef, { prompt: event.target.value })} />
@@ -2507,66 +2496,152 @@ function renderNodeBody(
             onChange={(event) => updateMeta(node.sourceRef, { imageCount: clamp(Math.round(Number(event.target.value || 1)), 1, 4) })}
           />
         </label>
+        {node.meta.runStatus || node.meta.error ? (
+          <div className="node-readonly-stack">
+            {node.meta.runStatus ? <span>Status: {String(node.meta.runStatus)}</span> : null}
+            {node.meta.error ? <span className="node-error-text">Error: {String(node.meta.error)}</span> : null}
+          </div>
+        ) : null}
       </>
     )
   }
   if (node.nodeType === 'file_upload') {
     return (
-      <label className="node-field">
-        <span>File Path</span>
-        <input value={node.meta.filePath ?? ''} onChange={(event) => updateMeta(node.sourceRef, { filePath: event.target.value })} />
-      </label>
+      <>
+        {header}
+        <label className="node-field">
+          <span>File Path</span>
+          <input value={node.meta.filePath ?? ''} onChange={(event) => updateMeta(node.sourceRef, { filePath: event.target.value })} />
+        </label>
+      </>
     )
   }
   if (node.nodeType === 'img') {
     return (
-      <input
-        className="node-inline-input"
-        value={node.meta.imagePath ?? ''}
-        placeholder="Image path or URL..."
-        onChange={(event) => updateMeta(node.sourceRef, { imagePath: event.target.value })}
-      />
+      <>
+        {header}
+        <input
+          className="node-inline-input"
+          value={node.meta.imagePath ?? ''}
+          placeholder="Image path or URL..."
+          onChange={(event) => updateMeta(node.sourceRef, { imagePath: event.target.value })}
+        />
+      </>
     )
   }
   if (node.nodeType === 'slider') {
+    const min = Number(node.meta.min ?? 0)
+    const max = Number(node.meta.max ?? 1)
+    const value = clamp(Number(node.meta.value ?? 0), Math.min(min, max), Math.max(min, max))
+    const updateSliderBounds = (patch: Record<string, number>) => {
+      const nextMin = Object.prototype.hasOwnProperty.call(patch, 'min') ? Number(patch.min) : min
+      const nextMax = Object.prototype.hasOwnProperty.call(patch, 'max') ? Number(patch.max) : max
+      const nextValue = Object.prototype.hasOwnProperty.call(patch, 'value') ? Number(patch.value) : value
+      updateMeta(node.sourceRef, {
+        ...patch,
+        value: clamp(nextValue, Math.min(nextMin, nextMax), Math.max(nextMin, nextMax)),
+      })
+    }
     return (
-      <label className="node-field">
-        <span>Value: {Number(node.meta.value ?? 0).toFixed(2)}</span>
-        <input
-          type="range"
-          min={Number(node.meta.min ?? 0)}
-          max={Number(node.meta.max ?? 1)}
-          step={Number(node.meta.step ?? 0.01)}
-          value={Number(node.meta.value ?? 0)}
-          onChange={(event) => updateMeta(node.sourceRef, { value: Number(event.target.value) })}
-        />
-      </label>
+      <>
+        {header}
+        <label className="node-field">
+          <span>Value: {value.toFixed(2)}</span>
+          <input
+            type="range"
+            min={min}
+            max={max}
+            step={Number(node.meta.step ?? 0.01)}
+            value={value}
+            onChange={(event) => updateSliderBounds({ value: Number(event.target.value) })}
+          />
+        </label>
+        <div className="node-field-grid">
+          <label className="node-field">
+            <span>Min</span>
+            <input type="number" value={min} onChange={(event) => updateSliderBounds({ min: Number(event.target.value) })} />
+          </label>
+          <label className="node-field">
+            <span>Max</span>
+            <input type="number" value={max} onChange={(event) => updateSliderBounds({ max: Number(event.target.value) })} />
+          </label>
+          <label className="node-field">
+            <span>Step</span>
+            <input type="number" min={0.0001} value={Number(node.meta.step ?? 0.01)} onChange={(event) => updateMeta(node.sourceRef, { step: Math.max(0.0001, Number(event.target.value || 0.0001)) })} />
+          </label>
+        </div>
+      </>
     )
   }
   if (node.nodeType === 'code' || node.nodeType === 'c_sharp') {
+    const inputCount = Math.max(0, Math.min(12, Math.round(Number(node.meta.inputCount ?? getNodePorts(node.nodeType, node.meta).filter((port) => port.direction === 'input').length))))
+    const outputCount = Math.max(1, Math.min(12, Math.round(Number(node.meta.outputCount ?? getNodePorts(node.nodeType, node.meta).filter((port) => port.direction === 'output').length))))
     return (
-      <label className="node-field">
-        <span>C# Body</span>
-        <textarea value={node.meta.body ?? ''} onChange={(event) => updateMeta(node.sourceRef, { body: event.target.value })} />
-      </label>
+      <>
+        {header}
+        <label className="node-field">
+          <span>C# Body</span>
+          <textarea value={node.meta.body ?? ''} onChange={(event) => updateMeta(node.sourceRef, { body: event.target.value })} />
+        </label>
+        <div className="node-field-grid">
+          <label className="node-field">
+            <span>Input Count</span>
+            <input type="number" min={0} max={12} value={inputCount} onChange={(event) => updateMeta(node.sourceRef, { inputCount: clamp(Math.round(Number(event.target.value || 0)), 0, 12) })} />
+          </label>
+          <label className="node-field">
+            <span>Output Count</span>
+            <input type="number" min={1} max={12} value={outputCount} onChange={(event) => updateMeta(node.sourceRef, { outputCount: clamp(Math.round(Number(event.target.value || 1)), 1, 12) })} />
+          </label>
+        </div>
+      </>
     )
   }
   if (node.nodeType === 'image') {
     const imageSrc = resolveCanvasImageSource(node.meta.imageDataUrl ?? node.meta.imagePath)
     return (
-      <div className="node-image-field">
-        {imageSrc ? (
-          <button type="button" className="node-image-preview" onClick={() => onPreviewImage(imageSrc, String(node.meta.title ?? 'Image'))}>
-            <img src={imageSrc} alt={String(node.meta.title ?? 'Image')} loading="lazy" decoding="async" draggable={false} />
-          </button>
-        ) : (
-          <div className="node-image-preview node-image-empty">No image</div>
-        )}
+      <>
+        {header}
+        <div className="node-image-field">
+          {imageSrc ? (
+            <button type="button" className="node-image-preview" onClick={() => onPreviewImage(imageSrc, String(node.meta.title ?? 'Image'))}>
+              <img src={imageSrc} alt={String(node.meta.title ?? 'Image')} loading="lazy" decoding="async" draggable={false} />
+            </button>
+          ) : (
+            <div className="node-image-preview node-image-empty">No image</div>
+          )}
+          <label className="node-field">
+            <span>Image Path / URL / Data URL</span>
+            <input value={node.meta.imagePath ?? ''} onChange={(event) => updateMeta(node.sourceRef, { imagePath: event.target.value })} />
+          </label>
+          <div className="node-readonly-stack">
+            {node.meta.mimeType ? <span>Type: {String(node.meta.mimeType)}</span> : null}
+            {node.meta.naturalWidth && node.meta.naturalHeight ? <span>Natural size: {Number(node.meta.naturalWidth)} x {Number(node.meta.naturalHeight)}</span> : null}
+          </div>
+        </div>
+      </>
+    )
+  }
+  if (node.nodeType === 'message') {
+    return (
+      <>
+        {header}
         <label className="node-field">
-          <span>Image Path</span>
-          <input value={node.meta.imagePath ?? ''} onChange={(event) => updateMeta(node.sourceRef, { imagePath: event.target.value })} />
+          <span>Message</span>
+          <textarea value={node.meta.body ?? node.meta.summary ?? ''} readOnly />
         </label>
-      </div>
+      </>
+    )
+  }
+  if (node.nodeType === 'note') {
+    return (
+      <>
+        {header}
+        <label className="node-field">
+          <span>Body</span>
+          <textarea value={node.meta.body ?? ''} onChange={(event) => updateMeta(node.sourceRef, { body: event.target.value })} />
+        </label>
+        {collapsedToggle}
+      </>
     )
   }
   return null

@@ -932,6 +932,7 @@ html, body, #root {
 }
 
 .detail-modal input,
+.detail-modal select,
 .detail-modal textarea {
   width: 100%;
   border: 1px solid var(--field-border);
@@ -950,6 +951,25 @@ html, body, #root {
 .detail-modal .checkbox-row {
   flex-direction: row;
   align-items: center;
+}
+
+.node-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.node-field-grid .node-field:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+.node-readonly-stack {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 10px;
+  color: var(--muted-fg);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .image-preview-overlay {

@@ -15,8 +15,34 @@ namespace ADDGH
             public int DelComp;
             public int AddConn;
             public int DelConn;
+            public int AddCodeLines;
+            public int DelCodeLines;
             public bool EndApiRoundAwaitingUser;
             public ApiResponse EarlyResponse;
+            public string UndoSnapshotPath;
+            public string UndoId;
+        }
+
+        private static int CountCodeLinesForStats(string code)
+        {
+            if (string.IsNullOrWhiteSpace(code)) return 0;
+            return code.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n').Length;
+        }
+
+        private static string ReadCSharpScriptBodyForStats(string id)
+        {
+            string body = null;
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
+            {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) return;
+                if (!Guid.TryParse(id, out Guid guid)) return;
+                var obj = doc.FindObject(guid, true);
+                if (obj == null || !IsCSharpScriptComponent(obj)) return;
+                if (TryReadCSharpScriptBodyPreservingTemplate(obj, out string currentBody, out _))
+                    body = currentBody;
+            }));
+            return body;
         }
 
         private static double? ReadNullableDouble(JObject argsObj, string key)
@@ -69,6 +95,8 @@ namespace ADDGH
             List<(string primary, string secondary)> operationCards)
         {
             var result = new ToolDispatchResult { ToolResult = "" };
+            if (IsCanvasMutatingTool(funcName))
+                result.UndoSnapshotPath = CreateCanvasUndoSnapshot(funcName, callId);
 
             try
             {
@@ -202,15 +230,30 @@ namespace ADDGH
                     if (!result.ToolResult.StartsWith("Error:"))
                     {
                         result.AddComp += 1;
+                        result.AddCodeLines += CountCodeLinesForStats(argsObj["body"]?.ToString());
                         if (argsObj["components"] is JArray helperItems) result.AddComp += helperItems.Count;
                     }
                 }
                 else if (funcName == "edit_csharp_script_component")
                 {
+                    string beforeBody = null;
+                    bool settingBody = string.Equals(argsObj["mode"]?.ToString(), "set_body", StringComparison.OrdinalIgnoreCase);
+                    string resolvedId = ResolveToolObjectId(argsObj["id"]?.ToString());
+                    if (settingBody)
+                        beforeBody = ReadCSharpScriptBodyForStats(resolvedId);
+
                     result.ToolResult = ExecuteEditCSharpScriptComponent(
-                        ResolveToolObjectId(argsObj["id"]?.ToString()),
+                        resolvedId,
                         argsObj["mode"]?.ToString(),
                         argsObj["body"]?.ToString());
+
+                    if (settingBody && !result.ToolResult.StartsWith("Error:"))
+                    {
+                        int beforeLines = CountCodeLinesForStats(beforeBody);
+                        int afterLines = CountCodeLinesForStats(argsObj["body"]?.ToString());
+                        if (afterLines >= beforeLines) result.AddCodeLines += afterLines - beforeLines;
+                        else result.DelCodeLines += beforeLines - afterLines;
+                    }
                 }
                 else if (funcName == "create_script_component_graph")
                 {

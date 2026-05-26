@@ -198,6 +198,11 @@ namespace ADDGH
             return $"AI_Image_{providerId}_{name}";
         }
 
+        private static string GetVisionProviderSettingKey(string providerId, string name)
+        {
+            return $"AI_Vision_{providerId}_{name}";
+        }
+
         private static string ReadFirstNonEmptyEnvironmentVariable(params string[] names)
         {
             if (names == null) return "";
@@ -272,6 +277,15 @@ namespace ADDGH
                 "http_proxy"));
         }
 
+        private static string ReadResolvedVisionProxyUrl(string providerId)
+        {
+            string perProvider = Grasshopper.Instances.Settings.GetValue(GetVisionProviderSettingKey(providerId, "ProxyUrl"), "");
+            if (!string.IsNullOrWhiteSpace(perProvider))
+                return NormalizeProxyUrl(perProvider);
+
+            return ReadResolvedProxyUrl(providerId);
+        }
+
         private static string ReadResolvedApiKey(string providerId)
         {
             string dpapiEnc = Grasshopper.Instances.Settings.GetValue(GetProviderSettingKey(providerId, "API_Key_DPAPI"), "");
@@ -292,6 +306,16 @@ namespace ADDGH
                 return dec;
 
             return Grasshopper.Instances.Settings.GetValue(GetImageProviderSettingKey(providerId, "API_Key"), "");
+        }
+
+        private static string ReadResolvedVisionApiKey(string providerId)
+        {
+            string dpapiEnc = Grasshopper.Instances.Settings.GetValue(GetVisionProviderSettingKey(providerId, "API_Key_DPAPI"), "");
+            if (!string.IsNullOrWhiteSpace(dpapiEnc) && ApiCredentialStore.TryUnprotectFromBase64(dpapiEnc, out string dec) && dec != null)
+                return dec;
+
+            string per = Grasshopper.Instances.Settings.GetValue(GetVisionProviderSettingKey(providerId, "API_Key"), "");
+            return string.IsNullOrWhiteSpace(per) ? ReadResolvedApiKey(providerId) : per;
         }
 
         private static void PersistApiKey(string providerId, string apiKeyPlain)
@@ -353,6 +377,32 @@ namespace ADDGH
             Grasshopper.Instances.Settings.SetValue(GetImageProviderSettingKey(providerId, "API_Key"), key);
         }
 
+        private static void PersistVisionApiKey(string providerId, string apiKeyPlain)
+        {
+            string key = apiKeyPlain ?? "";
+            if (string.IsNullOrEmpty(key))
+            {
+                Grasshopper.Instances.Settings.SetValue(GetVisionProviderSettingKey(providerId, "API_Key_DPAPI"), "");
+                Grasshopper.Instances.Settings.SetValue(GetVisionProviderSettingKey(providerId, "API_Key"), "");
+                return;
+            }
+
+            if (DeploymentOptions.UseDpapiForApiKeys)
+            {
+                if (ApiCredentialStore.TryProtectToBase64(key, out string enc))
+                {
+                    Grasshopper.Instances.Settings.SetValue(GetVisionProviderSettingKey(providerId, "API_Key_DPAPI"), enc);
+                    Grasshopper.Instances.Settings.SetValue(GetVisionProviderSettingKey(providerId, "API_Key"), "");
+                    return;
+                }
+
+                AddGhLog.Warn("ADDGH: DPAPI protect failed; storing vision API key as plaintext for provider " + providerId);
+            }
+
+            Grasshopper.Instances.Settings.SetValue(GetVisionProviderSettingKey(providerId, "API_Key_DPAPI"), "");
+            Grasshopper.Instances.Settings.SetValue(GetVisionProviderSettingKey(providerId, "API_Key"), key);
+        }
+
         private static ProviderRuntimeSettings GetProviderRuntimeSettings()
         {
             return GetProviderRuntimeSettings(GetCurrentProviderId());
@@ -361,6 +411,11 @@ namespace ADDGH
         private static ProviderRuntimeSettings GetImageProviderRuntimeSettings()
         {
             return GetImageProviderRuntimeSettings(GetCurrentImageProviderId());
+        }
+
+        private static ProviderRuntimeSettings GetVisionProviderRuntimeSettings()
+        {
+            return GetVisionProviderRuntimeSettings(GetCurrentVisionProviderId());
         }
 
         private static ProviderRuntimeSettings GetProviderRuntimeSettings(string providerId)
@@ -395,6 +450,24 @@ namespace ADDGH
                 BaseUrl = Grasshopper.Instances.Settings.GetValue(GetImageProviderSettingKey(providerId, "BaseUrl"), config.DefaultBaseUrl),
                 ModelName = Grasshopper.Instances.Settings.GetValue(GetImageProviderSettingKey(providerId, "ModelName"), config.DefaultModel),
                 ProxyUrl = ReadResolvedImageProxyUrl(providerId)
+            };
+        }
+
+        private static ProviderRuntimeSettings GetVisionProviderRuntimeSettings(string providerId)
+        {
+            if (string.IsNullOrWhiteSpace(providerId))
+                providerId = GetCurrentVisionProviderId();
+
+            var config = GetProviderConfig(providerId);
+            string baseFallback = Grasshopper.Instances.Settings.GetValue(GetProviderSettingKey(providerId, "BaseUrl"), config.DefaultBaseUrl);
+            string modelFallback = Grasshopper.Instances.Settings.GetValue(GetProviderSettingKey(providerId, "ModelName"), config.DefaultModel);
+            return new ProviderRuntimeSettings
+            {
+                Config = config,
+                ApiKey = ReadResolvedVisionApiKey(providerId),
+                BaseUrl = Grasshopper.Instances.Settings.GetValue(GetVisionProviderSettingKey(providerId, "BaseUrl"), baseFallback),
+                ModelName = Grasshopper.Instances.Settings.GetValue(GetVisionProviderSettingKey(providerId, "ModelName"), modelFallback),
+                ProxyUrl = ReadResolvedVisionProxyUrl(providerId)
             };
         }
 
@@ -551,6 +624,25 @@ namespace ADDGH
             }
         }
 
+        private static void LoadVisionProviderSettingsToUI(string providerId)
+        {
+            if (_txtVisionApiKey == null || _txtVisionApiBaseUrl == null || _txtVisionModel == null || _txtVisionProxyUrl == null) return;
+
+            _isLoadingProviderSettings = true;
+            try
+            {
+                var settings = GetVisionProviderRuntimeSettings(providerId);
+                _txtVisionApiKey.Text = settings.ApiKey ?? "";
+                _txtVisionApiBaseUrl.Text = settings.BaseUrl ?? "";
+                _txtVisionModel.Text = settings.ModelName ?? "";
+                _txtVisionProxyUrl.Text = settings.ProxyUrl ?? "";
+            }
+            finally
+            {
+                _isLoadingProviderSettings = false;
+            }
+        }
+
         private static void SaveSelectedProviderSettings()
         {
             string providerId = GetSelectedProviderId();
@@ -578,7 +670,12 @@ namespace ADDGH
 
         private static void SaveSelectedVisionProviderSetting()
         {
-            Grasshopper.Instances.Settings.SetValue("AI_VisionProvider", GetSelectedVisionProviderId());
+            string providerId = GetSelectedVisionProviderId();
+            Grasshopper.Instances.Settings.SetValue("AI_VisionProvider", providerId);
+            PersistVisionApiKey(providerId, _txtVisionApiKey?.Text);
+            if (_txtVisionApiBaseUrl != null) Grasshopper.Instances.Settings.SetValue(GetVisionProviderSettingKey(providerId, "BaseUrl"), _txtVisionApiBaseUrl.Text);
+            if (_txtVisionModel != null) Grasshopper.Instances.Settings.SetValue(GetVisionProviderSettingKey(providerId, "ModelName"), _txtVisionModel.Text);
+            if (_txtVisionProxyUrl != null) Grasshopper.Instances.Settings.SetValue(GetVisionProviderSettingKey(providerId, "ProxyUrl"), NormalizeProxyUrl(_txtVisionProxyUrl.Text));
         }
     }
 }
