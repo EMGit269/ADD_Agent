@@ -3717,6 +3717,8 @@ namespace ADDGH
                 if (doc == null) { result = "Error: 没有打开的画布。"; return; }
 
                 Dictionary<string, Grasshopper.Kernel.IGH_DocumentObject> createdObjs = new Dictionary<string, Grasshopper.Kernel.IGH_DocumentObject>();
+                int createdCount = 0;
+                int connected = 0;
 
                 if (components != null) {
                     foreach (var c in components) {
@@ -3747,6 +3749,7 @@ namespace ADDGH
                                 return;
                             }
                             doc.AddObject(obj, false);
+                            createdCount++;
 
                             if (obj is Grasshopper.Kernel.Special.GH_NumberSlider s) {
                                 if (min.HasValue) s.Slider.Minimum = (decimal)min.Value;
@@ -3776,7 +3779,11 @@ namespace ADDGH
                             int tIdx = conn["to_index"]?.ToObject<int>() ?? 0;
                             var sP = (f is Grasshopper.Kernel.IGH_Component cF) ? (fIdx < cF.Params.Output.Count ? cF.Params.Output[fIdx] : null) : (f as Grasshopper.Kernel.IGH_Param);
                             var tP = (t is Grasshopper.Kernel.IGH_Component cT) ? (tIdx < cT.Params.Input.Count ? cT.Params.Input[tIdx] : null) : (t as Grasshopper.Kernel.IGH_Param);
-                            if (sP != null && tP != null) tP.AddSource(sP);
+                            if (sP != null && tP != null)
+                            {
+                                tP.AddSource(sP);
+                                connected++;
+                            }
                         }
                     }
                 }
@@ -3794,8 +3801,15 @@ namespace ADDGH
                 _canvasChanged = true;
                 try { doc.ScheduleSolution(150); }
                 catch (Exception ex) { AddGhLog.Warn("ExecuteCreateComponentGraph Schedule failed: " + ex.Message); }
-                result = "图谱构建完成。";
-                result += GetCanvasErrors(doc);
+                var payload = new JObject
+                {
+                    ["status"] = "ok",
+                    ["created_components"] = createdCount,
+                    ["created_connections"] = connected
+                };
+                string errors = GetCanvasErrors(doc);
+                if (!string.IsNullOrWhiteSpace(errors)) payload["canvas_errors"] = errors;
+                result = payload.ToString(Formatting.None);
             }));
             return result;
         }

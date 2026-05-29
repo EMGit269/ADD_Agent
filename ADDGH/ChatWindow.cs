@@ -138,15 +138,13 @@ namespace ADDGH
         private static MenuItem _menuModeCSharp;
         private static MenuItem _menuModeMixed;
 
-        private enum ImageIntentRoute
+        private enum ImageInputRoute
         {
             None,
-            VisualModeling,
-            AiImageCreation,
-            GeneralMultimodal
+            ImageAttached
         }
 
-        private static ImageIntentRoute _activeImageIntentRoute = ImageIntentRoute.None;
+        private static ImageInputRoute _activeImageInputRoute = ImageInputRoute.None;
         private static List<AttachmentItem> _currentTurnAttachments = new List<AttachmentItem>();
 
         private enum LayoutMode
@@ -191,23 +189,23 @@ namespace ADDGH
 1. 你不是视觉模型，也看不到原图；当用户上传图片时，只能依据视觉预处理模型给出的图片分析、用户原始文字和当前上下文做判断。
 2. 用户发图不等于要求建模或画图。先判断图片意图，再决定是否执行 Grasshopper 操作。意图类型包括：建模参考、修改建议、问题诊断、内容解释、素材输入、错误上传、不明确。
 3. 只有当用户明确要求根据图片生成、建模、还原、复刻、设计或制作时，才进入建模/画图流程；否则按真实意图处理。
-3a. 图片相关任务分三类路由：`visual_modeling`（图片用于 GH 建模参考）、`ai_image_creation`（图片或文字用于 AI 创作图片/图生图/改图）、`general_multimodal`（只是解释、分析、答疑）。不要把“有图”直接等同于 `visual_modeling` 或 `ai_image_creation`。
-3b. 当用户明确提到建模、Grasshopper、GH、电池、参数化、还原几何、搭定义、生成节点网络时，优先按 `visual_modeling` 处理。
-3c. 当用户明确提到生成图片、画一张、出图、渲染、海报、插画、效果图、改图、换风格、去背景、替换材质、保留构图重绘时，优先按 `ai_image_creation` 处理。
-3d. 当用户只是要求描述图片、解释内容、分析截图、识别问题或回答视觉相关问题时，保持 `general_multimodal`，不要进入建模或出图工作流。
+3a. 图片相关任务不由宿主按关键词硬路由；你需要根据用户原文、视觉预处理报告、当前上下文和可用工具自行判断下一步。
+3b. 如果用户目标是理解、解释、识别或诊断图片，直接基于视觉信息回答，不要先查看或修改 Grasshopper 画布。
+3c. 如果用户目标是 AI 创作图片、图生图或改图，调用 `create_ai_image`，不要擅自转成 GH 画布操作。
+3d. 如果用户目标确实是根据图片做 GH/Rhino 建模、还原几何或修改当前模型，再使用 GH 工具；若意图不明确，先问一个简短澄清问题。
 4. 如果图片是修改建议，围绕已有画布或上一轮结果定位要改的对象与变化点，不要无故重做整套方案。
 5. 如果图片像截图、报错或界面异常，优先诊断问题与下一步操作，不要把截图当作设计参考。
 6. 如果图片可能误发、与当前任务无关或意图不明确，先提出一个简短澄清问题，不要擅自建模。
 7. 视觉预处理模型可结合受控画布上下文做定位，但不做最终决策，也不执行修改；你负责核实、规划和操作。不要声称自己直接看到了图片。
 8. 视觉报告里的相关组件、输出或问题区域只是线索，不是最终事实；先核实再修改。
 9. 文字与图片分析冲突时优先遵循用户文字；无法判断时先澄清。
-10. 收到结构化视觉报告后，把“视觉事实”当高优先级参考，把“关联画布定位”“执行模型下一步检查点”“给执行模型的任务摘要”当待核实线索；优先执行检查动作。
+10. 收到结构化视觉报告后，把“视觉事实”当高优先级参考；视觉报告只提供图片事实，不决定是否回答、出图或操作 Grasshopper。
 11. 对“按参考图修改”“与图片保持一致”“看起来不对但未报错”这类任务，不要只依赖无报错和非 Null 数据；完成数据级检查后仍要说明剩余视觉偏差或不确定性。
 12. 视觉报告与工具核实冲突时，以工具结果为准，并简短说明依据。
-13. 只有当当前任务实际包含用户提供的图片输入时，才允许调用 `capture_rhino_viewport` 做视觉一致性核验、展示结果或回送视觉模型复核；无图任务禁止主动触发截图式视觉检查。
-13a. 截图前先整理预览：应优先调用 `prepare_visual_review_preview`，把最终要检查的输出连接到一个干净的 Geometry 预览电池上；该工具会硬编码关闭所有 C# Script 预览。不要依赖脚本过程预览做视觉核验。无图任务不要调用它。
+13. `capture_rhino_viewport` 是可用工具，由你根据用户请求和任务需要自行决定是否调用；不要为了替代数据级检查而默认截图。
+13a. 截图前先整理预览：当截图用于结果展示或视觉检查时，应优先调用 `prepare_visual_review_preview`，把最终要检查的输出连接到一个干净的 Geometry 预览电池上；该工具会硬编码关闭所有 C# Script 预览。不要依赖脚本过程预览做视觉核验。
 13b. `capture_rhino_viewport` 返回给你的路径、bbox、预览计数等都不是视觉事实，只是截图传输元数据。除非该截图随后被送入视觉模型，否则你不能根据这些元数据推断形态是否正确、分段是否合理、长度是否匹配，也不能把 bbox 尺寸当作曲线/曲面 UV 路径长度。
-14. 当用户要求检查模型形态、外观、轮廓、比例或整体效果，而数据级检查不足以判断时，若当前任务带有图片输入，可先做最小代价验证：优先检查报错、Null、空数据、Panel 与关键输出；仍无法确认时，再调用 `capture_rhino_viewport` 获取最小必要截图，并唤醒多模态模型做视觉复核。不要默认触发视觉复核，只在有图片输入且确有视觉判断必要时使用。
+14. 当用户要求检查模型形态、外观、轮廓、比例或整体效果，而数据级检查不足以判断时，可先做最小代价验证：优先检查报错、Null、空数据、Panel 与关键输出；仍无法确认或需要展示时，再调用 `capture_rhino_viewport` 获取最小必要截图。不要默认触发视觉复核，只在有图片输入且确有视觉判断必要时使用。
 15. 当用户提供了图像参考，或用图片指出当前结果存在问题时，最终完成前应进行一次截图级视觉复核：先完成数据级检查，再调用 `capture_rhino_viewport` 获取当前结果截图，并以该截图作为最终核验依据之一；不要仅凭无报错、非 Null 或局部 Panel 检查就宣称与图片要求一致。
 16. 当用户目标是 AI 创作图片而不是 GH 建模时，调用 `create_ai_image`，不要先进入 VisualWorkflow，也不要擅自把图片要求转成 GH 画布操作。
 16a. 当 `create_ai_image` 返回成功后，不要输出 Markdown 图片语法、模板变量、代码占位符或诸如 `${result.savedImages[0].path}` 之类的路径引用。图片展示由宿主界面负责；你只需用自然语言简短说明结果与可继续调整的方向。
@@ -3218,7 +3216,7 @@ namespace ADDGH
             _thinkingStatusStep = 0;
             bool hasImageAttachments = attachmentsToSend.Any(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64));
             _currentTurnAttachments = CloneAttachments(attachmentsToSend);
-            _activeImageIntentRoute = ResolveImageIntentRoute(input, attachmentsToSend);
+            _activeImageInputRoute = ResolveImageInputRoute(input, attachmentsToSend);
             ResetVisualWorkflowState(input, attachmentsToSend);
             if (hasImageAttachments && !string.IsNullOrWhiteSpace(_queuedImmediateSendVisionSourceInputOverride))
                 _finalVisualReviewSourceInput = _queuedImmediateSendVisionSourceInputOverride;
@@ -3235,10 +3233,10 @@ namespace ADDGH
             }
 
             if (attachmentsToSend.Count > 0) {
-                bool includeImagesInPrimaryMessage = ShouldIncludeImagesInPrimaryModelMessage(_activeImageIntentRoute);
+                bool includeImagesInPrimaryMessage = ShouldIncludeImagesInPrimaryModelMessage(_activeImageInputRoute);
                 string imageContextNote = includeImagesInPrimaryMessage
                     ? null
-                    : BuildPrimaryModelImageContextNote(_activeImageIntentRoute, attachmentsToSend);
+                    : BuildPrimaryModelImageContextNote(_activeImageInputRoute, attachmentsToSend);
                 var contentArr = BuildUserMessageContent(input, attachmentsToSend, includeImagesInPrimaryMessage, imageContextNote);
                 _messages.Add(new { role = "user", content = contentArr });
                 AppendUserMessageWithAttachments(displayInput, attachmentsToSend);
@@ -3279,7 +3277,7 @@ namespace ADDGH
                 HideThinkingAnimation();
                 _isGenerating = false;
                 ApplySendButtonIdleState();
-                _activeImageIntentRoute = ImageIntentRoute.None;
+                _activeImageInputRoute = ImageInputRoute.None;
                 _currentTurnAttachments = new List<AttachmentItem>();
                 try { _cts?.Dispose(); } catch (Exception ex) { AddGhLog.Warn("Dispose CTS after send: " + ex.Message); }
                 _cts = null;
@@ -3373,71 +3371,30 @@ namespace ADDGH
                 target.Children.Add(_btnToggleViewMode);
         }
 
-        private static ImageIntentRoute ResolveImageIntentRoute(string input, List<AttachmentItem> attachments)
+        private static ImageInputRoute ResolveImageInputRoute(string input, List<AttachmentItem> attachments)
         {
             bool hasImageAttachments = (attachments ?? new List<AttachmentItem>())
                 .Any(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64));
             if (!hasImageAttachments)
-                return ImageIntentRoute.None;
+                return ImageInputRoute.None;
 
-            string text = (input ?? "").Trim().ToLowerInvariant();
-            bool hasModelingIntent = ContainsAny(text,
-                "grasshopper", "gh ", " gh", "建模", "参数化", "电池", "搭定义", "定义", "还原几何", "节点网络", "画布");
-            bool hasImageCreationIntent = ContainsAny(text,
-                "生成图片", "生成一张", "帮我生成", "画一张", "出图", "渲染", "海报", "插画", "效果图", "改图", "换风格", "去背景", "替换", "重绘", "图生图", "文生图",
-                "按这张图", "按图生成", "参考这张图", "参考图生成", "照这张图", "基于这张图", "用这张图", "拿这张图", "同款", "同样风格", "参考风格", "保留构图");
-            bool hasGeneralVisionIntent = ContainsAny(text,
-                "解释", "说明", "分析", "识别", "哪里有问题", "什么问题", "描述", "看一下");
-
-            if (hasModelingIntent)
-                return ImageIntentRoute.VisualModeling;
-            if (hasImageCreationIntent)
-                return ImageIntentRoute.AiImageCreation;
-            if (hasGeneralVisionIntent)
-                return ImageIntentRoute.GeneralMultimodal;
-            return ImageIntentRoute.GeneralMultimodal;
+            return ImageInputRoute.ImageAttached;
         }
 
-        private static bool ContainsAny(string source, params string[] candidates)
+        private static bool ShouldIncludeImagesInPrimaryModelMessage(ImageInputRoute route)
         {
-            if (string.IsNullOrWhiteSpace(source) || candidates == null)
-                return false;
-
-            foreach (string candidate in candidates)
-            {
-                if (!string.IsNullOrWhiteSpace(candidate) && source.IndexOf(candidate, StringComparison.OrdinalIgnoreCase) >= 0)
-                    return true;
-            }
-
-            return false;
-        }
-
-        private static bool ShouldIncludeImagesInPrimaryModelMessage(ImageIntentRoute route)
-        {
-            if (route == ImageIntentRoute.AiImageCreation || route == ImageIntentRoute.VisualModeling)
-                return false;
-
-            if (route == ImageIntentRoute.GeneralMultimodal)
-                return GetProviderRuntimeSettings()?.Config?.SupportsVision ?? false;
-
             return GetProviderRuntimeSettings()?.Config?.SupportsVision ?? false;
         }
 
-        private static string BuildPrimaryModelImageContextNote(ImageIntentRoute route, List<AttachmentItem> attachments)
+        private static string BuildPrimaryModelImageContextNote(ImageInputRoute route, List<AttachmentItem> attachments)
         {
             int imageCount = (attachments ?? new List<AttachmentItem>())
                 .Count(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64));
             if (imageCount <= 0)
                 return null;
 
-            if (route == ImageIntentRoute.AiImageCreation)
-                return $"当前轮已上传 {imageCount} 张图片附件。它们将由图片生成工具直接作为参考图或编辑输入使用；如果用户要基于这些图片出图或改图，请调用 create_ai_image，并将 use_uploaded_images 设为 true。";
-
-            if (route == ImageIntentRoute.VisualModeling)
-                return $"当前轮已上传 {imageCount} 张图片附件。你不直接查看原图，请等待视觉预处理结果后再继续建模。";
-
-            if (route == ImageIntentRoute.GeneralMultimodal)
-                return $"当前轮已上传 {imageCount} 张图片附件。当前主模型链路不直接接收原图，请仅依据用户文字或后续视觉分析回答。";
+            if (route == ImageInputRoute.ImageAttached)
+                return $"当前轮已上传 {imageCount} 张图片附件。当前主模型链路不直接接收原图，请等待视觉预处理结果后自行判断是直接回答、调用 create_ai_image，还是在确有需要时操作 Grasshopper；不要先检查或修改 Grasshopper 画布。";
 
             return null;
         }
@@ -4415,6 +4372,7 @@ namespace ADDGH
 
                 int addComp = 0, delComp = 0, addConn = 0, delConn = 0, addCodeLines = 0, delCodeLines = 0;
                 string latestStatsUndoId = null;
+                bool turnMutatedGrasshopperCanvas = false;
 
                 if (fullToolCalls.Count > 0)
                 {
@@ -4461,6 +4419,10 @@ namespace ADDGH
                         addCodeLines += dispatch.AddCodeLines;
                         delCodeLines += dispatch.DelCodeLines;
                         dispatch.UndoId = RegisterCanvasUndoRecord(funcName, callId, dispatch.UndoSnapshotPath, toolResult);
+                        if (IsCanvasMutatingTool(funcName) && !toolResult.StartsWith("Error:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            turnMutatedGrasshopperCanvas = true;
+                        }
                         if (!string.IsNullOrWhiteSpace(dispatch.UndoId))
                         {
                             latestStatsUndoId = dispatch.UndoId;
@@ -4476,6 +4438,14 @@ namespace ADDGH
 
                     if (addComp > 0 || delComp > 0 || addConn > 0 || delConn > 0 || addCodeLines > 0 || delCodeLines > 0) {
                         AppendColoredStatsMessage(addComp, delComp, addConn, delConn, addCodeLines, delCodeLines, latestStatsUndoId);
+                    }
+
+                    if (turnMutatedGrasshopperCanvas
+                        && _agentMode == AgentMode.Create
+                        && _finalVisualReviewSourceImages != null
+                        && _finalVisualReviewSourceImages.Any(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64)))
+                    {
+                        _pendingFinalVisualReview = true;
                     }
 
                     SyncActiveHistoryConversation();

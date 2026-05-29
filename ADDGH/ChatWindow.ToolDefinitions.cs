@@ -823,18 +823,7 @@ namespace ADDGH
 
         private static object[] FilterToolsForVisionContext(object[] toolDefinitions)
         {
-            if (toolDefinitions == null || IsVisionToolContextActive()) return toolDefinitions;
-
-            var blocked = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            {
-                "capture_rhino_viewport",
-                "prepare_visual_review_preview",
-                "set_all_csharp_script_previews"
-            };
-
-            return toolDefinitions
-                .Where(t => !blocked.Contains(GetToolDefinitionName(t) ?? ""))
-                .ToArray();
+            return toolDefinitions;
         }
 
         private static object RestrictAddComponentToolForScriptMode(object toolDefinition)

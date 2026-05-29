@@ -297,10 +297,13 @@ namespace ADDGH
 
         private static void AppendMarkdownInlines(InlineCollection inlines, string text)
         {
-            string[] parts = Regex.Split(text ?? "", @"(\*\*.*?\*\*|`.*?`|\*.*?\*)");
+            string[] parts = Regex.Split(text ?? "", @"(<kbd\b[^>]*>.*?</kbd>|\*\*.*?\*\*|`.*?`|\*.*?\*)", RegexOptions.IgnoreCase);
             foreach (var part in parts) {
                 if (string.IsNullOrEmpty(part)) continue;
-                if (part.StartsWith("**") && part.EndsWith("**") && part.Length >= 4) {
+                if (Regex.IsMatch(part, @"^<kbd\b[^>]*>.*?</kbd>$", RegexOptions.IgnoreCase)) {
+                    var match = Regex.Match(part, @"^<kbd\b[^>]*>(.*?)</kbd>$", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+                    inlines.Add(CreateKeyboardInline(System.Net.WebUtility.HtmlDecode(match.Groups[1].Value.Trim())));
+                } else if (part.StartsWith("**") && part.EndsWith("**") && part.Length >= 4) {
                     inlines.Add(new Bold(new Run(part.Substring(2, part.Length - 4))));
                 } else if (part.StartsWith("*") && part.EndsWith("*") && part.Length >= 2) {
                     inlines.Add(new Italic(new Run(part.Substring(1, part.Length - 2))));
@@ -315,6 +318,33 @@ namespace ADDGH
                     inlines.Add(new Run(part));
                 }
             }
+        }
+
+        private static Inline CreateKeyboardInline(string text)
+        {
+            var key = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(42, 42, 42)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(88, 88, 88)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(5, 1, 5, 1),
+                Margin = new Thickness(2, 0, 2, -1),
+                Child = new TextBlock
+                {
+                    Text = text ?? "",
+                    Foreground = new SolidColorBrush(Color.FromRgb(235, 235, 235)),
+                    FontFamily = new FontFamily("Consolas, Courier New"),
+                    FontSize = 11,
+                    FontWeight = FontWeights.SemiBold,
+                    LineHeight = 14
+                }
+            };
+
+            return new InlineUIContainer(key)
+            {
+                BaselineAlignment = BaselineAlignment.Center
+            };
         }
 
         private static bool IsMarkdownHorizontalRule(string trimmed)

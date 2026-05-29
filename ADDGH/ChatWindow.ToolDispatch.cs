@@ -45,6 +45,21 @@ namespace ADDGH
             return body;
         }
 
+        private static int ReadResultInt(string toolResult, string key)
+        {
+            if (string.IsNullOrWhiteSpace(toolResult) || string.IsNullOrWhiteSpace(key))
+                return 0;
+            try
+            {
+                var root = JObject.Parse(toolResult);
+                return root[key]?.ToObject<int?>() ?? 0;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
         private static double? ReadNullableDouble(JObject argsObj, string key)
         {
             return argsObj?[key] == null || argsObj[key].Type == JTokenType.Null
@@ -118,12 +133,6 @@ namespace ADDGH
                 }
                 else if (funcName == "capture_rhino_viewport")
                 {
-                    if (!CanUseViewportCaptureTool())
-                    {
-                        result.ToolResult = "Error: capture_rhino_viewport is disabled for this turn because there is no active multimodal image context. Do not use screenshot metadata for geometric or visual reasoning; inspect concrete GH data instead, or expose debug outputs with Panel/get_gh_components.";
-                        return result;
-                    }
-
                     result.ToolResult = ExecuteCaptureRhinoViewport(
                         argsObj["framing"]?.ToString(),
                         ReadNullableInt(argsObj, "width"),
@@ -211,8 +220,8 @@ namespace ADDGH
                         groupName);
                     if (!result.ToolResult.StartsWith("Error:", StringComparison.OrdinalIgnoreCase))
                     {
-                        if (argsObj["components"] is JArray comps) result.AddComp += comps.Count;
-                        if (argsObj["connections"] is JArray conns) result.AddConn += conns.Count;
+                        result.AddComp += ReadResultInt(result.ToolResult, "created_components");
+                        result.AddConn += ReadResultInt(result.ToolResult, "created_connections");
                     }
                 }
                 else if (funcName == "create_csharp_script_component")
@@ -232,9 +241,9 @@ namespace ADDGH
                         argsObj["group_name"]?.ToString());
                     if (!result.ToolResult.StartsWith("Error:"))
                     {
-                        result.AddComp += 1;
+                        result.AddComp += ReadResultInt(result.ToolResult, "created_scripts");
                         result.AddCodeLines += CountCodeLinesForStats(argsObj["body"]?.ToString());
-                        if (argsObj["components"] is JArray helperItems) result.AddComp += helperItems.Count;
+                        result.AddComp += ReadResultInt(result.ToolResult, "created_components");
                     }
                 }
                 else if (funcName == "edit_csharp_script_component")
@@ -268,9 +277,16 @@ namespace ADDGH
                         argsObj["group_name"]?.ToString());
                     if (!result.ToolResult.StartsWith("Error:"))
                     {
-                        if (argsObj["scripts"] is JArray scriptItems) result.AddComp += scriptItems.Count;
-                        if (argsObj["components"] is JArray helperItems) result.AddComp += helperItems.Count;
-                        if (argsObj["connections"] is JArray connectionItems) result.AddConn += connectionItems.Count;
+                        result.AddComp += ReadResultInt(result.ToolResult, "created_scripts");
+                        result.AddComp += ReadResultInt(result.ToolResult, "created_components");
+                        result.AddConn += ReadResultInt(result.ToolResult, "created_connections");
+                        if (argsObj["scripts"] is JArray scriptItems)
+                        {
+                            foreach (var script in scriptItems)
+                            {
+                                result.AddCodeLines += CountCodeLinesForStats(script?["body"]?.ToString() ?? script?["code"]?.ToString() ?? script?["value"]?.ToString());
+                            }
+                        }
                     }
                 }
                 else if (funcName == "check_gh_errors")

@@ -601,8 +601,8 @@ namespace ADDGH
 
             sb.AppendLine("以下图片理解来自视觉预处理模型；执行模型没有直接看到原图。");
             sb.AppendLine(_agentMode == AgentMode.Plan
-                ? "把“视觉事实”当事实，把“关联画布定位”“执行模型下一步检查点”“给执行模型的任务摘要”“最终截图复核建议”当待核实线索；先核实，再输出实施步骤卡片，不要直接修改画布。"
-                : "把“视觉事实”当事实，把“关联画布定位”“执行模型下一步检查点”“给执行模型的任务摘要”“最终截图复核建议”当待核实线索；先核实再修改。");
+                ? "这份报告只提供图片和文字中的可见事实；是否回答、出图或操作 Grasshopper，由你结合用户请求和可用工具自行判断。"
+                : "这份报告只提供图片和文字中的可见事实；是否回答、出图或操作 Grasshopper，由你结合用户请求和可用工具自行判断。");
             sb.AppendLine();
             sb.AppendLine(visionAnalysis?.Trim() ?? "");
             return sb.ToString().Trim();
@@ -630,20 +630,6 @@ namespace ADDGH
             return sb.ToString().Trim();
         }
 
-        private static bool ShouldIncludeVisionCanvasContext(string input)
-        {
-            string text = input?.Trim() ?? "";
-            if (string.IsNullOrWhiteSpace(text))
-                return false;
-
-            string[] keywords =
-            {
-                "改", "修改", "调整", "修", "修正", "纠正", "不对", "错误", "报错", "问题",
-                "诊断", "检查", "看看", "结果", "输出", "null", "panel", "一致", "对不上", "偏"
-            };
-            return keywords.Any(k => text.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0);
-        }
-
         private static string BuildVisionCanvasContext(string input)
         {
             try
@@ -656,9 +642,6 @@ namespace ADDGH
                 var components = root["components"] as JArray ?? new JArray();
                 var canvasErrors = root["canvas_errors"] as JArray ?? new JArray();
                 var units = root["rhino_units"] as JObject;
-
-                if (!ShouldIncludeVisionCanvasContext(input) && canvasErrors.Count == 0)
-                    return "";
 
                 var sb = new StringBuilder();
                 sb.AppendLine("画布上下文：");
@@ -759,33 +742,20 @@ namespace ADDGH
         {
             var content = new JArray();
             var textBuilder = new StringBuilder();
-            textBuilder.AppendLine("只分析图片、文字和可选画布上下文；不要调用工具，不要执行 Grasshopper 操作。");
-            textBuilder.AppendLine("用户发图不一定是要建模，也可能是修改、诊断、解释或误发。若有画布上下文，只用于定位。");
-            textBuilder.AppendLine("如果没有用户参考图，而只是让你检查当前模型截图的形态，请不要假设目标形状；只判断是否存在明显的形态异常、比例失衡、方向错误、连续性问题、缺失或可疑结构。");
+            textBuilder.AppendLine("只分析用户提供的图片和文字；不要调用工具，不要执行 Grasshopper 操作，不要判断应进入哪种工作流。");
+            textBuilder.AppendLine("只陈述图片中可见事实、文字中明确表达的要求，以及不确定性。不要建议是否建模、出图、检查画布或截图复核。");
             textBuilder.AppendLine("按以下标题顺序输出，简洁作答：");
             textBuilder.AppendLine("【视觉事实】");
-            textBuilder.AppendLine("【用户意图判断】");
-            textBuilder.AppendLine("【问题点】");
-            textBuilder.AppendLine("【关联画布定位】");
-            textBuilder.AppendLine("【执行模型下一步检查点】");
-            textBuilder.AppendLine("【与 Grasshopper 建模/画图相关的信息】");
+            textBuilder.AppendLine("【文字要求】");
+            textBuilder.AppendLine("【可见问题】");
             textBuilder.AppendLine("【不确定性】");
-            textBuilder.AppendLine("【最终截图复核建议】");
-            textBuilder.AppendLine("【给执行模型的任务摘要】");
-            textBuilder.AppendLine("要求：视觉事实只写可见事实；关联画布定位最多3项并给高/中/低置信度；执行模型下一步检查点最多3项；最终截图复核建议明确写“需要”或“不需要”，并给一句理由；无信息就写“无”或“不确定”。");
+            textBuilder.AppendLine("要求：只写图片和文字直接支持的信息；不要输出工具调用建议或工作流分类；无信息就写“无”或“不确定”。");
 
             if (!string.IsNullOrWhiteSpace(input))
             {
                 textBuilder.AppendLine();
                 textBuilder.AppendLine("用户原始请求：");
                 textBuilder.AppendLine(input.Trim());
-            }
-
-            string canvasContext = BuildVisionCanvasContext(input);
-            if (!string.IsNullOrWhiteSpace(canvasContext))
-            {
-                textBuilder.AppendLine();
-                textBuilder.AppendLine(canvasContext);
             }
 
             AppendNonImageAttachmentText(textBuilder, attachments);
@@ -815,7 +785,7 @@ namespace ADDGH
                     new JObject
                     {
                         ["role"] = "system",
-                        ["content"] = "你是图像理解与定位预处理器。职责：把用户图片、文字和可选画布上下文整理成给执行模型使用的定位报告。不要调用工具，不要执行 Grasshopper 操作，不要默认用户发图就是要建模。若有画布上下文，只用于定位，不用于代替执行模型规划或修改。严格按用户要求的标题顺序输出，区分事实、推断、置信度和不确定性，保持简洁。"
+                        ["content"] = "你是图像理解预处理器。职责：只把用户图片和文字整理成事实报告。不要调用工具，不要执行 Grasshopper 操作，不要判断工作流，不要建议工具调用。严格按用户要求的标题顺序输出，区分事实、推断和不确定性，保持简洁。"
                     },
                     new JObject
                     {

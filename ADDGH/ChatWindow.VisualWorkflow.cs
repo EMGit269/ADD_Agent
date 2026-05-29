@@ -17,12 +17,11 @@ namespace ADDGH
         private static void ResetVisualWorkflowState(string input, List<AttachmentItem> attachmentsToSend)
         {
             bool hasImageAttachments = attachmentsToSend.Any(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64));
-            bool enableVisualFlow = _activeImageIntentRoute == ImageIntentRoute.VisualModeling;
             _currentTurnHadToolExecution = false;
             _finalVisualReviewCompleted = false;
             _finalVisualReviewAttempted = false;
-            _hasActiveVisionInputContext = hasImageAttachments && enableVisualFlow;
-            _pendingFinalVisualReview = hasImageAttachments && enableVisualFlow && _agentMode == AgentMode.Create;
+            _hasActiveVisionInputContext = hasImageAttachments;
+            _pendingFinalVisualReview = false;
             _finalVisualReviewSourceInput = input;
             _finalVisualReviewSourceImages = hasImageAttachments
                 ? attachmentsToSend
@@ -42,15 +41,16 @@ namespace ADDGH
 
         private static bool CanUseViewportCaptureTool()
         {
-            return IsVisionToolContextActive();
+            return true;
         }
 
         private static async Task<bool> PrepareImageDrivenExecutionContextAsync(string input, List<AttachmentItem> attachmentsToSend, System.Threading.CancellationToken ct)
         {
-            if (_activeImageIntentRoute != ImageIntentRoute.VisualModeling)
+            if (!attachmentsToSend.Any(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64)))
                 return true;
 
-            if (!attachmentsToSend.Any(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64)))
+            bool primaryModelReceivesImages = ShouldIncludeImagesInPrimaryModelMessage(_activeImageInputRoute);
+            if (primaryModelReceivesImages)
                 return true;
 
             string visionAnalysis = await PreprocessImageAttachmentsAsync(input, attachmentsToSend, ct);
