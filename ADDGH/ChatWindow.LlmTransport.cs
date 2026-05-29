@@ -68,16 +68,41 @@ namespace ADDGH
                 {
                     jo.Remove("name");
                 }
-                else if (string.Equals(role, "assistant", StringComparison.OrdinalIgnoreCase) && jo["tool_calls"] != null)
+                else if (string.Equals(role, "assistant", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (jo["content"] == null || jo["content"].Type == JTokenType.Null)
+                    RemoveLocalDisplayMetadata(jo);
+                    NormalizeAssistantToolCallsForRequest(jo);
+                    if (jo["tool_calls"] != null && (jo["content"] == null || jo["content"].Type == JTokenType.Null))
                         jo["content"] = "";
+                }
+                else
+                {
+                    RemoveLocalDisplayMetadata(jo);
                 }
 
                 result.Add(jo);
             }
 
             return result;
+        }
+
+        private static void RemoveLocalDisplayMetadata(JObject message)
+        {
+            if (message == null) return;
+            var names = message.Properties()
+                .Where(p => p.Name.StartsWith("_display_", StringComparison.OrdinalIgnoreCase))
+                .Select(p => p.Name)
+                .ToList();
+            foreach (string name in names)
+                message.Remove(name);
+        }
+
+        private static void NormalizeAssistantToolCallsForRequest(JObject message)
+        {
+            if (message == null) return;
+            var toolCalls = message["tool_calls"] as JArray;
+            if (toolCalls != null && toolCalls.Count == 0)
+                message.Remove("tool_calls");
         }
 
         private static List<EndpointCandidate> BuildEndpointCandidates(string baseUrl)
@@ -639,6 +664,7 @@ namespace ADDGH
                     return false;
                 }
 
+                NormalizeAssistantToolCallsForRequest(msg);
                 messageNode = msg;
                 return true;
             }
@@ -700,6 +726,7 @@ namespace ADDGH
                 var message = choice0["message"] as JObject;
                 if (message != null)
                 {
+                    NormalizeAssistantToolCallsForRequest(message);
                     messageNode = message;
                     sawFinalMessage = true;
                     continue;

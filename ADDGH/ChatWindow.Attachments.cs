@@ -640,6 +640,7 @@ namespace ADDGH
 
                 var root = JObject.Parse(raw);
                 var components = root["components"] as JArray ?? new JArray();
+                var groups = root["groups"] as JArray ?? new JArray();
                 var canvasErrors = root["canvas_errors"] as JArray ?? new JArray();
                 var units = root["rhino_units"] as JObject;
 
@@ -671,9 +672,21 @@ namespace ADDGH
                         sb.AppendLine($"- {name}[{level}] {ClampVisionText(message, 80)}".TrimEnd());
                     }
                 }
+                if (groups.Count > 0)
+                {
+                    sb.AppendLine("组件组：");
+                    foreach (var group in groups.Take(4))
+                    {
+                        string groupName = group?["name"]?.ToString();
+                        int memberCount = (group?["members"] as JArray)?.Count ?? 0;
+                        if (!string.IsNullOrWhiteSpace(groupName))
+                            sb.AppendLine($"- {groupName}（成员{memberCount}）");
+                    }
+                }
 
                 var selected = new List<JToken>();
                 selected.AddRange(components.Where(c => c?["runtime_messages"] is JArray).Take(3));
+                selected.AddRange(components.Where(c => IsVisionContextScriptComponent(c)).Take(4));
                 selected.AddRange(components.Reverse().Take(4));
                 var unique = selected
                     .Where(c => c != null)
@@ -724,12 +737,71 @@ namespace ADDGH
                     }
                 }
 
-                return ClampVisionText(sb.ToString().Trim(), 2200);
+                var scripts = components
+                    .Where(c => IsVisionContextScriptComponent(c))
+                    .Take(3)
+                    .ToList();
+                if (scripts.Count > 0)
+                {
+                    sb.AppendLine("相关 C# Script 片段（仅供定位，修改由主模型核实后执行）：");
+                    foreach (var comp in scripts)
+                    {
+                        string name = comp["name"]?.ToString() ?? "C# Script";
+                        string nickname = comp["nickname"]?.ToString();
+                        string id = comp["id"]?.ToString();
+                        sb.AppendLine("- " + name + (string.IsNullOrWhiteSpace(nickname) || nickname == name ? "" : $"({nickname})") + (string.IsNullOrWhiteSpace(id) ? "" : $"#{id}"));
+                        AppendVisionPortSummary(sb, "输入", comp["inputs"] as JArray, 6);
+                        AppendVisionPortSummary(sb, "输出", comp["outputs"] as JArray, 6);
+                        string body = ExtractVisionScriptBody(comp);
+                        if (!string.IsNullOrWhiteSpace(body))
+                            sb.AppendLine("  代码片段=" + ClampVisionText(body.Replace("\r", " ").Replace("\n", " "), 420));
+                    }
+                }
+
+                return ClampVisionText(sb.ToString().Trim(), 3600);
             }
             catch (Exception ex)
             {
                 return "画布上下文读取失败：" + ex.Message;
             }
+        }
+
+        private static bool IsVisionContextScriptComponent(JToken comp)
+        {
+            if (comp == null) return false;
+            string name = comp["name"]?.ToString() ?? "";
+            string nick = comp["nickname"]?.ToString() ?? "";
+            string runtime = comp["runtime_type_hint"]?.ToString() ?? "";
+            if (name.IndexOf("C# Script", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (nick.IndexOf("C#", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (runtime.IndexOf("CSharp", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            return comp["script_bodies"] is JObject;
+        }
+
+        private static void AppendVisionPortSummary(StringBuilder sb, string label, JArray ports, int limit)
+        {
+            if (sb == null || ports == null || ports.Count == 0) return;
+            var parts = ports.Take(limit).Select(p =>
+            {
+                string portName = p?["name"]?.ToString() ?? "?";
+                string type = p?["type"]?.ToString();
+                string data = p?["data_structure"]?.ToString();
+                return string.IsNullOrWhiteSpace(data) ? portName + ":" + type : portName + ":" + data;
+            }).Where(v => !string.IsNullOrWhiteSpace(v));
+            sb.AppendLine("  " + label + "=" + string.Join(" ; ", parts));
+        }
+
+        private static string ExtractVisionScriptBody(JToken comp)
+        {
+            var bodies = comp?["script_bodies"] as JObject;
+            if (bodies == null || bodies.Count == 0) return null;
+            foreach (var prop in bodies.Properties())
+            {
+                string value = prop.Value?.ToString();
+                if (!string.IsNullOrWhiteSpace(value))
+                    return value;
+            }
+            return null;
         }
 
         private static string ClampVisionText(string text, int maxChars)
@@ -742,14 +814,16 @@ namespace ADDGH
         {
             var content = new JArray();
             var textBuilder = new StringBuilder();
-            textBuilder.AppendLine("只分析用户提供的图片和文字；不要调用工具，不要执行 Grasshopper 操作，不要判断应进入哪种工作流。");
-            textBuilder.AppendLine("只陈述图片中可见事实、文字中明确表达的要求，以及不确定性。不要建议是否建模、出图、检查画布或截图复核。");
+            textBuilder.AppendLine("你是视觉预处理与交接模型。可以结合用户图片、用户文字和受控 Grasshopper 画布上下文做定位分析。");
+            textBuilder.AppendLine("不要调用工具，不要执行 Grasshopper 操作，不要修改画布，不要做最终 workflow 决策；执行和决策由主模型完成。");
+            textBuilder.AppendLine("可以向主模型提供：图片可见事实、文字明确要求、当前画布/C# 代码相关线索、疑似需要修改或新增的内容、不确定性。");
             textBuilder.AppendLine("按以下标题顺序输出，简洁作答：");
             textBuilder.AppendLine("【视觉事实】");
             textBuilder.AppendLine("【文字要求】");
-            textBuilder.AppendLine("【可见问题】");
+            textBuilder.AppendLine("【当前画布相关线索】");
+            textBuilder.AppendLine("【疑似需要修改或新增】");
             textBuilder.AppendLine("【不确定性】");
-            textBuilder.AppendLine("要求：只写图片和文字直接支持的信息；不要输出工具调用建议或工作流分类；无信息就写“无”或“不确定”。");
+            textBuilder.AppendLine("要求：区分图片事实、画布事实、推测和不确定性；不要输出工具调用步骤；无信息就写“无”或“不确定”。");
 
             if (!string.IsNullOrWhiteSpace(input))
             {
@@ -759,6 +833,9 @@ namespace ADDGH
             }
 
             AppendNonImageAttachmentText(textBuilder, attachments);
+            textBuilder.AppendLine();
+            textBuilder.AppendLine("受控画布/C# 上下文（供定位与交接，不是图片视觉事实）：");
+            textBuilder.AppendLine(BuildVisionCanvasContext(input));
             content.Add(new JObject
             {
                 ["type"] = "text",
@@ -785,7 +862,7 @@ namespace ADDGH
                     new JObject
                     {
                         ["role"] = "system",
-                        ["content"] = "你是图像理解预处理器。职责：只把用户图片和文字整理成事实报告。不要调用工具，不要执行 Grasshopper 操作，不要判断工作流，不要建议工具调用。严格按用户要求的标题顺序输出，区分事实、推断和不确定性，保持简洁。"
+                        ["content"] = "你是图像理解与画布交接预处理器。职责：把用户图片、文字和受控 Grasshopper/C# 上下文整理成给执行主模型的事实与定位报告。不要调用工具，不要执行 Grasshopper 操作，不要修改画布，不要做最终 workflow 决策。严格按用户要求的标题顺序输出，区分视觉事实、画布事实、推断和不确定性，保持简洁。"
                     },
                     new JObject
                     {
@@ -875,6 +952,82 @@ namespace ADDGH
                     {
                         ["role"] = "system",
                         ["content"] = "你是结果验收视觉评估器。你只负责比较图片与当前结果截图，给出是否达标、主要偏差和局部修正方向；不要调用工具，不要输出无关说明。"
+                    },
+                    new JObject
+                    {
+                        ["role"] = "user",
+                        ["content"] = content
+                    }
+                },
+                ["stream"] = false,
+                ["temperature"] = 0.1
+            };
+        }
+
+        private static JObject BuildViewportScreenshotAnalysisRequestBody(
+            ProviderRuntimeSettings providerSettings,
+            string question,
+            string screenshotPath,
+            string captureMetadataJson,
+            JObject reviewImageMetadata = null)
+        {
+            var content = new JArray();
+            var textBuilder = new StringBuilder();
+            textBuilder.AppendLine("你是 Rhino / Grasshopper 截图视觉检查器。只基于随后的截图内容回答，不要把截图路径、bbox、预览计数等元数据当作视觉事实。");
+            textBuilder.AppendLine("请直接说明你在截图中实际看到了什么，并回答用户检查问题；如果截图看不清或没有看到目标对象，要明确说看不清/没看到。");
+            textBuilder.AppendLine("输出保持简洁，按以下标题：");
+            textBuilder.AppendLine("【视觉结论】");
+            textBuilder.AppendLine("【看到的内容】");
+            textBuilder.AppendLine("【不确定性】");
+            if (!string.IsNullOrWhiteSpace(question))
+            {
+                textBuilder.AppendLine();
+                textBuilder.AppendLine("检查问题：");
+                textBuilder.AppendLine(question.Trim());
+            }
+            if (!string.IsNullOrWhiteSpace(captureMetadataJson))
+            {
+                textBuilder.AppendLine();
+                textBuilder.AppendLine("截图传输元数据（仅用于了解截图来源，不可作为视觉事实）：");
+                textBuilder.AppendLine(ClampVisionText(captureMetadataJson, 700));
+            }
+
+            if (reviewImageMetadata != null)
+            {
+                textBuilder.AppendLine();
+                textBuilder.AppendLine("Vision review image metadata (transport only, not visual facts):");
+                textBuilder.AppendLine(ClampVisionText(reviewImageMetadata.ToString(Newtonsoft.Json.Formatting.None), 500));
+            }
+
+            content.Add(new JObject
+            {
+                ["type"] = "text",
+                ["text"] = textBuilder.ToString().Trim()
+            });
+
+            if (!string.IsNullOrWhiteSpace(screenshotPath) && File.Exists(screenshotPath))
+            {
+                string mimeType = GetMimeType(Path.GetExtension(screenshotPath).ToLowerInvariant());
+                string base64 = Convert.ToBase64String(File.ReadAllBytes(screenshotPath));
+                content.Add(new JObject
+                {
+                    ["type"] = "image_url",
+                    ["image_url"] = new JObject
+                    {
+                        ["url"] = $"data:{mimeType};base64,{base64}"
+                    }
+                });
+            }
+
+            return new JObject
+            {
+                ["model"] = providerSettings.ModelName,
+                ["messages"] = new JArray
+                {
+                    new JObject
+                    {
+                        ["role"] = "system",
+                        ["content"] = "你是截图视觉检查器。必须只依据图片像素做视觉判断；不能根据文件名、bbox、路径或工具元数据推断画面内容。"
                     },
                     new JObject
                     {

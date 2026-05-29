@@ -20,6 +20,7 @@ description: 负责规范电池布局、Slider 命名规范和原点管理。
 ## 2. 变量控制协议
 - 关键参数必须用 Number Slider，禁止直接输入固定值
 - Slider 参数可用 set_gh_component_value 设置值、范围(min/max)和小数精度(decimals)
+- 如果 Slider 是某个 C# Script 的专属输入，应尽量和该 C# Script 放进同一个 Group，便于后续查画布和维护
 - 建议：radius 用 0-100，length 用 0-500，根据实际情况调整
 
 ## 3. 几何逻辑优化

@@ -473,9 +473,7 @@ namespace ADDGH
             foreach (var node in nodes.OfType<JObject>())
             {
                 string sourceRef = node["sourceRef"]?.ToString() ?? "";
-                if (sourceRef.StartsWith("input_prompt:", StringComparison.OrdinalIgnoreCase)
-                    || sourceRef.StartsWith("input_image:", StringComparison.OrdinalIgnoreCase)
-                    || sourceRef.StartsWith("generated_image:", StringComparison.OrdinalIgnoreCase))
+                if (IsCanvasPersistableTypedNodeSourceRef(sourceRef))
                     typedNodes.Add(NormalizeCanvasImageNode((JObject)node.DeepClone()));
             }
 
@@ -532,69 +530,8 @@ namespace ADDGH
 
         private static void SavePromptAndInputImagesToCanvasSnapshot(string promptText, List<AttachmentItem> attachments)
         {
-            string conversationId = GetCurrentCanvasConversationId();
-            JObject envelope = LoadCanvasConversationEnvelope(conversationId) ?? new JObject();
-            JObject snapshot = envelope["snapshot"] as JObject ?? new JObject();
-            snapshot["kind"] = "addgh-lightweight-canvas-v1";
-            snapshot["viewport"] = snapshot["viewport"] as JObject ?? new JObject { ["x"] = 80, ["y"] = 90, ["z"] = 1.0 };
-
-            var nodes = snapshot["nodes"] as JArray ?? new JArray();
-            var connections = snapshot["connections"] as JArray ?? new JArray();
-            var freshNodes = new JArray();
-
-            foreach (var node in nodes.OfType<JObject>())
-            {
-                string sourceRef = node["sourceRef"]?.ToString() ?? "";
-                if (!sourceRef.StartsWith("input_prompt:", StringComparison.OrdinalIgnoreCase)
-                    && !sourceRef.StartsWith("input_image:", StringComparison.OrdinalIgnoreCase)
-                    && !sourceRef.StartsWith("generated_image:", StringComparison.OrdinalIgnoreCase))
-                    continue;
-            }
-
-            double originX = 120;
-            double originY = 100;
-
-            var imageAttachments = (attachments ?? new List<AttachmentItem>())
-                .Where(a => a != null && a.Kind == AttachmentKind.Image && !string.IsNullOrWhiteSpace(a.Path) && File.Exists(a.Path))
-                .ToList();
-
-            for (int i = 0; i < imageAttachments.Count; i++)
-            {
-                var item = imageAttachments[i];
-                string sourceRef = $"input_image:{conversationId}:{i}";
-                freshNodes.Add(NormalizeCanvasImageNode(new JObject
-                {
-                    ["id"] = "node:" + sourceRef.Replace(":", "_"),
-                    ["sourceRef"] = sourceRef,
-                    ["nodeType"] = "image",
-                    ["x"] = originX + i * 380,
-                    ["y"] = originY + 230,
-                    ["w"] = 360,
-                    ["h"] = 260,
-                    ["meta"] = new JObject
-                    {
-                        ["sourceRef"] = sourceRef,
-                        ["nodeType"] = "image",
-                        ["title"] = "Input Image",
-                        ["summary"] = "User reference image",
-                        ["imagePath"] = item.Path,
-                        ["imageDataUrl"] = BuildImageDataUrl(item.Path, item.MimeType),
-                        ["intent"] = "input",
-                        ["ports"] = new JArray
-                        {
-                            new JObject { ["id"] = "in", ["label"] = "Input", ["direction"] = "input", ["dataType"] = "image", ["slot"] = 0 },
-                            new JObject { ["id"] = "out", ["label"] = "Output", ["direction"] = "output", ["dataType"] = "image", ["slot"] = 1 }
-                        },
-                        ["w"] = 360,
-                        ["h"] = 260
-                    }
-                }));
-            }
-
-            snapshot["nodes"] = freshNodes;
-            snapshot["connections"] = connections;
-            SaveCanvasConversationSnapshot(conversationId, snapshot, envelope["cardMetaPatches"]);
-            NotifyCanvasConversationChanged(true);
+            // User prompts and uploaded images stay in chat/model context only.
+            // They are intentionally not mirrored into the frontend canvas.
         }
     }
 }

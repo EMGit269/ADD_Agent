@@ -316,6 +316,7 @@ namespace ADDGH
                             paramJson["index"] = i;
                             paramJson["name"] = param.Name;
                             paramJson["type"] = param.TypeName;
+                            AppendPortMetadataJson(paramJson, param);
 
                             // 增加数据结构概况
                             if (param.VolatileDataCount > 0) {
@@ -350,6 +351,7 @@ namespace ADDGH
                         {
                             var param = comp.Params.Output[i];
                             var portJson = new JObject { { "index", i }, { "name", param.Name }, { "type", param.TypeName } };
+                            AppendPortMetadataJson(portJson, param, IsCSharpScriptComponent(obj));
                             if (param.VolatileDataCount > 0) {
                                 portJson["data_structure"] = $"Tree ({param.VolatileData.PathCount} branches, {param.VolatileData.DataCount} items total)";
                             }
@@ -365,6 +367,7 @@ namespace ADDGH
                     else if (obj is Grasshopper.Kernel.IGH_Param param)
                     {
                         compJson["type"] = param.TypeName;
+                        AppendPortMetadataJson(compJson, param);
                         if (param.VolatileDataCount > 0) {
                             compJson["data_structure"] = $"Tree ({param.VolatileData.PathCount} branches, {param.VolatileData.DataCount} items total)";
                         }
@@ -405,6 +408,51 @@ namespace ADDGH
             return BuildComponentJson(obj, true);
         }
 
+        private static string ExtractPortDescriptionTag(string description, string tag)
+        {
+            if (string.IsNullOrWhiteSpace(description) || string.IsNullOrWhiteSpace(tag)) return "";
+            var matches = System.Text.RegularExpressions.Regex.Matches(
+                description,
+                @"(?:^|;)\s*(?<key>[A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?<value>[^;]+)");
+            foreach (System.Text.RegularExpressions.Match match in matches)
+            {
+                if (string.Equals(match.Groups["key"].Value, tag, StringComparison.OrdinalIgnoreCase))
+                    return match.Groups["value"].Value.Trim();
+            }
+            return "";
+        }
+
+        private static string GetPortSemanticLabel(Grasshopper.Kernel.IGH_Param param)
+        {
+            if (param == null) return "";
+            return ExtractPortDescriptionTag(param.Description, "label");
+        }
+
+        private static void AppendPortMetadataJson(JObject target, Grasshopper.Kernel.IGH_Param param, bool includeCSharpVariable = false)
+        {
+            if (target == null || param == null) return;
+
+            string description = (param.Description ?? "").Trim();
+            string semanticLabel = GetPortSemanticLabel(param);
+            string displayName = !string.IsNullOrWhiteSpace(semanticLabel)
+                ? semanticLabel
+                : (!string.IsNullOrWhiteSpace(param.NickName) ? param.NickName : param.Name);
+            string semanticType = ExtractPortDescriptionTag(description, "type");
+
+            if (!string.IsNullOrWhiteSpace(param.NickName) && !string.Equals(param.NickName, param.Name, StringComparison.Ordinal))
+                target["nickname"] = param.NickName;
+            if (!string.IsNullOrWhiteSpace(description))
+                target["description"] = description;
+            if (!string.IsNullOrWhiteSpace(semanticLabel))
+                target["semantic_label"] = semanticLabel;
+            if (!string.IsNullOrWhiteSpace(semanticType))
+                target["semantic_type"] = semanticType;
+            if (!string.IsNullOrWhiteSpace(displayName))
+                target["display_name"] = displayName;
+            if (includeCSharpVariable && !string.IsNullOrWhiteSpace(semanticLabel) && !string.IsNullOrWhiteSpace(param.Name))
+                target["csharp_variable"] = param.Name;
+        }
+
         private static JObject BuildComponentJson(Grasshopper.Kernel.IGH_DocumentObject obj, bool includeScriptBodies)
         {
             var j = new JObject();
@@ -428,6 +476,7 @@ namespace ADDGH
                 {
                     var param = comp.Params.Input[i];
                     var pj = new JObject { ["index"] = i, ["name"] = param.Name, ["type"] = param.TypeName };
+                    AppendPortMetadataJson(pj, param);
                     if (param.VolatileDataCount > 0) pj["data_structure"] = $"Tree ({param.VolatileData.PathCount} branches, {param.VolatileData.DataCount} items total)";
                     else pj["data_structure"] = "Empty";
                     if (param.DataMapping == Grasshopper.Kernel.GH_DataMapping.Flatten) pj["is_flattened"] = true;
@@ -450,6 +499,7 @@ namespace ADDGH
                 {
                     var param = comp.Params.Output[i];
                     var pj = new JObject { { "index", i }, { "name", param.Name }, { "type", param.TypeName } };
+                    AppendPortMetadataJson(pj, param, IsCSharpScriptComponent(obj));
                     if (param.VolatileDataCount > 0) pj["data_structure"] = $"Tree ({param.VolatileData.PathCount} branches, {param.VolatileData.DataCount} items total)";
                     if (param.DataMapping == Grasshopper.Kernel.GH_DataMapping.Flatten) pj["is_flattened"] = true;
                     if (param.DataMapping == Grasshopper.Kernel.GH_DataMapping.Graft)   pj["is_grafted"]  = true;
@@ -463,6 +513,7 @@ namespace ADDGH
             else if (obj is Grasshopper.Kernel.IGH_Param pm)
             {
                 j["type"] = pm.TypeName;
+                AppendPortMetadataJson(j, pm);
                 if (pm.VolatileDataCount > 0) j["data_structure"] = $"Tree ({pm.VolatileData.PathCount} branches, {pm.VolatileData.DataCount} items total)";
                 if (pm.DataMapping == Grasshopper.Kernel.GH_DataMapping.Flatten) j["is_flattened"] = true;
                 if (pm.DataMapping == Grasshopper.Kernel.GH_DataMapping.Graft)   j["is_grafted"]  = true;
@@ -953,17 +1004,23 @@ namespace ADDGH
                     || (!string.IsNullOrEmpty(b) && b.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0);
             }
 
+            bool HasPortText(Grasshopper.Kernel.IGH_Param p)
+            {
+                return p != null && (HasName(p.Name, p.NickName)
+                    || HasName(GetPortSemanticLabel(p), p.Description));
+            }
+
             if (obj is Grasshopper.Kernel.IGH_Component comp)
             {
                 foreach (var p in comp.Params.Input)
-                    if (HasName(p.Name, p.NickName)) return true;
+                    if (HasPortText(p)) return true;
                 foreach (var p in comp.Params.Output)
-                    if (HasName(p.Name, p.NickName)) return true;
+                    if (HasPortText(p)) return true;
                 return false;
             }
 
             if (obj is Grasshopper.Kernel.IGH_Param param)
-                return HasName(param.Name, param.NickName);
+                return HasPortText(param);
 
             return false;
         }
@@ -1487,6 +1544,7 @@ namespace ADDGH
                                 var paramJson = new JObject();
                                 paramJson["name"] = param.Name;
                                 paramJson["nickname"] = param.NickName;
+                                AppendPortMetadataJson(paramJson, param);
 
                                 var sources = new JArray();
                                 foreach (var source in param.Sources)
@@ -1504,12 +1562,14 @@ namespace ADDGH
                                 var paramJson = new JObject();
                                 paramJson["name"] = param.Name;
                                 paramJson["nickname"] = param.NickName;
+                                AppendPortMetadataJson(paramJson, param, IsCSharpScriptComponent(obj));
                                 outputs.Add(paramJson);
                             }
                             compJson["outputs"] = outputs;
                         }
                         else if (obj is Grasshopper.Kernel.IGH_Param param)
                         {
+                            AppendPortMetadataJson(compJson, param);
                             var sources = new JArray();
                             foreach (var source in param.Sources)
                             {
@@ -1721,7 +1781,91 @@ namespace ADDGH
             return result;
         }
 
-        private static string ExecuteConnectGhComponents(string fromId, int fromIndex, string toId, int toIndex)
+        private static IEnumerable<string> GetPortMatchTexts(Grasshopper.Kernel.IGH_Param param)
+        {
+            if (param == null) yield break;
+            if (!string.IsNullOrWhiteSpace(param.Name)) yield return param.Name.Trim();
+            if (!string.IsNullOrWhiteSpace(param.NickName)) yield return param.NickName.Trim();
+            string semanticLabel = GetPortSemanticLabel(param);
+            if (!string.IsNullOrWhiteSpace(semanticLabel)) yield return semanticLabel.Trim();
+            if (!string.IsNullOrWhiteSpace(param.Description)) yield return param.Description.Trim();
+        }
+
+        private static string DescribePortCandidate(int index, Grasshopper.Kernel.IGH_Param param)
+        {
+            if (param == null) return "#" + index.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            string semanticLabel = GetPortSemanticLabel(param);
+            string display = !string.IsNullOrWhiteSpace(semanticLabel) ? semanticLabel : (param.NickName ?? param.Name ?? "");
+            return "#" + index.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + " " + (param.Name ?? "")
+                + (string.IsNullOrWhiteSpace(display) || string.Equals(display, param.Name, StringComparison.Ordinal) ? "" : " (" + display + ")");
+        }
+
+        private static bool TryResolveConnectPort(Grasshopper.Kernel.IGH_DocumentObject obj, bool output, int index, string label, out Grasshopper.Kernel.IGH_Param param, out int resolvedIndex, out string error)
+        {
+            param = null;
+            resolvedIndex = index;
+            error = "";
+            if (obj == null)
+            {
+                error = "object not found";
+                return false;
+            }
+
+            var ports = new List<Grasshopper.Kernel.IGH_Param>();
+            if (obj is Grasshopper.Kernel.IGH_Component comp)
+            {
+                var source = output ? comp.Params.Output : comp.Params.Input;
+                foreach (var p in source) ports.Add(p);
+            }
+            else if (obj is Grasshopper.Kernel.IGH_Param standalone)
+            {
+                ports.Add(standalone);
+            }
+
+            if (ports.Count == 0)
+            {
+                error = output ? "source has no output ports" : "target has no input ports";
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(label))
+            {
+                if (index < 0 || index >= ports.Count)
+                {
+                    error = "port index out of range. Candidates: " + string.Join(", ", ports.Select((p, i) => DescribePortCandidate(i, p)));
+                    return false;
+                }
+                param = ports[index];
+                resolvedIndex = index;
+                return true;
+            }
+
+            string needle = label.Trim();
+            var exact = ports.Select((p, i) => new { Port = p, Index = i })
+                .Where(x => GetPortMatchTexts(x.Port).Any(t => string.Equals(t, needle, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+            var matches = exact.Count > 0
+                ? exact
+                : ports.Select((p, i) => new { Port = p, Index = i })
+                    .Where(x => GetPortMatchTexts(x.Port).Any(t => t.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0))
+                    .ToList();
+
+            if (matches.Count == 1)
+            {
+                param = matches[0].Port;
+                resolvedIndex = matches[0].Index;
+                return true;
+            }
+
+            if (matches.Count > 1)
+                error = "port label is ambiguous: " + needle + ". Matches: " + string.Join(", ", matches.Select(x => DescribePortCandidate(x.Index, x.Port)));
+            else
+                error = "port label not found: " + needle + ". Candidates: " + string.Join(", ", ports.Select((p, i) => DescribePortCandidate(i, p)));
+            return false;
+        }
+
+        private static string ExecuteConnectGhComponents(string fromId, int fromIndex, string toId, int toIndex, string fromPortLabel = null, string toPortLabel = null)
         {
             string result = "";
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
@@ -1734,16 +1878,28 @@ namespace ADDGH
                 var objTo = doc.FindObject(guidTo, true);
                 if (objFrom == null || objTo == null) { result = "Error: 找不到电池。"; return; }
 
-                Grasshopper.Kernel.IGH_Param sourceParam = (objFrom is Grasshopper.Kernel.IGH_Component cF) ? (fromIndex < cF.Params.Output.Count ? cF.Params.Output[fromIndex] : null) : (objFrom as Grasshopper.Kernel.IGH_Param);
-                Grasshopper.Kernel.IGH_Param targetParam = (objTo is Grasshopper.Kernel.IGH_Component cT) ? (toIndex < cT.Params.Input.Count ? cT.Params.Input[toIndex] : null) : (objTo as Grasshopper.Kernel.IGH_Param);
-
-                if (sourceParam == null || targetParam == null) { result = "Error: 端口越界。"; return; }
+                Grasshopper.Kernel.IGH_Param sourceParam;
+                Grasshopper.Kernel.IGH_Param targetParam;
+                int resolvedFromIndex;
+                int resolvedToIndex;
+                string sourceError;
+                string targetError;
+                if (!TryResolveConnectPort(objFrom, true, fromIndex, fromPortLabel, out sourceParam, out resolvedFromIndex, out sourceError))
+                {
+                    result = "Error: source " + sourceError;
+                    return;
+                }
+                if (!TryResolveConnectPort(objTo, false, toIndex, toPortLabel, out targetParam, out resolvedToIndex, out targetError))
+                {
+                    result = "Error: target " + targetError;
+                    return;
+                }
 
                 targetParam.AddSource(sourceParam);
                 _canvasChanged = true;
                 try { doc.ScheduleSolution(150); }
                 catch (Exception ex) { AddGhLog.Warn("ExecuteConnectGhComponents Schedule failed: " + ex.Message); }
-                result = "连线成功。";
+                result = "Connection succeeded (" + DescribePortCandidate(resolvedFromIndex, sourceParam) + " -> " + DescribePortCandidate(resolvedToIndex, targetParam) + ").";
                 result += GetCanvasErrors(doc);
             }));
             return result;

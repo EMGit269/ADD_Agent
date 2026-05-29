@@ -251,5 +251,251 @@ namespace ADDGH
             AppendCollapsibleBubble(analysis.Trim(), "最终视觉复核 " + Math.Round(durationSeconds, 1) + "s", "👁");
             return analysis.Trim();
         }
+
+        private static async Task<string> ExecuteCaptureRhinoViewportAsync(
+            string question,
+            string framing,
+            int? width,
+            int? height,
+            double? paddingRatio,
+            bool visualCheck,
+            string visualDetail,
+            System.Threading.CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            string captureJson = ExecuteCaptureRhinoViewport(framing, width, height, paddingRatio);
+            if (string.IsNullOrWhiteSpace(captureJson) || captureJson.StartsWith("Error:", StringComparison.OrdinalIgnoreCase))
+                return string.IsNullOrWhiteSpace(captureJson) ? "Error: screenshot capture failed." : captureJson;
+
+            string screenshotPath = null;
+            try
+            {
+                screenshotPath = JObject.Parse(captureJson)["path"]?.ToString();
+            }
+            catch (Exception ex)
+            {
+                return "Error: screenshot metadata parse failed: " + ex.Message;
+            }
+
+            if (string.IsNullOrWhiteSpace(screenshotPath) || !File.Exists(screenshotPath))
+                return "Error: screenshot file path is missing or invalid.";
+
+            JObject payload;
+            try
+            {
+                payload = JObject.Parse(captureJson);
+            }
+            catch
+            {
+                payload = new JObject { ["raw_capture_result"] = captureJson };
+            }
+
+            if (!visualCheck)
+            {
+                payload["visual_check"] = false;
+                payload["visual_detail"] = "none";
+                payload["visual_warning"] = "This screenshot was not analyzed by a vision model. Do not infer visual facts from metadata.";
+                return payload.ToString(Formatting.None);
+            }
+
+            string normalizedVisualDetail = NormalizeViewportVisualDetail(visualDetail);
+            if (string.Equals(normalizedVisualDetail, "none", StringComparison.OrdinalIgnoreCase))
+            {
+                payload["visual_check"] = false;
+                payload["visual_detail"] = "none";
+                payload["visual_warning"] = "visual_detail=none skipped vision model analysis. Do not infer visual facts from metadata.";
+                return payload.ToString(Formatting.None);
+            }
+
+            var providerSettings = GetVisionProviderRuntimeSettings();
+            if (string.IsNullOrWhiteSpace(providerSettings?.ApiKey))
+            {
+                payload["visual_check"] = false;
+                payload["visual_analysis_error"] = BuildProviderDiagnostic(providerSettings, "截图视觉检查失败：请先配置视觉模型 API Key。");
+                payload["visual_detail"] = normalizedVisualDetail;
+                payload["visual_warning"] = "No vision model analysis was performed. Do not infer visual facts from screenshot metadata.";
+                return payload.ToString(Formatting.None);
+            }
+
+            string reviewImagePath = screenshotPath;
+            JObject reviewImageMetadata = BuildViewportReviewImage(screenshotPath, normalizedVisualDetail);
+            if (!string.IsNullOrWhiteSpace(reviewImageMetadata?["path"]?.ToString()))
+                reviewImagePath = reviewImageMetadata["path"].ToString();
+            payload["visual_detail"] = normalizedVisualDetail;
+            if (reviewImageMetadata != null)
+                payload["review_image"] = reviewImageMetadata;
+
+            JObject requestBody = BuildViewportScreenshotAnalysisRequestBody(providerSettings, question, reviewImagePath, captureJson, reviewImageMetadata);
+
+            HttpResponseMessage response = null;
+            string usedEndpoint = null;
+            string lastEndpointError = null;
+            DateTime startTime = DateTime.Now;
+            try
+            {
+                ShowThinkingAnimation("看图中...");
+                foreach (var endpoint in BuildEndpointCandidates(providerSettings.BaseUrl))
+                {
+                    ct.ThrowIfCancellationRequested();
+                    usedEndpoint = endpoint.Url;
+                    response = await SendProviderRequestAsync(providerSettings, requestBody, endpoint.Url, ct);
+                    if (response.IsSuccessStatusCode)
+                        break;
+
+                    string errPreview = "";
+                    try { errPreview = await response.Content.ReadAsStringAsync(); }
+                    catch (Exception readEx) { errPreview = "无法读取错误响应体：" + readEx.Message; }
+
+                    lastEndpointError = "HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase + "\n" + ClampDiagDetail(errPreview, 900);
+                    if (!ShouldTryNextEndpoint(response.StatusCode))
+                    {
+                        payload["visual_check"] = false;
+                        payload["visual_analysis_error"] = BuildProviderDiagnostic(providerSettings, "截图视觉检查失败：视觉模型服务返回 HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase, errPreview, endpoint.Url);
+                        return payload.ToString(Formatting.None);
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                payload["visual_check"] = false;
+                payload["visual_analysis_error"] = BuildProviderDiagnostic(providerSettings, "截图视觉检查失败：请求未能发送到视觉模型服务，" + ex.GetType().Name, FormatExceptionChain(ex), usedEndpoint);
+                return payload.ToString(Formatting.None);
+            }
+
+            if (response == null || !response.IsSuccessStatusCode)
+            {
+                payload["visual_check"] = false;
+                payload["visual_analysis_error"] = BuildProviderDiagnostic(providerSettings, "截图视觉检查失败：视觉模型服务没有返回成功响应。", lastEndpointError, usedEndpoint);
+                return payload.ToString(Formatting.None);
+            }
+
+            string responseJson = await ReadResponseTextAsync(response, ct);
+            if (!TryParseAssistantMessageFromResponse(responseJson, out JObject messageNode, out string parseError))
+            {
+                payload["visual_check"] = false;
+                payload["visual_analysis_error"] = BuildProviderDiagnostic(providerSettings, "截图视觉检查失败：视觉模型响应不是可解析的聊天响应，" + parseError, responseJson, usedEndpoint);
+                return payload.ToString(Formatting.None);
+            }
+
+            string analysis = messageNode["content"]?.ToString();
+            if (string.IsNullOrWhiteSpace(analysis))
+                analysis = messageNode["reasoning_content"]?.ToString();
+            if (string.IsNullOrWhiteSpace(analysis))
+            {
+                payload["visual_check"] = false;
+                payload["visual_analysis_error"] = BuildProviderDiagnostic(providerSettings, "截图视觉检查失败：视觉模型返回成功，但没有输出分析结论。", responseJson, usedEndpoint);
+                return payload.ToString(Formatting.None);
+            }
+
+            double durationSeconds = (DateTime.Now - startTime).TotalSeconds;
+            payload["visual_check"] = true;
+            payload["visual_detail"] = normalizedVisualDetail;
+            payload["visual_analysis"] = analysis.Trim();
+            payload["vision_model"] = providerSettings.ModelName;
+            payload["vision_duration_seconds"] = Math.Round(durationSeconds, 1);
+            payload["note"] = "visual_analysis was produced by the configured vision model from the captured screenshot. Metadata fields are not visual facts.";
+            return payload.ToString(Formatting.None);
+        }
+
+        private static string NormalizeViewportVisualDetail(string visualDetail)
+        {
+            string value = (visualDetail ?? "").Trim().ToLowerInvariant();
+            if (value == "none" || value == "false" || value == "off")
+                return "none";
+            if (value == "high" || value == "original" || value == "full")
+                return "high";
+            return "low";
+        }
+
+        private static JObject BuildViewportReviewImage(string screenshotPath, string visualDetail)
+        {
+            if (string.IsNullOrWhiteSpace(screenshotPath) || !File.Exists(screenshotPath))
+                return null;
+
+            var metadata = new JObject
+            {
+                ["source_path"] = screenshotPath,
+                ["detail"] = visualDetail
+            };
+
+            try
+            {
+                using (var source = System.Drawing.Image.FromFile(screenshotPath))
+                {
+                    metadata["source_width"] = source.Width;
+                    metadata["source_height"] = source.Height;
+
+                    if (string.Equals(visualDetail, "high", StringComparison.OrdinalIgnoreCase))
+                    {
+                        metadata["path"] = screenshotPath;
+                        metadata["width"] = source.Width;
+                        metadata["height"] = source.Height;
+                        metadata["mime"] = GetMimeType(Path.GetExtension(screenshotPath).ToLowerInvariant());
+                        metadata["compressed"] = false;
+                        return metadata;
+                    }
+
+                    const int maxSide = 1024;
+                    int width = source.Width;
+                    int height = source.Height;
+                    double scale = Math.Min(1.0, maxSide / (double)Math.Max(width, height));
+                    int targetWidth = Math.Max(1, (int)Math.Round(width * scale));
+                    int targetHeight = Math.Max(1, (int)Math.Round(height * scale));
+                    string reviewPath = Path.Combine(
+                        Path.GetDirectoryName(screenshotPath) ?? Path.GetTempPath(),
+                        Path.GetFileNameWithoutExtension(screenshotPath) + "_vision_low.jpg");
+
+                    using (var bitmap = new System.Drawing.Bitmap(targetWidth, targetHeight))
+                    using (var graphics = System.Drawing.Graphics.FromImage(bitmap))
+                    {
+                        graphics.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighQuality;
+                        graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                        graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+                        graphics.Clear(System.Drawing.Color.White);
+                        graphics.DrawImage(source, 0, 0, targetWidth, targetHeight);
+                        SaveJpeg(bitmap, reviewPath, 75L);
+                    }
+
+                    metadata["path"] = reviewPath;
+                    metadata["width"] = targetWidth;
+                    metadata["height"] = targetHeight;
+                    metadata["mime"] = "image/jpeg";
+                    metadata["compressed"] = true;
+                    metadata["jpeg_quality"] = 75;
+                    metadata["max_side"] = maxSide;
+                    return metadata;
+                }
+            }
+            catch (Exception ex)
+            {
+                metadata["path"] = screenshotPath;
+                metadata["mime"] = GetMimeType(Path.GetExtension(screenshotPath).ToLowerInvariant());
+                metadata["compressed"] = false;
+                metadata["compression_error"] = ex.Message;
+                return metadata;
+            }
+        }
+
+        private static void SaveJpeg(System.Drawing.Image image, string path, long quality)
+        {
+            var codec = System.Drawing.Imaging.ImageCodecInfo.GetImageDecoders()
+                .FirstOrDefault(c => string.Equals(c.MimeType, "image/jpeg", StringComparison.OrdinalIgnoreCase));
+            if (codec == null)
+            {
+                image.Save(path, System.Drawing.Imaging.ImageFormat.Jpeg);
+                return;
+            }
+
+            using (var parameters = new System.Drawing.Imaging.EncoderParameters(1))
+            {
+                parameters.Param[0] = new System.Drawing.Imaging.EncoderParameter(System.Drawing.Imaging.Encoder.Quality, quality);
+                image.Save(path, codec, parameters);
+            }
+        }
     }
 }

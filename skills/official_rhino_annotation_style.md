@@ -48,6 +48,7 @@ description: 官方 reference。Rhino 8 / Grasshopper 标注样式参考画布�
 3. 如需复用 reference：
    - 查看 `reference/标注样式.gh` 的输入、输出、分组和 C# Script 结构。
    - 若任务是轴网、逐跨尺寸、总尺寸、尺寸界线、斜线标记或跨度文字，优先读取 `skills/official_rhino_annotation_dimension_csharp.md`。
+   - 使用官方尺寸/轴号标注工作流时，`标注偏移(mm)` Slider 默认 `2000` mm，`轴号偏移(mm)` Slider 默认 `8000` mm；用户未指定时按此初始化。
    - 如需对照电池连接、端口和滑块默认值，再读取 `reference/official_annotation_dimension_csharp.json`。
    - 只复用与当前目标一致的部分。
    - 如果画布中已有 C# Script，优先保持其输入输出语义，不要随意改名。

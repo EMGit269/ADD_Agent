@@ -35,8 +35,9 @@ Not allowed as core-logic substitutes:
 3. For a new user requirement, prefer one new C# Script component that owns the new responsibility, instead of rewriting a healthy existing script.
 4. Define exact inputs, outputs, and type hints for the C# Script.
 5. Keep helper components outside the script minimal and obvious.
-6. Implement the main logic in the script body.
-7. Verify outputs by value, type, null-state, and structure, not only by "no runtime error".
+6. Group each C# Script with its own sliders, panels, geometry params, value lists, preview, and debug helpers whenever practical.
+7. Implement the main logic in the script body.
+8. Verify outputs by value, type, null-state, and structure, not only by "no runtime error".
 
 ## Code Rules
 
@@ -56,6 +57,12 @@ Not allowed as core-logic substitutes:
 - If a port change is required, update the port design first, then fix the body to match the new signature.
 - Do not rewrite an entire script template to work around a local body issue.
 - Edit an existing script only when it is necessary for correctness, a shared interface change, or a clearly better script boundary that simplifies the overall graph.
+
+## Grouping Rules
+
+- When creating a C# Script and its dedicated sliders or helper inputs in one step, pass `group_name` so the script and helpers land in one Group.
+- If dedicated helpers are added later, add them to the script's existing Group with `manage_gh_groups`.
+- Do not group unrelated upstream/downstream logic just because it is nearby; the Group should represent the script's local control surface and immediate helper outputs.
 
 ## Plan-Mode Expectation
 

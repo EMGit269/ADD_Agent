@@ -23,7 +23,7 @@ namespace ADDGH
                 _chatPanel.Children.Clear();
                 foreach (var msg in _messages)
                 {
-                    var m = msg as JObject;
+                    var m = ConvertMessageToJObject(msg);
                     if (m == null) continue;
 
                     string role = m["role"]?.ToString();
@@ -45,7 +45,13 @@ namespace ADDGH
                         var generatedImages = m["generated_images"] as JArray;
 
                         if (ChatMessageHelpers.ShouldDisplayReasoningBubble(reasoning, content, toolCalls))
-                            AppendCollapsibleBubble(reasoning, "已思考", "💭");
+                        {
+                            string title = m["_display_reasoning_title"]?.ToString();
+                            if (string.IsNullOrWhiteSpace(title)) title = "已思考";
+                            string icon = m["_display_reasoning_icon"]?.ToString();
+                            if (string.IsNullOrWhiteSpace(icon)) icon = "💭";
+                            AppendCollapsibleBubble(reasoning, title, icon);
+                        }
                         if (!string.IsNullOrEmpty(content))
                             AppendBubble(content, false, false);
                         if (generatedImages != null && generatedImages.Count > 0)
@@ -55,6 +61,24 @@ namespace ADDGH
                 UpdateEmptyChatLayout();
                 RefreshContextMeter();
             }));
+        }
+
+        private static JObject ConvertMessageToJObject(object msg)
+        {
+            try
+            {
+                if (msg is JObject existing)
+                    return existing;
+                if (msg is JToken token && token.Type == JTokenType.Object)
+                    return (JObject)token;
+                if (msg != null)
+                    return JObject.FromObject(msg);
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Debug("Convert message for UI failed: " + ex.Message);
+            }
+            return null;
         }
 
         private static void AppendBubble(string text, bool isUser, bool showHeader = true)

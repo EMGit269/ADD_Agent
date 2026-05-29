@@ -180,6 +180,7 @@ namespace ADDGH
 2. 命名：Number Slider 必须设 label；普通电池严禁改 label。
 3. 最终回复用结构化 Markdown（短标题、列表、重点加粗）；代码/JSON/表达式/关键参数放在 ``` 代码块中，勿把大段技术内容堆在普通段落里。
 4. 参考画布（reference）：先完成建模思路与 GH 逻辑规划，再查阅 skills/reference_index.md；仅当条目与**已确定方案**明显相关时才调用 read_reference_json 读 JSON 做对照或局部复用，勿「先读参考再空想」。
+4a. 联网查询：当用户要求联网、最新信息、网页核对，或写 RhinoCommon/C# 时需要查证官方 API，可调用 `web_research`；已知官方 URL 时必须优先用 `mode=fetch` 直连。尽量少用 `mode=search`，只有遇到 API 报错、签名/类型不确定、已有代码疑似用错，或不知道具体官方页面时才搜索。写 Rhino/Grasshopper API 时按官方 API 精准查询策略：先 fetch 官方根 URL，未知类型再用 `allowed_domains` 限制到 `developer.rhino3d.com`、`mcneel.github.io` 做站内搜索，找到类型/方法页后继续 fetch，不做泛搜。不要把网页搜索结果当作画布事实或视觉事实。
 5. 完成建模或修改后必须检查关键输出是否正确，不能以“没有报错”作为完成标准；目标电池可能仍输出 `Null`、空列表、空树或明显不符合预期的数据。
 6. 检查时优先围绕目标结果相关的关键电池做验证：必要时先触发 recompute，再读取组件状态、预览信息或关键输出；如果仅靠现有信息无法确认，允许在目标输出端临时或直接连接 `Panel` 检查实际输出内容。
 7. 若检查发现输出为 `Null`、空数据、类型不对、数据结构不对或结果与用户目标不一致，不能宣称完成；应继续定位并修正，再次验证后再结束。
@@ -205,6 +206,7 @@ namespace ADDGH
 13. `capture_rhino_viewport` 是可用工具，由你根据用户请求和任务需要自行决定是否调用；不要为了替代数据级检查而默认截图。
 13a. 截图前先整理预览：当截图用于结果展示或视觉检查时，应优先调用 `prepare_visual_review_preview`，把最终要检查的输出连接到一个干净的 Geometry 预览电池上；该工具会硬编码关闭所有 C# Script 预览。不要依赖脚本过程预览做视觉核验。
 13b. `capture_rhino_viewport` 返回给你的路径、bbox、预览计数等都不是视觉事实，只是截图传输元数据。除非该截图随后被送入视觉模型，否则你不能根据这些元数据推断形态是否正确、分段是否合理、长度是否匹配，也不能把 bbox 尺寸当作曲线/曲面 UV 路径长度。
+13c. 当用户问“截图里看到了什么”“你真的看得到截图吗”或需要基于截图做外观判断时，调用 `capture_rhino_viewport` 并显式设置 `visual_check=true`；默认 `visual_detail=low` 会使用压缩图节省 token，只有需要读小字/细节时才设为 `high`。只有该工具返回的 `visual_analysis` 才能作为截图视觉事实；如果返回 `visual_analysis_error` 或 `visual_check=false`，必须明确说明未完成视觉分析，不能根据截图元数据猜测。
 14. 当用户要求检查模型形态、外观、轮廓、比例或整体效果，而数据级检查不足以判断时，可先做最小代价验证：优先检查报错、Null、空数据、Panel 与关键输出；仍无法确认或需要展示时，再调用 `capture_rhino_viewport` 获取最小必要截图。不要默认触发视觉复核，只在有图片输入且确有视觉判断必要时使用。
 15. 当用户提供了图像参考，或用图片指出当前结果存在问题时，最终完成前应进行一次截图级视觉复核：先完成数据级检查，再调用 `capture_rhino_viewport` 获取当前结果截图，并以该截图作为最终核验依据之一；不要仅凭无报错、非 Null 或局部 Panel 检查就宣称与图片要求一致。
 16. 当用户目标是 AI 创作图片而不是 GH 建模时，调用 `create_ai_image`，不要先进入 VisualWorkflow，也不要擅自把图片要求转成 GH 画布操作。
@@ -216,6 +218,8 @@ namespace ADDGH
 2. 新增一整块逻辑时，**优先**用 create_component_graph **一次**提交 components 与 connections，把该块内的放置与连线同时做完；尽量少用多轮「少量 add_gh_component ↔ 少量 connect_gh_components」交替，除非必须等上一轮返回的 id/端口才能定案。
 3. 单独 add_gh_component 仅限少数必要情形（如占位定位、必须先看清画布再决定下一步）；能并入同一张局部图时仍应合并为一次 create_component_graph。
 4. **脚本与 catalog（克制）**：get_gh_components 可读脚本在 **script_bodies**（可能截断）；内置 C#/VB Script 用 **gh_native_script_editor**（**read_source**＝与 script_bodies 同源反射读取，**set_source_commit**＝只替换首个可编辑块，勿整文件顶替模板）；**Rhino GhPython / Python 3 Script 等可执行源码在实例的 `Text` 属性，不是 `Description`，勿把代码写进 Description。** 其它用 **set_gh_component_value**（可加 **property**，优先 `Text`）；未执行可 **recompute_gh_canvas**。仅必要时 search_gh_component_catalog；日常用 get_gh_components、search_component_library、create_component_graph。
+4a. C# Script 输出端口的真实代码变量可能是 `b/c/d...`；查画布或连线时优先看端口的 `semantic_label`、`display_name`、`description` 和 `csharp_variable`。连接 C# 输出时优先给 `connect_gh_components` 填 `from_port_label`，不要只凭 `b/c/d` 猜语义。
+4b. C# Script 与其专属 Slider、Panel、Value List、Geometry Param、预览/调试 helper 应尽量放在同一个 Group。新建 C# 时优先在 `create_csharp_script_component` 的 `components` 内同时创建这些 helper，并填写 `group_name`；后续补加 helper 时用 `manage_gh_groups` 加入该 C# 所属组。
 5. 每次调用 function 须在参数中填 **summary**（一句中文说明本次在做什么，勿写函数名或 API）；可选 **summary_detail**（卡片右侧短语）。**例外**：show_reference_options 仅需 options（5 个字符串数组），可不填 summary。
 6. 优先批量、直接行动。
 7. 不要把“我先检查一下画布”“我先读取当前状态”这类工具前过渡句写进 reasoning_content。只有在确实进行了建模判断、方案取舍、错误定位或结果核实时，才输出可见思考；若只是准备调工具，reasoning_content 留空。
@@ -328,7 +332,8 @@ namespace ADDGH
 7. Do not declare local variables whose names collide with output variables currently in use, such as a, b, c.
 8. Non-script helper components in this mode are limited to Params and Display categories for input, output, preview, and debugging.
 9. When the user brings a new requirement or asks for an additive change, prefer adding one new C# Script component to extend the graph instead of rewriting an existing healthy C# Script component.
-10. If an existing C# Script component has no bug and already satisfies its current responsibility, leave it unchanged unless modifying it is clearly necessary for correctness, shared interface changes, or a simpler overall graph boundary.";
+10. If an existing C# Script component has no bug and already satisfies its current responsibility, leave it unchanged unless modifying it is clearly necessary for correctness, shared interface changes, or a simpler overall graph boundary.
+11. When creating a C# Script with its own sliders, panels, geometry params, value lists, preview, or debug helpers, put those helpers and the C# Script in one Grasshopper Group. Prefer create_csharp_script_component.components plus group_name; if helpers are added later, use manage_gh_groups to add them to the same group.";
         }
 
         private static string BuildCSharpTypedInputPrompt()
@@ -641,6 +646,8 @@ namespace ADDGH
         private static string _queuedImmediateSendVisionSourceInputOverride = null;
         private static string _queuedImmediateSendDisplayTextOverride = null;
         private static string _visualReviewPreviewComponentId = null;
+        private static bool _chatContentWidthUpdatePending = false;
+        private static double _lastAppliedChatContentWidth = -1;
 
         static ChatWindow()
         {
@@ -945,10 +952,14 @@ namespace ADDGH
             double maxContentWidth = _isCodeVisible ? ChatContentMaxWidth : ChatContentCollapsedMaxWidth;
             double contentWidth = Math.Max(0, Math.Min(maxContentWidth, availableWidth - 24));
 
-            SetElementWidth(_chatScroll, contentWidth, animate);
-            SetElementWidth(_inputAreaBorder, contentWidth, animate);
-            SetElementWidth(_libraryPanel, contentWidth, animate);
-            SetElementWidth(_stickyUserMessageHost, contentWidth, animate);
+            if (Math.Abs(_lastAppliedChatContentWidth - contentWidth) >= 0.75)
+            {
+                _lastAppliedChatContentWidth = contentWidth;
+                SetElementWidth(_chatScroll, contentWidth, animate);
+                SetElementWidth(_inputAreaBorder, contentWidth, animate);
+                SetElementWidth(_libraryPanel, contentWidth, animate);
+                SetElementWidth(_stickyUserMessageHost, contentWidth, animate);
+            }
             UpdateChatBottomInset();
             UpdateToolbarDividerVisibility();
             UpdateStickyUserMessage();
@@ -1008,12 +1019,22 @@ namespace ADDGH
         private static void ScheduleChatContentWidthUpdate()
         {
             if (_window == null) return;
-            _window.Dispatcher.BeginInvoke((Action)(() => UpdateChatContentWidth()), System.Windows.Threading.DispatcherPriority.Loaded);
+            if (_chatContentWidthUpdatePending) return;
+            _chatContentWidthUpdatePending = true;
+            _window.Dispatcher.BeginInvoke((Action)(() =>
+            {
+                _chatContentWidthUpdatePending = false;
+                UpdateChatContentWidth();
+            }), System.Windows.Threading.DispatcherPriority.Render);
         }
 
         private static void SetElementWidth(FrameworkElement element, double width, bool animate = false)
         {
             if (element == null) return;
+            double current = !double.IsNaN(element.Width) && element.Width > 0 ? element.Width : element.ActualWidth;
+            if (current > 0 && Math.Abs(current - width) < 0.75)
+                return;
+
             if (!animate || double.IsNaN(element.Width) || element.ActualWidth <= 0 || Math.Abs(element.ActualWidth - width) < 2)
             {
                 element.BeginAnimation(FrameworkElement.WidthProperty, null);
@@ -2140,12 +2161,12 @@ namespace ADDGH
             _chatCodeSplitter = (GridSplitter)_window.FindName("ChatCodeSplitter");
             if (_chatCodeSplitter != null)
             {
-                _chatCodeSplitter.DragDelta += (s, ev) => UpdateChatContentWidth();
+                _chatCodeSplitter.DragDelta += (s, ev) => ScheduleChatContentWidthUpdate();
                 _chatCodeSplitter.DragCompleted += (s, ev) => ScheduleChatContentWidthUpdate();
             }
             _window.SizeChanged += (s, e) =>
             {
-                UpdateChatContentWidth();
+                ScheduleChatContentWidthUpdate();
                 if (!_isHistorySidebarVisible) return;
                 ApplyHistorySidebarLayout();
                 UpdateWindowMinWidthForVisiblePanes();
@@ -3240,11 +3261,9 @@ namespace ADDGH
                 var contentArr = BuildUserMessageContent(input, attachmentsToSend, includeImagesInPrimaryMessage, imageContextNote);
                 _messages.Add(new { role = "user", content = contentArr });
                 AppendUserMessageWithAttachments(displayInput, attachmentsToSend);
-                SavePromptAndInputImagesToCanvasSnapshot(displayInput, attachmentsToSend);
             } else {
                 _messages.Add(new { role = "user", content = input });
                 AppendBubble(displayInput, true);
-                SavePromptAndInputImagesToCanvasSnapshot(displayInput, attachmentsToSend);
             }
 
             SyncActiveHistoryConversation(string.IsNullOrWhiteSpace(displayInput)
@@ -4359,7 +4378,10 @@ namespace ADDGH
                 await _window.Dispatcher.InvokeAsync(() => {
                     if (ChatMessageHelpers.ShouldDisplayReasoningBubble(fullReasoning, fullContent, fullToolCalls))
                     {
-                        AppendCollapsibleBubble(fullReasoning, "已思考 " + Math.Round(durationSeconds, 1) + "s", "💭");
+                        string reasoningTitle = "已思考 " + Math.Round(durationSeconds, 1) + "s";
+                        messageNode["_display_reasoning_title"] = reasoningTitle;
+                        messageNode["_display_reasoning_icon"] = "💭";
+                        AppendCollapsibleBubble(fullReasoning, reasoningTitle, "💭");
                     }
                     if (!string.IsNullOrEmpty(fullContent))
                     {

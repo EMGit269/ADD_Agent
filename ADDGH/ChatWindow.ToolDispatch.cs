@@ -180,7 +180,9 @@ namespace ADDGH
                         ResolveToolObjectId(argsObj["from_id"]?.ToString()),
                         argsObj["from_index"]?.ToObject<int>() ?? 0,
                         ResolveToolObjectId(argsObj["to_id"]?.ToString()),
-                        argsObj["to_index"]?.ToObject<int>() ?? 0);
+                        argsObj["to_index"]?.ToObject<int>() ?? 0,
+                        argsObj["from_port_label"]?.ToString(),
+                        argsObj["to_port_label"]?.ToString());
                     if (!result.ToolResult.StartsWith("Error:", StringComparison.OrdinalIgnoreCase)) result.AddConn++;
                 }
                 else if (funcName == "remove_gh_component")
@@ -438,7 +440,9 @@ namespace ADDGH
             List<(string primary, string secondary)> operationCards,
             System.Threading.CancellationToken ct)
         {
-            if (!string.Equals(funcName, "create_ai_image", StringComparison.Ordinal))
+            if (!string.Equals(funcName, "create_ai_image", StringComparison.Ordinal)
+                && !string.Equals(funcName, "capture_rhino_viewport", StringComparison.Ordinal)
+                && !string.Equals(funcName, "web_research", StringComparison.Ordinal))
             {
                 return ExecuteToolCall(funcName, argsObj, argsJson, callId, fullContent, fullReasoning, operationCards);
             }
@@ -446,13 +450,39 @@ namespace ADDGH
             var result = new ToolDispatchResult { ToolResult = "" };
             try
             {
-                result.ToolResult = await ExecuteCreateAiImageAsync(
-                    argsObj["prompt"]?.ToString(),
-                    argsObj["intent"]?.ToString(),
-                    ReadNullableBool(argsObj, "use_uploaded_images") ?? true,
-                    argsObj["aspect_ratio"]?.ToString(),
-                    ct);
-                Rhino.RhinoApp.InvokeOnUiThread((Action)(() => ApplyAiImageToolResult(result.ToolResult)));
+                if (string.Equals(funcName, "create_ai_image", StringComparison.Ordinal))
+                {
+                    result.ToolResult = await ExecuteCreateAiImageAsync(
+                        argsObj["prompt"]?.ToString(),
+                        argsObj["intent"]?.ToString(),
+                        ReadNullableBool(argsObj, "use_uploaded_images") ?? true,
+                        argsObj["aspect_ratio"]?.ToString(),
+                        ct);
+                    Rhino.RhinoApp.InvokeOnUiThread((Action)(() => ApplyAiImageToolResult(result.ToolResult)));
+                }
+                else if (string.Equals(funcName, "capture_rhino_viewport", StringComparison.Ordinal))
+                {
+                    result.ToolResult = await ExecuteCaptureRhinoViewportAsync(
+                        argsObj["question"]?.ToString(),
+                        argsObj["framing"]?.ToString(),
+                        ReadNullableInt(argsObj, "width"),
+                        ReadNullableInt(argsObj, "height"),
+                        ReadNullableDouble(argsObj, "padding_ratio"),
+                        ReadNullableBool(argsObj, "visual_check") ?? false,
+                        argsObj["visual_detail"]?.ToString(),
+                        ct);
+                }
+                else if (string.Equals(funcName, "web_research", StringComparison.Ordinal))
+                {
+                    result.ToolResult = await ExecuteWebResearchAsync(
+                        argsObj["mode"]?.ToString(),
+                        argsObj["query"]?.ToString(),
+                        argsObj["url"]?.ToString(),
+                        argsObj["allowed_domains"] as JArray,
+                        argsObj["max_results"]?.ToObject<int?>() ?? 5,
+                        argsObj["max_chars"]?.ToObject<int?>() ?? 6000,
+                        ct);
+                }
             }
             catch (Exception ex)
             {

@@ -39,8 +39,9 @@ Use this skill whenever the layout mode is `混合模式`.
 2. Mark which subproblems are simple GH and which are better as C#.
 3. Keep native GH sections grouped and coherent.
 4. Keep C# sections few and purposeful.
-5. Wire the native GH and C# sections through clear typed interfaces.
-6. Validate both graph readability and output correctness.
+5. Group each C# Script with its own sliders, panels, geometry params, value lists, preview, and debug helpers whenever practical.
+6. Wire the native GH and C# sections through clear typed interfaces.
+7. Validate both graph readability and output correctness.
 
 ## Decision Rules
 
@@ -55,6 +56,7 @@ Use this skill whenever the layout mode is `混合模式`.
 - Inputs to the script should be typed and minimal.
 - Outputs from the script should be few, meaningful, and easy to inspect.
 - Keep script responsibilities local so the surrounding GH graph still reads cleanly.
+- The script's local control surface should stay visually local: group the C# Script with its dedicated sliders and immediate helper components, but keep unrelated native GH logic in its own group.
 
 ## Plan-Mode Expectation
 

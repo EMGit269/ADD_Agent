@@ -98,12 +98,14 @@ namespace ADDGH
                             properties = new {
                                 from_id = new { type = "string", description = "源电池的 GUID" },
                                 from_index = new { type = "integer", description = "源电池输出端口索引 (从0开始)" },
+                                from_port_label = new { type = "string", description = "可选：源输出端口标签/名称。连接 C# Script 输出时优先用 semantic_label/display_name/description 里的业务名；索引作为兜底。" },
                                 to_id = new { type = "string", description = "目标电池的 GUID" },
                                 to_index = new { type = "integer", description = "目标电池输入端口索引 (从0开始)" },
+                                to_port_label = new { type = "string", description = "可选：目标输入端口标签/名称。端口语义比索引更清楚时优先填写。" },
                                 summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
                                 summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
                             },
-                            required = new[] { "from_id", "from_index", "to_id", "to_index", "summary" }
+                            required = new[] { "from_id", "to_id", "summary" }
                         }
                     }
                 },
@@ -233,7 +235,7 @@ namespace ADDGH
                     type = "function",
                     function = new {
                         name = "capture_rhino_viewport",
-                        description = "截取当前 Rhino 视口 PNG。默认会先自动取景：优先根据当前 Grasshopper 预览几何的包围盒缩放到可见范围，解决模型不在视窗内、太小或太大导致看不见的问题；若拿不到有效 GH 预览范围，则退回 Rhino 文档对象范围，最后才保留当前视图直接截图。",
+                        description = "截取当前 Rhino 视口 PNG。默认只返回截图路径和元数据，不发送视觉模型；路径、bbox、预览计数等只是传输元数据，不能作为视觉事实。只有在需要外观/颜色/形态等视觉判断时才显式 visual_check=true，此时 visual_analysis 才能作为截图视觉事实；visual_detail 默认 low，会发送压缩图以节省 token。",
                         parameters = new {
                             type = "object",
                             properties = new {
@@ -241,6 +243,9 @@ namespace ADDGH
                                 width = new { type = "integer", description = "可选：输出图片宽度，默认 1600。" },
                                 height = new { type = "integer", description = "可选：输出图片高度，默认 900。" },
                                 padding_ratio = new { type = "number", description = "可选：自动取景时的留白比例，默认 0.12，建议 0.05-0.3。" },
+                                visual_check = new { type = "boolean", description = "可选：是否把截图送入视觉模型分析，默认 false。只有需要截图级视觉判断时才设为 true。" },
+                                visual_detail = new { type = "string", description = "可选：none | low | high。visual_check=true 时默认 low，发送最长边约 1024px 的压缩图；high 发送原始截图。" },
+                                question = new { type = "string", description = "可选：希望视觉模型重点检查的问题，例如是否看见某对象、颜色是否正确、形态是否符合目标。" },
                                 summary = new { type = "string", description = "必填：一句中文说明本次操作，用于界面小卡片；勿写工具函数名或英文 API。" },
                                 summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
                             },
@@ -423,6 +428,27 @@ namespace ADDGH
                                 summary_detail = new { type = "string", description = "可选：卡片右侧次要短语（勿写函数名）。" }
                             },
                             required = new[] { "query", "summary" }
+                        }
+                    }
+                },
+                new {
+                    type = "function",
+                    function = new {
+                        name = "web_research",
+                        description = "联网查询工具。用于需要最新网页信息、官方 API 文档、网页内容核对或用户明确要求联网查询时。支持 search 搜索网页与 fetch 读取指定 URL。若已知官方 URL，必须优先用 fetch 直连，不要先绕搜索引擎；尽量少用 search，只有 API 报错、签名/类型不确定、已有代码疑似用错，或不知道具体官方页面时才 search。查 Rhino/Grasshopper API 时必须设置 allowed_domains 做官方站内搜索，不做泛搜。不要把网页结果当作画布或视觉事实。",
+                        parameters = new {
+                            type = "object",
+                            properties = new {
+                                mode = new { type = "string", description = "search 或 fetch。已知 URL 时用 fetch 直连；不知道具体页面时才用 search。默认 search。" },
+                                query = new { type = "string", description = "search 模式必填：搜索关键词。需要官方文档时可写具体 API 名称和版本。" },
+                                url = new { type = "string", description = "fetch 模式必填：要读取的 http/https URL。" },
+                                allowed_domains = new { type = "array", items = new { type = "string" }, description = "可选：限制搜索/读取的域名列表，例如 developer.rhino3d.com、mcneel.github.io。写 C# API 时建议限制到官方域名。" },
+                                max_results = new { type = "integer", description = "可选：search 返回条数，默认 5，最大 10。" },
+                                max_chars = new { type = "integer", description = "可选：返回文本最大字符数，默认 6000，最大 16000。" },
+                                summary = new { type = "string", description = "必填：一句中文说明本次查询目的，用于界面小卡片；勿写工具函数名。" },
+                                summary_detail = new { type = "string", description = "可选：卡片右侧次要短语。" }
+                            },
+                            required = new[] { "summary" }
                         }
                     }
                 },
@@ -696,7 +722,7 @@ namespace ADDGH
                 function = new
                 {
                     name = "create_csharp_script_component",
-                    description = "Dedicated C# Script layout tool. It first creates a default C# Script component, waits briefly for Grasshopper/Rhino 8 to finish initializing it, then applies the requested component name, input ports, extra output ports, and RunScript body. Default C# outputs such as out/a are preserved; requested business outputs are added as b,c,d... and those are the variables to assign. For common input type hints, the tool auto-injects typed local aliases into the body so the body can use the input names directly instead of repeatedly converting object values. After the body is written, the tool automatically triggers a short delayed two-pass recompute so the agent usually does not need a separate recompute step. It intentionally skips connections during creation; connect components later after the script component is stable. Use this instead of create_script_component_graph for C# priority modeling.",
+                    description = "Dedicated C# Script layout tool. It first creates a default C# Script component, waits briefly for Grasshopper/Rhino 8 to finish initializing it, then applies the requested component name, input ports, extra output ports, and RunScript body. Default C# outputs such as out/a are preserved; requested business outputs are added as b,c,d... and those are the variables to assign. For common input type hints, the tool auto-injects typed local aliases into the body so the body can use the input names directly instead of repeatedly converting object values. When the C# Script has its own sliders/panels/params/preview/debug helpers, create them in components and provide group_name so the script and its helpers are grouped together. After the body is written, the tool automatically triggers a short delayed two-pass recompute so the agent usually does not need a separate recompute step. It intentionally skips connections during creation; connect components later after the script component is stable. Use this instead of create_script_component_graph for C# priority modeling.",
                     parameters = new
                     {
                         type = "object",
@@ -712,7 +738,7 @@ namespace ADDGH
                             body = new { type = "string", description = "Only the RunScript method body. No using statements, no class declaration, no RunScript signature, no template. When inputs carry common type hints, write the body as if those inputs were already strongly typed; the tool will inject local aliases automatically." },
                             components = new { type = "array", items = helperComponentSchema },
                             connections = new { type = "array", items = connectionSchema, description = "Optional. Currently skipped during C# creation for stability; use a later connection tool call after creation." },
-                            group_name = new { type = "string", description = "Optional group name." },
+                            group_name = new { type = "string", description = "Optional but recommended when components contains the C# Script's own sliders/panels/params/preview/debug helpers; groups the script and those helpers together." },
                             summary = new { type = "string", description = "Required short Chinese summary for the UI operation card. Do not write the function name." },
                             summary_detail = new { type = "string", description = "Optional short secondary phrase for the UI operation card." }
                         },
@@ -813,6 +839,7 @@ namespace ADDGH
                 "read_component_script",
                 "read_skill_file",
                 "read_reference_json",
+                "web_research",
                 ShowPlanStepsTool.FunctionName
             };
 

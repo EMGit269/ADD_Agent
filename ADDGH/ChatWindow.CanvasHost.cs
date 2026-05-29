@@ -680,9 +680,20 @@ namespace ADDGH
         private static bool IsCanvasTypedNodeSourceRef(string sourceRef)
         {
             if (string.IsNullOrWhiteSpace(sourceRef)) return false;
+            return IsCanvasPersistableTypedNodeSourceRef(sourceRef);
+        }
+
+        private static bool IsCanvasUserInputNodeSourceRef(string sourceRef)
+        {
+            if (string.IsNullOrWhiteSpace(sourceRef)) return false;
             return sourceRef.StartsWith("input_prompt:", StringComparison.OrdinalIgnoreCase)
-                || sourceRef.StartsWith("input_image:", StringComparison.OrdinalIgnoreCase)
-                || sourceRef.StartsWith("generated_image:", StringComparison.OrdinalIgnoreCase);
+                || sourceRef.StartsWith("input_image:", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsCanvasPersistableTypedNodeSourceRef(string sourceRef)
+        {
+            if (string.IsNullOrWhiteSpace(sourceRef)) return false;
+            return sourceRef.StartsWith("generated_image:", StringComparison.OrdinalIgnoreCase);
         }
 
         private static JArray BuildCanvasTypedNodesFromEnvelope(string canvasId)
@@ -1104,7 +1115,12 @@ namespace ADDGH
                     {
                         var normalizedNodes = new JArray();
                         foreach (var node in nodes.OfType<JObject>())
+                        {
+                            string sourceRef = node["sourceRef"]?.ToString() ?? "";
+                            if (IsCanvasUserInputNodeSourceRef(sourceRef))
+                                continue;
                             normalizedNodes.Add(NormalizeCanvasImageNode((JObject)node.DeepClone()));
+                        }
                         snapshotObject["nodes"] = normalizedNodes;
                     }
                     root["snapshot"] = snapshot;
