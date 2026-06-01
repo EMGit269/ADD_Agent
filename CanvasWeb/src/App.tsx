@@ -47,7 +47,7 @@ type Viewport = {
   z: number
 }
 
-type CanvasNodeType = 'message' | 'note' | 'image' | 'prompt' | 'file_upload' | 'slider' | 'code' | 'panel' | 'img' | 'gen_img' | 'gen_video' | 'c_sharp'
+type CanvasNodeType = 'message' | 'note' | 'image' | 'prompt' | 'file_upload' | 'slider' | 'code' | 'panel' | 'img' | 'gen_img' | 'gen_video' | 'c_sharp' | 'annotation' | 'sticky'
 
 type PortDirection = 'input' | 'output'
 
@@ -117,7 +117,7 @@ type CanvasHistoryItem = {
 }
 
 type ToolbarSection = 'menu' | 'draw' | 'display'
-type CanvasTool = 'select' | 'pen' | 'eraser' | 'shape' | 'text' | 'annotation' | 'sticky'
+type CanvasTool = 'select' | 'pen' | 'eraser' | 'shape' | 'text'
 type ShapeKind = 'rect' | 'ellipse' | 'line'
 
 type DrawingPoint = {
@@ -883,7 +883,7 @@ function CanvasWorkbench() {
 
   function createTypedNodeAt(nodeType: CanvasNodeType, x: number, y: number) {
     const sourceRef = `${nodeType}:${Date.now()}`
-    const meta = buildDefaultNodeMeta(nodeType, sourceRef)
+    const meta = buildDefaultNodeMeta(nodeType, sourceRef, currentUserName)
     const node = createNode(meta, nodesRef.current.length, x, y, nodeType)
     cardMetaRef.current[sourceRef] = meta
     commitMutation((snapshot) => ({
@@ -1578,8 +1578,6 @@ function CanvasWorkbench() {
     if (kind === 'pen') return { id, kind: 'pen', color: penColor, width: penWidth, points: [point], createdAtUtc }
     if (kind === 'shape') return { id, kind: 'shape', shape: shapeKind, x: point.x, y: point.y, w: 1, h: 1, strokeColor: shapeStrokeColor, fillColor: shapeFillColor, strokeWidth: shapeStrokeWidth, createdAtUtc }
     if (kind === 'text') return { id, kind: 'text', x: point.x, y: point.y, w: 220, h: 76, text: 'Text', createdAtUtc }
-    if (kind === 'annotation') return { id, kind: 'annotation', x: point.x, y: point.y, w: 240, h: 92, text: 'Annotation', author: currentUserName || 'User', createdAtUtc }
-    if (kind === 'sticky') return { id, kind: 'sticky', x: point.x, y: point.y, w: 220, h: 150, text: 'Sticky note', author: currentUserName || 'User', createdAtUtc }
     return null
   }
 
@@ -1597,7 +1595,7 @@ function CanvasWorkbench() {
     }
     const item = createDrawingItem(activeCanvasTool, point)
     if (!item) return
-    if (item.kind === 'text' || item.kind === 'annotation' || item.kind === 'sticky') {
+    if (item.kind === 'text') {
       pushHistorySnapshot(createSnapshotState())
       updateDrawingItems((current) => [...current, item])
       return
@@ -1879,7 +1877,7 @@ function CanvasWorkbench() {
       </div>
 
       <input ref={fileInputRef} className="hidden-file-input" type="file" onChange={onToolbarFileSelected} />
-      <aside className="canvas-toolbar">
+      <aside className="canvas-toolbar" aria-label="Canvas toolbar">
         <div className="toolbar-sections">
           {(['menu', 'draw', 'display'] as ToolbarSection[]).map((section) => (
             <button
@@ -1892,58 +1890,57 @@ function CanvasWorkbench() {
               }}
               title={section === 'menu' ? '菜单' : section === 'draw' ? '绘图' : '显示'}
             >
-              {section === 'menu' ? '☰' : section === 'draw' ? '✎' : '◉'}
-              <span>{section === 'menu' ? '菜单' : section === 'draw' ? '绘图' : '显示'}</span>
+              {section === 'menu' ? 'M' : section === 'draw' ? 'D' : 'V'}
             </button>
           ))}
         </div>
         <div className="toolbar-tools">
           {activeToolbarSection === 'menu' ? (
             <>
-              <button type="button" className={canvasManageOpen ? 'active' : ''} onClick={() => setCanvasManageOpen((current) => !current)}>＋<span>添加节点</span></button>
-              <button type="button" onClick={() => fileInputRef.current?.click()}>⇧<span>上传文件</span></button>
-              <button type="button" onClick={saveCanvasNow}>▣<span>保存画布</span></button>
-              <button type="button" onClick={() => setMyCanvasOpen(true)}>▤<span>我的画布</span></button>
-              <button type="button" onClick={() => setGenerationHistoryOpen(true)}>◎<span>生成历史</span></button>
-              <button type="button" onClick={() => postHostMessage('canvas_switch_to_code', { canvasId: canvasIdRef.current })}>⌘<span>代码视图</span></button>
+              <button type="button" title="添加节点" className={canvasManageOpen ? 'active' : ''} onClick={() => setCanvasManageOpen((current) => !current)}>+</button>
+              <button type="button" title="上传文件/图片" onClick={() => fileInputRef.current?.click()}>U</button>
+              <button type="button" title="保存画布" onClick={saveCanvasNow}>S</button>
+              <button type="button" title="我的画布" onClick={() => setMyCanvasOpen(true)}>B</button>
+              <button type="button" title="生成历史" onClick={() => setGenerationHistoryOpen(true)}>H</button>
+              <button type="button" title="代码视图" onClick={() => postHostMessage('canvas_switch_to_code', { canvasId: canvasIdRef.current })}>C</button>
             </>
           ) : null}
           {activeToolbarSection === 'draw' ? (
             <>
-              <button type="button" className={activeCanvasTool === 'pen' ? 'active' : ''} onClick={() => setActiveCanvasTool('pen')}>✎<span>画笔</span></button>
-              <button type="button" className={activeCanvasTool === 'eraser' ? 'active' : ''} onClick={() => setActiveCanvasTool('eraser')}>⌫<span>橡皮</span></button>
-              <button type="button" className={activeCanvasTool === 'shape' ? 'active' : ''} onClick={() => setActiveCanvasTool('shape')}>□<span>形状</span></button>
-              <button type="button" className={activeCanvasTool === 'text' ? 'active' : ''} onClick={() => setActiveCanvasTool('text')}>T<span>文本框</span></button>
+              <button type="button" title="画笔" className={activeCanvasTool === 'pen' ? 'active' : ''} onClick={() => setActiveCanvasTool('pen')}>P</button>
+              <button type="button" title="橡皮" className={activeCanvasTool === 'eraser' ? 'active' : ''} onClick={() => setActiveCanvasTool('eraser')}>E</button>
+              <button type="button" title="形状" className={activeCanvasTool === 'shape' ? 'active' : ''} onClick={() => setActiveCanvasTool('shape')}>R</button>
+              <button type="button" title="文本框" className={activeCanvasTool === 'text' ? 'active' : ''} onClick={() => setActiveCanvasTool('text')}>T</button>
             </>
           ) : null}
           {activeToolbarSection === 'display' ? (
             <>
-              <button type="button" className={activeCanvasTool === 'annotation' ? 'active' : ''} onClick={() => setActiveCanvasTool('annotation')}>※<span>批注</span></button>
-              <button type="button" className={activeCanvasTool === 'sticky' ? 'active' : ''} onClick={() => setActiveCanvasTool('sticky')}>▨<span>便签</span></button>
-              <button type="button" onClick={onFit}>⌖<span>适配</span></button>
-              <button type="button" onClick={() => setThemeMode((current) => current === 'dark' ? 'light' : 'dark')}>{isDarkMode ? '☀' : '●'}<span>{isDarkMode ? '浅色' : '深色'}</span></button>
-              <button type="button" onClick={onCaptureRhinoView}>▧<span>捕获 Rhino</span></button>
+              <button type="button" title="适配" onClick={onFit}>F</button>
+              <button type="button" title={isDarkMode ? '浅色' : '深色'} onClick={() => setThemeMode((current) => current === 'dark' ? 'light' : 'dark')}>{isDarkMode ? 'L' : 'K'}</button>
+              <button type="button" title="捕获 Rhino" onClick={onCaptureRhinoView}>R</button>
             </>
           ) : null}
         </div>
         {activeToolbarSection === 'menu' && canvasManageOpen ? (
           <div className="toolbar-node-palette">
             {([
-              ['prompt', 'Prompt'],
-              ['file_upload', 'File'],
-              ['code', 'Code'],
-              ['panel', 'Panel'],
-              ['image', 'Image'],
-              ['gen_img', 'AI Image'],
-              ['gen_video', 'AI Video'],
-              ['slider', 'Slider'],
-              ['c_sharp', 'C#'],
-              ['note', 'Note'],
-            ] as Array<[CanvasNodeType, string]>).map(([nodeType, label]) => (
+              ['prompt', 'P', 'Prompt'],
+              ['file_upload', 'F', 'File'],
+              ['code', 'K', 'Code'],
+              ['panel', 'N', 'Panel'],
+              ['image', 'I', 'Image'],
+              ['gen_img', 'G', 'AI Image'],
+              ['gen_video', 'V', 'AI Video'],
+              ['slider', 'S', 'Slider'],
+              ['c_sharp', '#', 'C#'],
+              ['note', 'O', 'Note'],
+              ['annotation', 'A', '批注'],
+              ['sticky', 'Y', '便签'],
+            ] as Array<[CanvasNodeType, string, string]>).map(([nodeType, icon, label]) => (
               <button key={nodeType} type="button" onClick={() => {
                 onAddTypedNode(nodeType)
                 setCanvasManageOpen(false)
-              }}>{label}</button>
+              }} title={label}>{icon}</button>
             ))}
           </div>
         ) : null}
@@ -2209,6 +2206,9 @@ function CanvasFlowNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
             <small>{node.nodeType}</small>
           </header>
           <div className="node-panel-surface">
+          {node.nodeType === 'annotation' || node.nodeType === 'sticky' ? (
+            <div className="node-author-chip">{String(node.meta.author || 'User')}</div>
+          ) : null}
           {renderFlowPorts(node)}
           {!node.meta.collapsed ? renderInlineNodeEditor(node, data.updateNodeMeta, data.onRunAiImage, data.onPreviewImage) : null}
           {node.nodeType === 'gen_img' && imageSrc ? (
@@ -2313,7 +2313,7 @@ function reconcileNodes(
 
 function reconcileTypedNodes(existingNodes: CanvasNode[]) {
   return dedupeNodes(existingNodes.map((node) => {
-    if (node.nodeType === 'message' || node.nodeType === 'note') return node
+    if (node.nodeType === 'message' || node.nodeType === 'note' || node.nodeType === 'annotation' || node.nodeType === 'sticky') return node
     const meta = { ...node.meta }
     const nodeType = node.nodeType === 'img' ? 'image' : node.nodeType
     if (nodeType === 'image' && !meta.imageDataUrl && meta.imagePath) {
@@ -2564,6 +2564,8 @@ function portColor(dataType: PortDataType) {
 
 function resolveNodeSize(meta: Record<string, any>, nodeType: CanvasNodeType, fallback?: Partial<CanvasNode>) {
   if (nodeType === 'panel') return { w: numberOr(fallback?.w, meta.w, meta.default_width ?? 320), h: numberOr(fallback?.h, meta.h, meta.default_height ?? 280) }
+  if (nodeType === 'annotation') return { w: numberOr(fallback?.w, meta.w, meta.default_width ?? 260), h: numberOr(fallback?.h, meta.h, meta.default_height ?? 130) }
+  if (nodeType === 'sticky') return { w: numberOr(fallback?.w, meta.w, meta.default_width ?? 230), h: numberOr(fallback?.h, meta.h, meta.default_height ?? 170) }
   if (nodeType === 'gen_img') return { w: numberOr(meta.w, fallback?.w, meta.default_width ?? 260), h: numberOr(meta.h, fallback?.h, meta.default_height ?? 180) }
   if (nodeType === 'gen_video') return { w: numberOr(meta.w, fallback?.w, meta.default_width ?? 360), h: numberOr(meta.h, fallback?.h, meta.default_height ?? 220) }
   if (nodeType === 'c_sharp') return { w: numberOr(fallback?.w, meta.w, meta.default_width ?? 520), h: numberOr(fallback?.h, meta.h, meta.default_height ?? 360) }
@@ -2588,7 +2590,9 @@ function normalizeNodeType(value: any): CanvasNodeType {
     value === 'img' ||
     value === 'gen_img' ||
     value === 'gen_video' ||
-    value === 'c_sharp'
+    value === 'c_sharp' ||
+    value === 'annotation' ||
+    value === 'sticky'
   ) {
     return value === 'img' ? 'image' : value
   }
@@ -2646,7 +2650,7 @@ function getNodePorts(nodeType: CanvasNodeType, meta: Record<string, any>): Node
   if (nodeType === 'slider') {
     return [{ id: 'out', label: 'Value', direction: 'output', dataType: 'number', slot: 0 }]
   }
-  if (nodeType === 'note') return []
+  if (nodeType === 'note' || nodeType === 'annotation' || nodeType === 'sticky') return []
   return [
     { id: 'in', label: 'Input', direction: 'input', dataType: 'any', slot: 0 },
     { id: 'out', label: 'Output', direction: 'output', dataType: 'any', slot: 1 },
@@ -3517,10 +3521,16 @@ function renderNodeSettings(
       </>
     )
   }
-  if (node.nodeType === 'note') {
+  if (node.nodeType === 'note' || node.nodeType === 'annotation' || node.nodeType === 'sticky') {
     return (
       <>
         {header}
+        {node.nodeType === 'annotation' || node.nodeType === 'sticky' ? (
+          <label className="node-field">
+            <span>Author</span>
+            <input value={node.meta.author ?? ''} onChange={(event) => updateMeta(node.sourceRef, { author: event.target.value })} />
+          </label>
+        ) : null}
         <label className="node-field">
           <span>Body</span>
           <textarea value={node.meta.body ?? ''} onChange={(event) => updateMeta(node.sourceRef, { body: event.target.value })} />
@@ -3647,6 +3657,16 @@ function renderInlineNodeEditor(
           onChange={(event) => updateMeta(node.sourceRef, { value: Number(event.target.value) })}
         />
       </label>
+    )
+  }
+  if (node.nodeType === 'annotation' || node.nodeType === 'sticky') {
+    return (
+      <StableNodeTextarea
+        className="node-inline-textarea nodrag"
+        value={String(node.meta.body ?? '')}
+        placeholder={node.nodeType === 'sticky' ? 'Sticky note...' : 'Annotation...'}
+        onCommit={(value) => updateMeta(node.sourceRef, { body: value })}
+      />
     )
   }
   return (
@@ -3838,7 +3858,27 @@ function findPortAtPoint(clientX: number, clientY: number, nodes: CanvasNode[]) 
   return { node, port }
 }
 
-function buildDefaultNodeMeta(nodeType: CanvasNodeType, sourceRef: string) {
+function buildDefaultNodeMeta(nodeType: CanvasNodeType, sourceRef: string, currentUserName = 'User') {
+  if (nodeType === 'annotation' || nodeType === 'sticky') {
+    const isSticky = nodeType === 'sticky'
+    return {
+      sourceRef,
+      nodeType,
+      title: isSticky ? 'Sticky Note' : 'Annotation',
+      summary: isSticky ? 'Canvas sticky note' : 'Canvas annotation',
+      body: isSticky ? 'Sticky note' : 'Annotation',
+      author: currentUserName || 'User',
+      createdAtUtc: new Date().toISOString(),
+      collapsed: false,
+      default_width: isSticky ? 230 : 260,
+      default_height: isSticky ? 170 : 130,
+      tags: [],
+      kind: nodeType,
+      role: 'note',
+      userEditedTitle: true,
+      ports: [],
+    }
+  }
   if (nodeType === 'panel') {
     return {
       sourceRef,
