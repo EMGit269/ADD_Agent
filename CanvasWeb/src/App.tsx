@@ -1,4 +1,4 @@
-import React, { Component, ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+﻿import React, { Component, ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Background,
   Controls,
@@ -136,6 +136,8 @@ type ToolbarIconName =
   | 'fit'
   | 'theme'
   | 'capture'
+  | 'undo'
+  | 'redo'
   | 'file'
   | 'panel'
   | 'image'
@@ -146,6 +148,9 @@ type ToolbarIconName =
   | 'note'
   | 'annotation'
   | 'sticky'
+  | 'rect'
+  | 'ellipse'
+  | 'line'
 
 type DrawingPoint = {
   x: number
@@ -286,6 +291,8 @@ function ToolbarIcon({ name }: { name: ToolbarIconName }) {
       {name === 'fit' ? <><path {...common} d="M8 4H4v4" /><path {...common} d="M16 4h4v4" /><path {...common} d="M8 20H4v-4" /><path {...common} d="M16 20h4v-4" /></> : null}
       {name === 'theme' ? <><circle {...common} cx="12" cy="12" r="5" /><path {...common} d="M12 2v2" /><path {...common} d="M12 20v2" /><path {...common} d="M4 12H2" /><path {...common} d="M22 12h-2" /></> : null}
       {name === 'capture' ? <><rect {...common} x="4" y="7" width="16" height="12" rx="2" /><path {...common} d="M8 7l1.5-2h5L16 7" /><circle {...common} cx="12" cy="13" r="3" /></> : null}
+      {name === 'undo' ? <><path {...common} d="M9 7H5v4" /><path {...common} d="M5.5 11A7 7 0 1 0 8 5.7" /></> : null}
+      {name === 'redo' ? <><path {...common} d="M15 7h4v4" /><path {...common} d="M18.5 11A7 7 0 1 1 16 5.7" /></> : null}
       {name === 'file' ? <><path {...common} d="M7 3h7l4 4v14H7z" /><path {...common} d="M14 3v5h4" /></> : null}
       {name === 'panel' ? <><rect {...common} x="4" y="5" width="16" height="14" rx="2" /><path {...common} d="M8 9h8" /><path {...common} d="M8 13h6" /></> : null}
       {name === 'image' ? <><rect {...common} x="4" y="5" width="16" height="14" rx="2" /><circle {...common} cx="9" cy="10" r="1.4" /><path {...common} d="M6.5 17l4-4 2.5 2.5 2-2L18 17" /></> : null}
@@ -296,6 +303,9 @@ function ToolbarIcon({ name }: { name: ToolbarIconName }) {
       {name === 'note' ? <><path {...common} d="M6 4h12v13l-3 3H6z" /><path {...common} d="M15 17v3" /><path {...common} d="M15 17h3" /></> : null}
       {name === 'annotation' ? <><path {...common} d="M5 5h14v10H9l-4 4z" /><path {...common} d="M8 9h8" /><path {...common} d="M8 12h5" /></> : null}
       {name === 'sticky' ? <><path {...common} d="M6 4h12v10l-5 5H6z" /><path {...common} d="M13 19v-5h5" /></> : null}
+      {name === 'rect' ? <rect {...common} x="5" y="6" width="14" height="12" rx="2" /> : null}
+      {name === 'ellipse' ? <ellipse {...common} cx="12" cy="12" rx="7" ry="5.5" /> : null}
+      {name === 'line' ? <path {...common} d="M6 18L18 6" /> : null}
     </svg>
   )
 }
@@ -481,25 +491,13 @@ function CanvasWorkbench() {
 
       if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'z') {
         event.preventDefault()
-        const last = historyRef.current.past[historyRef.current.past.length - 1]
-        if (!last) return
-        historyRef.current = {
-          past: historyRef.current.past.slice(0, -1),
-          future: [createSnapshotState(), ...historyRef.current.future],
-        }
-        applySnapshotState(last)
+        performUndo()
         return
       }
 
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y') {
         event.preventDefault()
-        const next = historyRef.current.future[0]
-        if (!next) return
-        historyRef.current = {
-          past: [...historyRef.current.past, createSnapshotState()],
-          future: historyRef.current.future.slice(1),
-        }
-        applySnapshotState(next)
+        performRedo()
         return
       }
 
@@ -742,6 +740,26 @@ function CanvasWorkbench() {
     setSelectedSourceRef(snapshot.selectedSourceRef)
     setSelectedSourceRefs([...snapshot.selectedSourceRefs])
     if (shouldSave) scheduleSave()
+  }
+
+  function performUndo() {
+    const last = historyRef.current.past[historyRef.current.past.length - 1]
+    if (!last) return
+    historyRef.current = {
+      past: historyRef.current.past.slice(0, -1),
+      future: [createSnapshotState(), ...historyRef.current.future],
+    }
+    applySnapshotState(last)
+  }
+
+  function performRedo() {
+    const next = historyRef.current.future[0]
+    if (!next) return
+    historyRef.current = {
+      past: [...historyRef.current.past, createSnapshotState()],
+      future: historyRef.current.future.slice(1),
+    }
+    applySnapshotState(next)
   }
 
   function pushHistorySnapshot(snapshot: CanvasSnapshotState) {
@@ -1640,7 +1658,7 @@ function CanvasWorkbench() {
     const meta = {
       ...buildDefaultNodeMeta('file_upload', sourceRef),
       title: file.name || 'File',
-      summary: `${file.type || 'file'} · ${formatBytes(file.size)}`,
+      summary: `${file.type || 'file'} 路 ${formatBytes(file.size)}`,
       body: file.name || '',
       fileName: file.name || '',
       mimeType: file.type || 'application/octet-stream',
@@ -2016,7 +2034,7 @@ function CanvasWorkbench() {
                 setActiveToolbarSection(section)
                 if (section === 'menu') setActiveCanvasTool('select')
               }}
-              title={section === 'menu' ? '菜单' : section === 'draw' ? '绘图' : '显示'}
+              title={section === 'menu' ? '鑿滃崟' : section === 'draw' ? '缁樺浘' : '鏄剧ず'}
             >
               <ToolbarIcon name={section === 'menu' ? 'menu' : section === 'draw' ? 'draw' : 'view'} />
             </button>
@@ -2025,26 +2043,28 @@ function CanvasWorkbench() {
         <div className="toolbar-tools">
           {activeToolbarSection === 'menu' ? (
             <>
-              <button type="button" title="添加节点" aria-label="添加节点" className={canvasManageOpen ? 'active' : ''} onClick={() => setCanvasManageOpen((current) => !current)}><ToolbarIcon name="plus" /></button>
-              <button type="button" title="上传文件/图片" aria-label="上传文件/图片" onClick={() => fileInputRef.current?.click()}><ToolbarIcon name="upload" /></button>
-              <button type="button" title="保存画布" aria-label="保存画布" onClick={saveCanvasNow}><ToolbarIcon name="save" /></button>
-              <button type="button" title="我的画布" aria-label="我的画布" onClick={() => setMyCanvasOpen(true)}><ToolbarIcon name="boards" /></button>
-              <button type="button" title="生成历史" aria-label="生成历史" onClick={() => setGenerationHistoryOpen(true)}><ToolbarIcon name="history" /></button>
+              <button type="button" title="娣诲姞鑺傜偣" aria-label="娣诲姞鑺傜偣" className={canvasManageOpen ? 'active' : ''} onClick={() => setCanvasManageOpen((current) => !current)}><ToolbarIcon name="plus" /></button>
+              <button type="button" title="涓婁紶鏂囦欢/鍥剧墖" aria-label="涓婁紶鏂囦欢/鍥剧墖" onClick={() => fileInputRef.current?.click()}><ToolbarIcon name="upload" /></button>
+              <button type="button" title="淇濆瓨鐢诲竷" aria-label="淇濆瓨鐢诲竷" onClick={saveCanvasNow}><ToolbarIcon name="save" /></button>
+              <button type="button" title="撤销" aria-label="撤销" onClick={performUndo}><ToolbarIcon name="undo" /></button>
+              <button type="button" title="重做" aria-label="重做" onClick={performRedo}><ToolbarIcon name="redo" /></button>
+              <button type="button" title="鎴戠殑鐢诲竷" aria-label="鎴戠殑鐢诲竷" onClick={() => setMyCanvasOpen(true)}><ToolbarIcon name="boards" /></button>
+              <button type="button" title="鐢熸垚鍘嗗彶" aria-label="鐢熸垚鍘嗗彶" onClick={() => setGenerationHistoryOpen(true)}><ToolbarIcon name="history" /></button>
             </>
           ) : null}
           {activeToolbarSection === 'draw' ? (
             <>
-              <button type="button" title="画笔" aria-label="画笔" className={activeCanvasTool === 'pen' ? 'active' : ''} onClick={() => setActiveCanvasTool('pen')}><ToolbarIcon name="pen" /></button>
-              <button type="button" title="橡皮" aria-label="橡皮" className={activeCanvasTool === 'eraser' ? 'active' : ''} onClick={() => setActiveCanvasTool('eraser')}><ToolbarIcon name="eraser" /></button>
-              <button type="button" title="形状" aria-label="形状" className={activeCanvasTool === 'shape' ? 'active' : ''} onClick={() => setActiveCanvasTool('shape')}><ToolbarIcon name="shape" /></button>
-              <button type="button" title="文本框" aria-label="文本框" className={activeCanvasTool === 'text' ? 'active' : ''} onClick={() => setActiveCanvasTool('text')}><ToolbarIcon name="text" /></button>
+              <button type="button" title="鐢荤瑪" aria-label="鐢荤瑪" className={activeCanvasTool === 'pen' ? 'active' : ''} onClick={() => setActiveCanvasTool('pen')}><ToolbarIcon name="pen" /></button>
+              <button type="button" title="姗＄毊" aria-label="姗＄毊" className={activeCanvasTool === 'eraser' ? 'active' : ''} onClick={() => setActiveCanvasTool('eraser')}><ToolbarIcon name="eraser" /></button>
+              <button type="button" title="褰㈢姸" aria-label="褰㈢姸" className={activeCanvasTool === 'shape' ? 'active' : ''} onClick={() => setActiveCanvasTool('shape')}><ToolbarIcon name="shape" /></button>
+              <button type="button" title="Text box" aria-label="Text box" className={activeCanvasTool === 'text' ? 'active' : ''} onClick={() => setActiveCanvasTool('text')}><ToolbarIcon name="text" /></button>
             </>
           ) : null}
           {activeToolbarSection === 'display' ? (
             <>
-              <button type="button" title="适配" aria-label="适配" onClick={onFit}><ToolbarIcon name="fit" /></button>
-              <button type="button" title={isDarkMode ? '浅色' : '深色'} aria-label={isDarkMode ? '浅色' : '深色'} onClick={() => setThemeMode((current) => current === 'dark' ? 'light' : 'dark')}><ToolbarIcon name="theme" /></button>
-              <button type="button" title="捕获 Rhino" aria-label="捕获 Rhino" onClick={onCaptureRhinoView}><ToolbarIcon name="capture" /></button>
+              <button type="button" title="閫傞厤" aria-label="閫傞厤" onClick={onFit}><ToolbarIcon name="fit" /></button>
+              <button type="button" title={isDarkMode ? '娴呰壊' : '娣辫壊'} aria-label={isDarkMode ? '娴呰壊' : '娣辫壊'} onClick={() => setThemeMode((current) => current === 'dark' ? 'light' : 'dark')}><ToolbarIcon name="theme" /></button>
+              <button type="button" title="鎹曡幏 Rhino" aria-label="鎹曡幏 Rhino" onClick={onCaptureRhinoView}><ToolbarIcon name="capture" /></button>
             </>
           ) : null}
         </div>
@@ -2061,8 +2081,8 @@ function CanvasWorkbench() {
               ['slider', 'slider', 'Slider'],
               ['c_sharp', 'csharp', 'C#'],
               ['note', 'note', 'Note'],
-              ['annotation', 'annotation', '批注'],
-              ['sticky', 'sticky', '便签'],
+              ['annotation', 'annotation', '鎵规敞'],
+              ['sticky', 'sticky', '渚跨'],
             ] as Array<[CanvasNodeType, ToolbarIconName, string]>).map(([nodeType, icon, label]) => (
               <button key={nodeType} type="button" onClick={() => {
                 onAddTypedNode(nodeType)
@@ -2071,18 +2091,28 @@ function CanvasWorkbench() {
             ))}
           </div>
         ) : null}
-        {activeToolbarSection === 'draw' ? (
+        {activeToolbarSection === 'draw' && activeCanvasTool !== 'select' && activeCanvasTool !== 'text' ? (
           <div className="toolbar-options">
             {activeCanvasTool === 'pen' ? <>
-              <label>颜色<input type="color" value={penColor} onChange={(event) => setPenColor(event.target.value)} /></label>
-              <label>粗细<input type="range" min="1" max="32" value={penWidth} onChange={(event) => setPenWidth(Number(event.target.value))} /></label>
+              <label>棰滆壊<input type="color" value={penColor} onChange={(event) => setPenColor(event.target.value)} /></label>
+              <label>绮楃粏<input type="range" min="1" max="32" value={penWidth} onChange={(event) => setPenWidth(Number(event.target.value))} /></label>
             </> : null}
-            {activeCanvasTool === 'eraser' ? <label>大小<input type="range" min="8" max="90" value={eraserSize} onChange={(event) => setEraserSize(Number(event.target.value))} /></label> : null}
+            {activeCanvasTool === 'eraser' ? <label>澶у皬<input type="range" min="8" max="90" value={eraserSize} onChange={(event) => setEraserSize(Number(event.target.value))} /></label> : null}
             {activeCanvasTool === 'shape' ? <>
-              <select value={shapeKind} onChange={(event) => setShapeKind(event.target.value as ShapeKind)}><option value="rect">矩形</option><option value="ellipse">椭圆</option><option value="line">线</option></select>
-              <label>描边<input type="color" value={shapeStrokeColor} onChange={(event) => setShapeStrokeColor(event.target.value)} /></label>
-              <label>填充<input type="color" value={shapeFillColor.slice(0, 7)} onChange={(event) => setShapeFillColor(`${event.target.value}33`)} /></label>
-              <label>线宽<input type="range" min="1" max="18" value={shapeStrokeWidth} onChange={(event) => setShapeStrokeWidth(Number(event.target.value))} /></label>
+              <div className="shape-picker" role="group" aria-label="形状选择">
+                {([
+                  ['rect', 'rect', '矩形'],
+                  ['ellipse', 'ellipse', '椭圆'],
+                  ['line', 'line', '线段'],
+                ] as Array<[ShapeKind, ToolbarIconName, string]>).map(([kind, icon, label]) => (
+                  <button key={kind} type="button" className={shapeKind === kind ? 'active' : ''} title={label} aria-label={label} onClick={() => setShapeKind(kind)}>
+                    <ToolbarIcon name={icon} />
+                  </button>
+                ))}
+              </div>
+              <label>鎻忚竟<input type="color" value={shapeStrokeColor} onChange={(event) => setShapeStrokeColor(event.target.value)} /></label>
+              <label>濉厖<input type="color" value={shapeFillColor.slice(0, 7)} onChange={(event) => setShapeFillColor(`${event.target.value}33`)} /></label>
+              <label>绾垮<input type="range" min="1" max="18" value={shapeStrokeWidth} onChange={(event) => setShapeStrokeWidth(Number(event.target.value))} /></label>
             </> : null}
           </div>
         ) : null}
@@ -2134,7 +2164,7 @@ function CanvasWorkbench() {
         <div className="canvas-modal-backdrop" onClick={() => setMyCanvasOpen(false)}>
           <section className="canvas-modal" onClick={(event) => event.stopPropagation()}>
             <header>
-              <h2>我的画布</h2>
+              <h2>鎴戠殑鐢诲竷</h2>
               <button type="button" onClick={() => setMyCanvasOpen(false)}>Close</button>
             </header>
             <div className="canvas-card-grid">
@@ -2149,7 +2179,7 @@ function CanvasWorkbench() {
                       <small>nodes</small>
                     </div>
                     <h3>{item.title || item.canvasId}</h3>
-                    <p>{formatDateTime(item.updatedAtUtc)} · {nodeCount ?? 0} nodes · {drawingCount ?? 0} drawings</p>
+                    <p>{formatDateTime(item.updatedAtUtc)} 路 {nodeCount ?? 0} nodes 路 {drawingCount ?? 0} drawings</p>
                     <div>
                       <button type="button" onClick={() => onOpenCanvas(item.canvasId)} disabled={isCurrent}>Open</button>
                       {isCurrent ? <button type="button" onClick={onNewCanvas}>New</button> : null}
@@ -2167,7 +2197,7 @@ function CanvasWorkbench() {
         <div className="canvas-modal-backdrop" onClick={() => setGenerationHistoryOpen(false)}>
           <section className="canvas-modal generation-modal" onClick={(event) => event.stopPropagation()}>
             <header>
-              <h2>生成历史</h2>
+              <h2>鐢熸垚鍘嗗彶</h2>
               <button type="button" onClick={() => setGenerationHistoryOpen(false)}>Close</button>
             </header>
             <div className="generation-list">
@@ -2176,11 +2206,11 @@ function CanvasWorkbench() {
                   {item.preview ? item.type === 'video' ? <video src={item.preview} muted /> : <img src={item.preview} alt={item.title} /> : <div className="generation-empty" />}
                   <div>
                     <strong>{item.title}</strong>
-                    <span>{item.type} · {item.model || 'model'} · {formatDateTime(item.createdAtUtc)}</span>
+                    <span>{item.type} 路 {item.model || 'model'} 路 {formatDateTime(item.createdAtUtc)}</span>
                   </div>
                   <button type="button" onClick={() => locateGenerationNode(item.sourceRef)}>Locate</button>
                 </article>
-              )) : <p className="empty-modal-text">当前画布还没有图片或视频生成记录。</p>}
+              )) : <p className="empty-modal-text">No generation history yet.</p>}
             </div>
           </section>
         </div>

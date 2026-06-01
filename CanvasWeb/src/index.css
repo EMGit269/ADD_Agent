@@ -1269,6 +1269,7 @@ html, body, #root {
   gap: 8px;
   align-items: center;
   color: var(--button-fg);
+  transition: transform 180ms ease, opacity 180ms ease;
 }
 
 .toolbar-sections,
@@ -1285,6 +1286,8 @@ html, body, #root {
   background: var(--toolbar-bg);
   backdrop-filter: blur(22px);
   box-shadow: 0 18px 38px rgba(20, 30, 25, 0.12);
+  animation: toolbar-fade 160ms ease-out;
+  transition: border-color 160ms ease, background 160ms ease, box-shadow 180ms ease, transform 180ms ease;
 }
 
 .toolbar-sections button,
@@ -1301,6 +1304,22 @@ html, body, #root {
   place-items: center;
   gap: 2px;
   font-size: 0;
+  transition: transform 140ms ease, border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+.toolbar-sections button:hover,
+.toolbar-tools button:hover,
+.toolbar-node-palette button:hover,
+.shape-picker button:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.toolbar-sections button:active,
+.toolbar-tools button:active,
+.toolbar-node-palette button:active,
+.shape-picker button:active {
+  transform: translateY(0) scale(0.96);
 }
 
 .toolbar-icon {
@@ -1331,6 +1350,7 @@ html, body, #root {
   transform: translateX(-50%);
   grid-auto-flow: row;
   grid-auto-columns: auto;
+  transform-origin: 50% 100%;
 }
 
 .toolbar-node-palette {
@@ -1343,6 +1363,7 @@ html, body, #root {
   grid-auto-flow: column;
   grid-auto-columns: 38px;
   overflow-x: auto;
+  transform-origin: 50% 100%;
 }
 
 .toolbar-node-palette button {
@@ -1356,6 +1377,40 @@ html, body, #root {
   font-size: 0;
   display: grid;
   place-items: center;
+  transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.shape-picker {
+  display: grid;
+  grid-template-columns: repeat(3, 40px);
+  gap: 7px;
+}
+
+.shape-picker button {
+  width: 40px;
+  height: 36px;
+  border: 1px solid var(--button-border);
+  border-radius: 8px;
+  background: var(--button-bg);
+  color: var(--button-fg);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.shape-picker button.active {
+  border-color: rgba(104, 163, 255, 0.82);
+  background: rgba(83, 139, 230, 0.2);
+}
+
+@keyframes toolbar-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .toolbar-options label {
