@@ -335,6 +335,9 @@ namespace ADDGH
                     case "canvas_ai_image_config_request":
                         PostCanvasMessage("canvas_ai_image_config", BuildCanvasAiImageConfigPayload());
                         break;
+                    case "canvas_ai_image_request":
+                        _ = RunCanvasAiImageNodeAsync(payload);
+                        break;
                     case "canvas_prompt_optimize_request":
                         _ = OptimizeCanvasPromptNodeAsync(payload);
                         break;
@@ -603,6 +606,7 @@ namespace ADDGH
                 ["conversationTitle"] = GetCurrentCanvasConversationTitle(),
                 ["canvasId"] = canvasId,
                 ["canvasTitle"] = envelope["title"]?.ToString() ?? "Canvas",
+                ["currentUserName"] = Environment.UserName ?? "User",
                 ["canvasHistory"] = BuildCanvasHistoryItems(),
                 ["messages"] = BuildCanvasMessageItems(),
                 ["toolEvents"] = BuildCanvasToolItems(),
@@ -1025,7 +1029,9 @@ namespace ADDGH
                     {
                         ["canvasId"] = id,
                         ["title"] = root["title"]?.ToString() ?? id,
-                        ["updatedAtUtc"] = root["updatedAtUtc"]?.ToString() ?? File.GetLastWriteTimeUtc(path).ToString("o")
+                        ["updatedAtUtc"] = root["updatedAtUtc"]?.ToString() ?? File.GetLastWriteTimeUtc(path).ToString("o"),
+                        ["nodeCount"] = root["snapshot"]?["nodes"] is JArray nodes ? nodes.Count : 0,
+                        ["drawingCount"] = root["snapshot"]?["drawingItems"] is JArray drawingItems ? drawingItems.Count : 0
                     });
                 }
             }

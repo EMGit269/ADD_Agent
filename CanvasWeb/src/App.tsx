@@ -112,7 +112,25 @@ type CanvasHistoryItem = {
   canvasId: string
   title: string
   updatedAtUtc?: string
+  nodeCount?: number
+  drawingCount?: number
 }
+
+type ToolbarSection = 'menu' | 'draw' | 'display'
+type CanvasTool = 'select' | 'pen' | 'eraser' | 'shape' | 'text' | 'annotation' | 'sticky'
+type ShapeKind = 'rect' | 'ellipse' | 'line'
+
+type DrawingPoint = {
+  x: number
+  y: number
+}
+
+type DrawingItem =
+  | { id: string; kind: 'pen'; color: string; width: number; points: DrawingPoint[]; createdAtUtc: string }
+  | { id: string; kind: 'shape'; shape: ShapeKind; x: number; y: number; w: number; h: number; strokeColor: string; fillColor: string; strokeWidth: number; createdAtUtc: string }
+  | { id: string; kind: 'text'; x: number; y: number; w: number; h: number; text: string; createdAtUtc: string }
+  | { id: string; kind: 'annotation'; x: number; y: number; w: number; h: number; text: string; author: string; createdAtUtc: string }
+  | { id: string; kind: 'sticky'; x: number; y: number; w: number; h: number; text: string; author: string; createdAtUtc: string }
 
 type CanvasNode = {
   id: string
@@ -142,6 +160,7 @@ type LightweightSnapshot = {
   viewport: Viewport
   nodes: CanvasNode[]
   connections?: CanvasConnection[]
+  drawingItems?: DrawingItem[]
 }
 
 type DragState =
@@ -162,6 +181,7 @@ type PortPositionMap = Record<string, { x: number; y: number }>
 type CanvasSnapshotState = {
   nodes: CanvasNode[]
   connections: CanvasConnection[]
+  drawingItems: DrawingItem[]
   viewport: Viewport
   selectedSourceRef: string | null
   selectedSourceRefs: string[]
@@ -251,6 +271,7 @@ function CanvasWorkbench() {
   const [messages, setMessages] = useState<CanvasMessageItem[]>([])
   const [nodes, setNodes] = useState<CanvasNode[]>([])
   const [connections, setConnections] = useState<CanvasConnection[]>([])
+  const [drawingItems, setDrawingItems] = useState<DrawingItem[]>([])
   const [viewport, setViewport] = useState<Viewport>({ x: 80, y: 90, z: 1 })
   const [selectedSourceRef, setSelectedSourceRef] = useState<string | null>(null)
   const [selectedSourceRefs, setSelectedSourceRefs] = useState<string[]>([])
@@ -264,12 +285,28 @@ function CanvasWorkbench() {
   const [imagePreviewTitle, setImagePreviewTitle] = useState<string>('Image Preview')
   const [captureStatus, setCaptureStatus] = useState('')
   const [canvasManageOpen, setCanvasManageOpen] = useState(false)
+  const [activeToolbarSection, setActiveToolbarSection] = useState<ToolbarSection>('menu')
+  const [activeCanvasTool, setActiveCanvasTool] = useState<CanvasTool>('select')
+  const [penColor, setPenColor] = useState('#f4b942')
+  const [penWidth, setPenWidth] = useState(6)
+  const [eraserSize, setEraserSize] = useState(28)
+  const [shapeKind, setShapeKind] = useState<ShapeKind>('rect')
+  const [shapeStrokeColor, setShapeStrokeColor] = useState('#4ea5ff')
+  const [shapeFillColor, setShapeFillColor] = useState('#4ea5ff33')
+  const [shapeStrokeWidth, setShapeStrokeWidth] = useState(3)
+  const [myCanvasOpen, setMyCanvasOpen] = useState(false)
+  const [generationHistoryOpen, setGenerationHistoryOpen] = useState(false)
+  const [currentUserName, setCurrentUserName] = useState('User')
+  const [draftDrawingItem, setDraftDrawingItem] = useState<DrawingItem | null>(null)
   const [marqueeRect, setMarqueeRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const surfaceRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<DragState>(null)
+  const drawingDragRef = useRef<{ pointerId: number; item: DrawingItem } | null>(null)
   const saveTimerRef = useRef<number | null>(null)
   const nodesRef = useRef(nodes)
   const connectionsRef = useRef(connections)
+  const drawingItemsRef = useRef(drawingItems)
   const viewportRef = useRef(viewport)
   const selectedSourceRefRef = useRef<string | null>(selectedSourceRef)
   const selectedSourceRefsRef = useRef<string[]>(selectedSourceRefs)
@@ -294,6 +331,10 @@ function CanvasWorkbench() {
   useEffect(() => {
     connectionsRef.current = connections
   }, [connections])
+
+  useEffect(() => {
+    drawingItemsRef.current = drawingItems
+  }, [drawingItems])
 
   useEffect(() => {
     viewportRef.current = viewport
@@ -429,10 +470,12 @@ function CanvasWorkbench() {
         setCanvasId(nextCanvasId)
         setCanvasTitle(nextCanvasTitle)
         setCanvasHistory(Array.isArray(payload.canvasHistory) ? payload.canvasHistory : [])
+        setCurrentUserName(String(payload.currentUserName || 'User'))
         setInspectorSnapshot(payload.inspectorSnapshot ?? null)
         cardMetaRef.current = { ...savedMeta }
         if (savedSnapshot?.viewport) setViewport(normalizeViewport(savedSnapshot.viewport))
         if (Array.isArray(savedSnapshot?.connections)) setConnections(savedSnapshot.connections.map(normalizeConnection))
+        setDrawingItems(normalizeDrawingItems(savedSnapshot?.drawingItems ?? []))
 
         setNodes(reconcileTypedNodes(savedSnapshot?.nodes ?? []))
 
@@ -492,7 +535,7 @@ function CanvasWorkbench() {
         aiImageConfigRef.current = envelope.payload ?? null
         const pending = pendingAiImageRunRef.current
         pendingAiImageRunRef.current = null
-        if (pending) void runAiImageInBrowser(pending, aiImageConfigRef.current)
+        if (pending) runAiImageViaHost(pending)
         const pendingVideo = pendingAiVideoRunRef.current
         pendingAiVideoRunRef.current = null
         if (pendingVideo) void runAiVideoInBrowser(pendingVideo, aiImageConfigRef.current)
@@ -502,7 +545,7 @@ function CanvasWorkbench() {
     const handleMessage = (event: MessageEvent) => applyEnvelope(event.data as HostEnvelope)
     hostBridge?.addEventListener?.('message', handleMessage)
 
-    postHostMessage('canvas_ready', { version: 'lightweight-canvas-v1' })
+    postHostMessage('canvas_ready', { version: 'lightweight-canvas-v2-host-image-proxy' })
     if (!hostBridge) {
       const demoMessages = [
         {
@@ -588,6 +631,7 @@ function CanvasWorkbench() {
     return {
       nodes: cloneNodes(override.nodes ?? nodesRef.current),
       connections: cloneConnections(override.connections ?? connectionsRef.current),
+      drawingItems: cloneDrawingItems(override.drawingItems ?? drawingItemsRef.current),
       viewport: { ...(override.viewport ?? viewportRef.current) },
       selectedSourceRef: override.selectedSourceRef ?? selectedSourceRefRef.current,
       selectedSourceRefs: [...(override.selectedSourceRefs ?? selectedSourceRefsRef.current)],
@@ -597,11 +641,13 @@ function CanvasWorkbench() {
   function applySnapshotState(snapshot: CanvasSnapshotState, shouldSave = true) {
     nodesRef.current = cloneNodes(snapshot.nodes)
     connectionsRef.current = cloneConnections(snapshot.connections)
+    drawingItemsRef.current = cloneDrawingItems(snapshot.drawingItems)
     viewportRef.current = { ...snapshot.viewport }
     selectedSourceRefRef.current = snapshot.selectedSourceRef
     selectedSourceRefsRef.current = [...snapshot.selectedSourceRefs]
     setNodes(nodesRef.current)
     setConnections(connectionsRef.current)
+    setDrawingItems(drawingItemsRef.current)
     setViewport(viewportRef.current)
     setSelectedSourceRef(snapshot.selectedSourceRef)
     setSelectedSourceRefs([...snapshot.selectedSourceRefs])
@@ -631,6 +677,7 @@ function CanvasWorkbench() {
         viewport: viewportRef.current,
         nodes: nodesRef.current,
         connections: connectionsRef.current,
+        drawingItems: drawingItemsRef.current,
       }
       postHostMessage('document_snapshot_save', { canvasId: canvasIdRef.current, snapshot })
     }, 350)
@@ -652,6 +699,15 @@ function CanvasWorkbench() {
     setConnections((current) => {
       const resolved = dedupeConnections(typeof next === 'function' ? next(current) : next)
       connectionsRef.current = resolved
+      if (shouldSave) scheduleSave()
+      return resolved
+    })
+  }
+
+  function updateDrawingItems(next: DrawingItem[] | ((current: DrawingItem[]) => DrawingItem[]), shouldSave = true) {
+    setDrawingItems((current) => {
+      const resolved = typeof next === 'function' ? next(current) : next
+      drawingItemsRef.current = resolved
       if (shouldSave) scheduleSave()
       return resolved
     })
@@ -1098,12 +1154,7 @@ function CanvasWorkbench() {
       imageSize: normalizeNanoBananaImageSize(node.meta.imageSize ?? '4K'),
       image: imageInput,
     } as PendingAiImageRun & { imageSize: string }
-    if (aiImageConfigRef.current?.apiKey) {
-      void runAiImageInBrowser(run, aiImageConfigRef.current)
-    } else {
-      pendingAiImageRunRef.current = run
-      postHostMessage('canvas_ai_image_config_request', { canvasId: canvasIdRef.current })
-    }
+    runAiImageViaHost(run)
   }
 
   function onOptimizePromptNode(sourceRef: string) {
@@ -1182,26 +1233,21 @@ function CanvasWorkbench() {
   }
 
   async function runAiImageInBrowser(run: PendingAiImageRun, config: AiImageConfig | null) {
-    try {
-      if (!config?.apiKey) throw new Error(config?.error || 'Image API key is empty.')
-      const result = await createCanvasAiImage(run, config)
-      applyAiImageResult({
-        sourceRef: run.sourceRef,
-        success: true,
-        provider: config.provider,
-        model: config.model,
-        prompt: run.prompt,
-        size: run.size,
-        images: result.images,
-        generatedAtUtc: new Date().toISOString(),
-      })
-    } catch (error) {
-      applyAiImageResult({
-        sourceRef: run.sourceRef,
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      })
-    }
+    runAiImageViaHost(run)
+  }
+
+  function runAiImageViaHost(run: PendingAiImageRun) {
+    postHostMessage('canvas_ai_image_request', {
+      canvasId: canvasIdRef.current,
+      sourceRef: run.sourceRef,
+      prompt: run.prompt,
+      intent: run.intent,
+      aspectRatio: run.aspectRatio,
+      size: run.size,
+      count: run.count,
+      imageSize: (run as any).imageSize,
+      image: run.image,
+    })
   }
 
   function applyAiImageResult(payload: any) {
@@ -1481,6 +1527,128 @@ function CanvasWorkbench() {
     createTypedNodeAt(nodeType, center.x - 180, center.y - 120)
   }
 
+  async function onToolbarFileSelected(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    const center = screenToWorld(
+      surfaceRef.current?.clientWidth ? surfaceRef.current.clientWidth / 2 : 300,
+      surfaceRef.current?.clientHeight ? surfaceRef.current.clientHeight / 2 : 220,
+      viewportRef.current,
+    )
+    if (file.type.startsWith('image/')) {
+      const dataUrl = await readFileAsDataUrl(file)
+      createImageNodeAt(center.x - 180, center.y - 130, {
+        title: file.name || 'Image',
+        path: file.name || '',
+        dataUrl,
+        mimeType: file.type || getMimeTypeFromDataUrl(dataUrl) || 'image/png',
+      })
+      return
+    }
+    const sourceRef = `file_upload:${Date.now()}`
+    const meta = {
+      ...buildDefaultNodeMeta('file_upload', sourceRef),
+      title: file.name || 'File',
+      summary: `${file.type || 'file'} · ${formatBytes(file.size)}`,
+      body: file.name || '',
+      fileName: file.name || '',
+      mimeType: file.type || 'application/octet-stream',
+      fileSize: file.size,
+      userEditedTitle: true,
+    }
+    const node = createNode(meta, nodesRef.current.length, center.x - 170, center.y - 105, 'file_upload')
+    cardMetaRef.current[sourceRef] = meta
+    commitMutation((snapshot) => ({
+      ...snapshot,
+      nodes: [...snapshot.nodes, node],
+      selectedSourceRef: sourceRef,
+      selectedSourceRefs: [sourceRef],
+    }))
+  }
+
+  function drawingPointFromEvent(event: React.PointerEvent<HTMLElement>) {
+    const rect = surfaceRef.current?.getBoundingClientRect() ?? new DOMRect()
+    return screenToWorld(event.clientX - rect.left, event.clientY - rect.top, viewportRef.current)
+  }
+
+  function createDrawingItem(kind: CanvasTool, point: DrawingPoint): DrawingItem | null {
+    const createdAtUtc = new Date().toISOString()
+    const id = `drawing:${kind}:${Date.now()}`
+    if (kind === 'pen') return { id, kind: 'pen', color: penColor, width: penWidth, points: [point], createdAtUtc }
+    if (kind === 'shape') return { id, kind: 'shape', shape: shapeKind, x: point.x, y: point.y, w: 1, h: 1, strokeColor: shapeStrokeColor, fillColor: shapeFillColor, strokeWidth: shapeStrokeWidth, createdAtUtc }
+    if (kind === 'text') return { id, kind: 'text', x: point.x, y: point.y, w: 220, h: 76, text: 'Text', createdAtUtc }
+    if (kind === 'annotation') return { id, kind: 'annotation', x: point.x, y: point.y, w: 240, h: 92, text: 'Annotation', author: currentUserName || 'User', createdAtUtc }
+    if (kind === 'sticky') return { id, kind: 'sticky', x: point.x, y: point.y, w: 220, h: 150, text: 'Sticky note', author: currentUserName || 'User', createdAtUtc }
+    return null
+  }
+
+  function onDrawingPointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0 || activeCanvasTool === 'select') return
+    event.preventDefault()
+    event.stopPropagation()
+    const point = drawingPointFromEvent(event)
+    if (activeCanvasTool === 'eraser') {
+      const hit = findHitDrawingItem(drawingItemsRef.current, point, eraserSize / viewportRef.current.z)
+      if (!hit) return
+      pushHistorySnapshot(createSnapshotState())
+      updateDrawingItems((current) => current.filter((item) => item.id !== hit.id))
+      return
+    }
+    const item = createDrawingItem(activeCanvasTool, point)
+    if (!item) return
+    if (item.kind === 'text' || item.kind === 'annotation' || item.kind === 'sticky') {
+      pushHistorySnapshot(createSnapshotState())
+      updateDrawingItems((current) => [...current, item])
+      return
+    }
+    drawingDragRef.current = { pointerId: event.pointerId, item }
+    setDraftDrawingItem(item)
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  function onDrawingPointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    const drag = drawingDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    event.preventDefault()
+    const point = drawingPointFromEvent(event)
+    let next = drag.item
+    if (drag.item.kind === 'pen') {
+      next = { ...drag.item, points: [...drag.item.points, point] }
+    } else if (drag.item.kind === 'shape') {
+      next = { ...drag.item, w: point.x - drag.item.x, h: point.y - drag.item.y }
+    }
+    drawingDragRef.current = { ...drag, item: next }
+    setDraftDrawingItem(next)
+  }
+
+  function onDrawingPointerUp(event: React.PointerEvent<HTMLDivElement>) {
+    const drag = drawingDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    event.preventDefault()
+    drawingDragRef.current = null
+    setDraftDrawingItem(null)
+    pushHistorySnapshot(createSnapshotState())
+    updateDrawingItems((current) => [...current, drag.item])
+  }
+
+  function updateDrawingText(id: string, text: string) {
+    updateDrawingItems((current) => current.map((item) => item.id === id ? { ...item, text } as DrawingItem : item))
+  }
+
+  function locateGenerationNode(sourceRef: string) {
+    const node = nodesRef.current.find((item) => item.sourceRef === sourceRef)
+    if (!node) return
+    updateViewport({
+      ...viewportRef.current,
+      x: (surfaceRef.current?.clientWidth ?? 900) / 2 - (node.x + node.w / 2) * viewportRef.current.z,
+      y: (surfaceRef.current?.clientHeight ?? 650) / 2 - (node.y + node.h / 2) * viewportRef.current.z,
+    })
+    setSelectedSourceRef(sourceRef)
+    setSelectedSourceRefs([sourceRef])
+    setGenerationHistoryOpen(false)
+  }
+
   function onCollapse() {
     if (!selectedNode) return
     updateNodeMeta(selectedNode.sourceRef, { collapsed: !Boolean(selectedNode.meta.collapsed) })
@@ -1502,6 +1670,7 @@ function CanvasWorkbench() {
       viewport: viewportRef.current,
       nodes: nodesRef.current,
       connections: connectionsRef.current,
+      drawingItems: drawingItemsRef.current,
     }
     postHostMessage('document_snapshot_save', { canvasId: canvasIdRef.current, snapshot })
     postHostMessage('canvas_ready', { reason: 'manual-save' })
@@ -1658,6 +1827,9 @@ function CanvasWorkbench() {
     }
   }
 
+  const generationHistoryItems = useMemo(() => collectGenerationHistory(nodes), [nodes])
+  const drawingLayerItems = draftDrawingItem ? [...drawingItems, draftDrawingItem] : drawingItems
+
   return (
     <div className={`app-shell ${isDarkMode ? 'theme-dark' : 'theme-light'}`}>
       <div ref={surfaceRef} className="light-canvas" onDragOver={onCanvasDragOver} onDrop={onCanvasDrop}>
@@ -1688,40 +1860,109 @@ function CanvasWorkbench() {
           <Background gap={22} size={1.35} color={isDarkMode ? 'rgba(176,190,181,0.34)' : 'rgba(82,96,88,0.28)'} />
           <Controls showZoom showFitView={false} showInteractive={false} />
         </ReactFlow>
+        <div
+          className={`drawing-layer ${activeCanvasTool === 'select' ? 'drawing-layer-passive' : 'drawing-layer-active'}`}
+          onPointerDown={onDrawingPointerDown}
+          onPointerMove={onDrawingPointerMove}
+          onPointerUp={onDrawingPointerUp}
+          onPointerCancel={onDrawingPointerUp}
+        >
+          <svg className="drawing-svg">
+            <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.z})`}>
+              {drawingLayerItems.map((item) => renderDrawingSvgItem(item))}
+            </g>
+          </svg>
+          <div className="drawing-html-layer" style={{ transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.z})` }}>
+            {drawingItems.map((item) => renderDrawingHtmlItem(item, updateDrawingText, currentUserName))}
+          </div>
+        </div>
       </div>
 
-      <button className="canvas-code-switch" type="button" onClick={() => postHostMessage('canvas_switch_to_code', { canvasId: canvasIdRef.current })}>
-        Code
-      </button>
-
-      <div className="canvas-file-menu">
-        <button type="button" onClick={() => setCanvasManageOpen((current) => !current)}>Canvas</button>
-        {canvasManageOpen ? (
-          <div className="canvas-file-popover">
-            <div className="canvas-file-title">{canvasTitle || 'Canvas'}</div>
-            <select value={canvasId} onChange={(event) => onOpenCanvas(event.target.value)}>
-              {canvasHistory.length ? canvasHistory.map((item) => (
-                <option key={item.canvasId} value={item.canvasId}>{item.title || item.canvasId}</option>
-              )) : <option value={canvasId}>{canvasTitle || canvasId}</option>}
-            </select>
-            <div className="canvas-file-actions">
-              <button type="button" onClick={saveCanvasNow}>Save</button>
-              <button type="button" onClick={onNewCanvas}>New</button>
-              <button type="button" onClick={onDeleteCanvas} disabled={canvasHistory.length <= 1 && canvasId === 'canvas-default'}>Delete</button>
-            </div>
+      <input ref={fileInputRef} className="hidden-file-input" type="file" onChange={onToolbarFileSelected} />
+      <aside className="canvas-toolbar">
+        <div className="toolbar-sections">
+          {(['menu', 'draw', 'display'] as ToolbarSection[]).map((section) => (
+            <button
+              key={section}
+              type="button"
+              className={activeToolbarSection === section ? 'active' : ''}
+              onClick={() => {
+                setActiveToolbarSection(section)
+                if (section === 'menu') setActiveCanvasTool('select')
+              }}
+              title={section === 'menu' ? '菜单' : section === 'draw' ? '绘图' : '显示'}
+            >
+              {section === 'menu' ? '☰' : section === 'draw' ? '✎' : '◉'}
+              <span>{section === 'menu' ? '菜单' : section === 'draw' ? '绘图' : '显示'}</span>
+            </button>
+          ))}
+        </div>
+        <div className="toolbar-tools">
+          {activeToolbarSection === 'menu' ? (
+            <>
+              <button type="button" className={canvasManageOpen ? 'active' : ''} onClick={() => setCanvasManageOpen((current) => !current)}>＋<span>添加节点</span></button>
+              <button type="button" onClick={() => fileInputRef.current?.click()}>⇧<span>上传文件</span></button>
+              <button type="button" onClick={saveCanvasNow}>▣<span>保存画布</span></button>
+              <button type="button" onClick={() => setMyCanvasOpen(true)}>▤<span>我的画布</span></button>
+              <button type="button" onClick={() => setGenerationHistoryOpen(true)}>◎<span>生成历史</span></button>
+              <button type="button" onClick={() => postHostMessage('canvas_switch_to_code', { canvasId: canvasIdRef.current })}>⌘<span>代码视图</span></button>
+            </>
+          ) : null}
+          {activeToolbarSection === 'draw' ? (
+            <>
+              <button type="button" className={activeCanvasTool === 'pen' ? 'active' : ''} onClick={() => setActiveCanvasTool('pen')}>✎<span>画笔</span></button>
+              <button type="button" className={activeCanvasTool === 'eraser' ? 'active' : ''} onClick={() => setActiveCanvasTool('eraser')}>⌫<span>橡皮</span></button>
+              <button type="button" className={activeCanvasTool === 'shape' ? 'active' : ''} onClick={() => setActiveCanvasTool('shape')}>□<span>形状</span></button>
+              <button type="button" className={activeCanvasTool === 'text' ? 'active' : ''} onClick={() => setActiveCanvasTool('text')}>T<span>文本框</span></button>
+            </>
+          ) : null}
+          {activeToolbarSection === 'display' ? (
+            <>
+              <button type="button" className={activeCanvasTool === 'annotation' ? 'active' : ''} onClick={() => setActiveCanvasTool('annotation')}>※<span>批注</span></button>
+              <button type="button" className={activeCanvasTool === 'sticky' ? 'active' : ''} onClick={() => setActiveCanvasTool('sticky')}>▨<span>便签</span></button>
+              <button type="button" onClick={onFit}>⌖<span>适配</span></button>
+              <button type="button" onClick={() => setThemeMode((current) => current === 'dark' ? 'light' : 'dark')}>{isDarkMode ? '☀' : '●'}<span>{isDarkMode ? '浅色' : '深色'}</span></button>
+              <button type="button" onClick={onCaptureRhinoView}>▧<span>捕获 Rhino</span></button>
+            </>
+          ) : null}
+        </div>
+        {activeToolbarSection === 'menu' && canvasManageOpen ? (
+          <div className="toolbar-node-palette">
+            {([
+              ['prompt', 'Prompt'],
+              ['file_upload', 'File'],
+              ['code', 'Code'],
+              ['panel', 'Panel'],
+              ['image', 'Image'],
+              ['gen_img', 'AI Image'],
+              ['gen_video', 'AI Video'],
+              ['slider', 'Slider'],
+              ['c_sharp', 'C#'],
+              ['note', 'Note'],
+            ] as Array<[CanvasNodeType, string]>).map(([nodeType, label]) => (
+              <button key={nodeType} type="button" onClick={() => {
+                onAddTypedNode(nodeType)
+                setCanvasManageOpen(false)
+              }}>{label}</button>
+            ))}
           </div>
         ) : null}
-      </div>
-
-      <div className="floating-toolbar">
-        <button onClick={() => setThemeMode((current) => current === 'dark' ? 'light' : 'dark')}>
-          {isDarkMode ? 'Light' : 'Dark'}
-        </button>
-        <button onClick={onFit}>Fit</button>
-        <button onClick={onCaptureRhinoView}>Capture Rhino</button>
-        <button onClick={onNewNote}>Note</button>
-        <button onClick={onCollapse} disabled={!selectedNode}>Collapse</button>
-      </div>
+        {activeToolbarSection === 'draw' ? (
+          <div className="toolbar-options">
+            {activeCanvasTool === 'pen' ? <>
+              <label>颜色<input type="color" value={penColor} onChange={(event) => setPenColor(event.target.value)} /></label>
+              <label>粗细<input type="range" min="1" max="32" value={penWidth} onChange={(event) => setPenWidth(Number(event.target.value))} /></label>
+            </> : null}
+            {activeCanvasTool === 'eraser' ? <label>大小<input type="range" min="8" max="90" value={eraserSize} onChange={(event) => setEraserSize(Number(event.target.value))} /></label> : null}
+            {activeCanvasTool === 'shape' ? <>
+              <select value={shapeKind} onChange={(event) => setShapeKind(event.target.value as ShapeKind)}><option value="rect">矩形</option><option value="ellipse">椭圆</option><option value="line">线</option></select>
+              <label>描边<input type="color" value={shapeStrokeColor} onChange={(event) => setShapeStrokeColor(event.target.value)} /></label>
+              <label>填充<input type="color" value={shapeFillColor.slice(0, 7)} onChange={(event) => setShapeFillColor(`${event.target.value}33`)} /></label>
+              <label>线宽<input type="range" min="1" max="18" value={shapeStrokeWidth} onChange={(event) => setShapeStrokeWidth(Number(event.target.value))} /></label>
+            </> : null}
+          </div>
+        ) : null}
+      </aside>
 
       <div className="status-pill">
         <span>{canvasTitle}</span>
@@ -1762,6 +2003,62 @@ function CanvasWorkbench() {
               <button onClick={() => runContextMenuAction(() => contextMenu.sourceRef ? deleteNodeBySourceRef(contextMenu.sourceRef) : undefined)}>Delete</button>
             </>
           )}
+        </div>
+      ) : null}
+
+      {myCanvasOpen ? (
+        <div className="canvas-modal-backdrop" onClick={() => setMyCanvasOpen(false)}>
+          <section className="canvas-modal" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <h2>我的画布</h2>
+              <button type="button" onClick={() => setMyCanvasOpen(false)}>Close</button>
+            </header>
+            <div className="canvas-card-grid">
+              {(canvasHistory.length ? canvasHistory : [{ canvasId, title: canvasTitle }]).map((item) => {
+                const isCurrent = item.canvasId === canvasId
+                const nodeCount = isCurrent ? nodes.length : item.nodeCount
+                const drawingCount = isCurrent ? drawingItems.length : item.drawingCount
+                return (
+                  <article key={item.canvasId} className={`canvas-snapshot-card${isCurrent ? ' active' : ''}`}>
+                    <div className="canvas-snapshot-thumb">
+                      <span>{nodeCount ?? 0}</span>
+                      <small>nodes</small>
+                    </div>
+                    <h3>{item.title || item.canvasId}</h3>
+                    <p>{formatDateTime(item.updatedAtUtc)} · {nodeCount ?? 0} nodes · {drawingCount ?? 0} drawings</p>
+                    <div>
+                      <button type="button" onClick={() => onOpenCanvas(item.canvasId)} disabled={isCurrent}>Open</button>
+                      {isCurrent ? <button type="button" onClick={onNewCanvas}>New</button> : null}
+                      {isCurrent ? <button type="button" onClick={onDeleteCanvas}>Delete</button> : null}
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {generationHistoryOpen ? (
+        <div className="canvas-modal-backdrop" onClick={() => setGenerationHistoryOpen(false)}>
+          <section className="canvas-modal generation-modal" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <h2>生成历史</h2>
+              <button type="button" onClick={() => setGenerationHistoryOpen(false)}>Close</button>
+            </header>
+            <div className="generation-list">
+              {generationHistoryItems.length ? generationHistoryItems.map((item) => (
+                <article key={item.id} className="generation-row">
+                  {item.preview ? item.type === 'video' ? <video src={item.preview} muted /> : <img src={item.preview} alt={item.title} /> : <div className="generation-empty" />}
+                  <div>
+                    <strong>{item.title}</strong>
+                    <span>{item.type} · {item.model || 'model'} · {formatDateTime(item.createdAtUtc)}</span>
+                  </div>
+                  <button type="button" onClick={() => locateGenerationNode(item.sourceRef)}>Locate</button>
+                </article>
+              )) : <p className="empty-modal-text">当前画布还没有图片或视频生成记录。</p>}
+            </div>
+          </section>
         </div>
       ) : null}
 
@@ -2086,7 +2383,103 @@ function parseSnapshot(value: any): LightweightSnapshot | null {
     viewport: normalizeViewport(value.viewport),
     nodes,
     connections: Array.isArray(value.connections) ? value.connections.map(normalizeConnection) : [],
+    drawingItems: normalizeDrawingItems(value.drawingItems),
   }
+}
+
+function normalizeDrawingItems(value: any): DrawingItem[] {
+  if (!Array.isArray(value)) return []
+  return value.map((item) => {
+    const kind = item?.kind
+    const createdAtUtc = String(item?.createdAtUtc || new Date().toISOString())
+    const id = String(item?.id || `drawing:${kind || 'item'}:${Date.now()}`)
+    if (kind === 'pen') {
+      const points = Array.isArray(item.points) ? item.points.map((point: any) => ({ x: numberOr(point?.x, undefined, 0), y: numberOr(point?.y, undefined, 0) })) : []
+      return { id, kind: 'pen', color: String(item.color || '#f4b942'), width: numberOr(item.width, undefined, 4), points, createdAtUtc } as DrawingItem
+    }
+    if (kind === 'shape') {
+      const shape: ShapeKind = item.shape === 'ellipse' || item.shape === 'line' ? item.shape : 'rect'
+      return { id, kind: 'shape', shape, x: numberOr(item.x, undefined, 0), y: numberOr(item.y, undefined, 0), w: numberOr(item.w, undefined, 1), h: numberOr(item.h, undefined, 1), strokeColor: String(item.strokeColor || '#4ea5ff'), fillColor: String(item.fillColor || 'transparent'), strokeWidth: numberOr(item.strokeWidth, undefined, 2), createdAtUtc } as DrawingItem
+    }
+    if (kind === 'text' || kind === 'annotation' || kind === 'sticky') {
+      return { id, kind, x: numberOr(item.x, undefined, 0), y: numberOr(item.y, undefined, 0), w: numberOr(item.w, undefined, kind === 'sticky' ? 220 : 240), h: numberOr(item.h, undefined, kind === 'sticky' ? 150 : 90), text: String(item.text || ''), author: String(item.author || 'User'), createdAtUtc } as DrawingItem
+    }
+    return null
+  }).filter(Boolean) as DrawingItem[]
+}
+
+function cloneDrawingItems(items: DrawingItem[]) {
+  return items.map((item) => item.kind === 'pen' ? { ...item, points: item.points.map((point) => ({ ...point })) } : { ...item }) as DrawingItem[]
+}
+
+function renderDrawingSvgItem(item: DrawingItem) {
+  if (item.kind === 'pen') {
+    if (item.points.length < 2) return null
+    return <polyline key={item.id} points={item.points.map((point) => `${point.x},${point.y}`).join(' ')} fill="none" stroke={item.color} strokeWidth={item.width} strokeLinecap="round" strokeLinejoin="round" />
+  }
+  if (item.kind === 'shape') {
+    const x = Math.min(item.x, item.x + item.w)
+    const y = Math.min(item.y, item.y + item.h)
+    const w = Math.abs(item.w)
+    const h = Math.abs(item.h)
+    if (item.shape === 'ellipse') return <ellipse key={item.id} cx={x + w / 2} cy={y + h / 2} rx={w / 2} ry={h / 2} fill={item.fillColor} stroke={item.strokeColor} strokeWidth={item.strokeWidth} />
+    if (item.shape === 'line') return <line key={item.id} x1={item.x} y1={item.y} x2={item.x + item.w} y2={item.y + item.h} stroke={item.strokeColor} strokeWidth={item.strokeWidth} strokeLinecap="round" />
+    return <rect key={item.id} x={x} y={y} width={w} height={h} fill={item.fillColor} stroke={item.strokeColor} strokeWidth={item.strokeWidth} rx={4} />
+  }
+  return null
+}
+
+function renderDrawingHtmlItem(item: DrawingItem, onTextChange: (id: string, text: string) => void, fallbackAuthor: string) {
+  if (item.kind !== 'text' && item.kind !== 'annotation' && item.kind !== 'sticky') return null
+  const className = `drawing-text-item drawing-${item.kind}`
+  return (
+    <div key={item.id} className={className} style={{ left: item.x, top: item.y, width: item.w, height: item.h }} onPointerDown={(event) => event.stopPropagation()}>
+      {item.kind !== 'text' ? <div className="drawing-author">{item.author || fallbackAuthor || 'User'}</div> : null}
+      <textarea value={item.text} onChange={(event) => onTextChange(item.id, event.target.value)} />
+    </div>
+  )
+}
+
+function findHitDrawingItem(items: DrawingItem[], point: DrawingPoint, radius: number) {
+  return [...items].reverse().find((item) => {
+    if (item.kind === 'pen') return item.points.some((candidate) => distance(candidate, point) <= radius)
+    const bounds = drawingBounds(item)
+    return point.x >= bounds.x - radius && point.x <= bounds.x + bounds.w + radius && point.y >= bounds.y - radius && point.y <= bounds.y + bounds.h + radius
+  })
+}
+
+function drawingBounds(item: DrawingItem) {
+  if (item.kind === 'pen') {
+    const xs = item.points.map((point) => point.x)
+    const ys = item.points.map((point) => point.y)
+    return { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) }
+  }
+  if (item.kind === 'shape') return { x: Math.min(item.x, item.x + item.w), y: Math.min(item.y, item.y + item.h), w: Math.abs(item.w), h: Math.abs(item.h) }
+  return { x: item.x, y: item.y, w: item.w, h: item.h }
+}
+
+function distance(a: DrawingPoint, b: DrawingPoint) {
+  return Math.hypot(a.x - b.x, a.y - b.y)
+}
+
+function collectGenerationHistory(nodes: CanvasNode[]) {
+  return nodes.flatMap((node) => {
+    if (node.nodeType !== 'gen_img' && node.nodeType !== 'gen_video') return []
+    const meta = node.meta ?? {}
+    const images = Array.isArray(meta.images) ? meta.images : []
+    const base = {
+      sourceRef: node.sourceRef,
+      title: String(meta.title || (node.nodeType === 'gen_video' ? 'AI Video' : 'AI Image')),
+      model: String(meta.model || meta.lastModel || ''),
+      createdAtUtc: String(meta.generatedAtUtc || meta.updatedAtUtc || ''),
+    }
+    if (node.nodeType === 'gen_video') {
+      const preview = String(meta.videoUrl || meta.lastFrameUrl || meta.previewUrl || '')
+      return preview ? [{ ...base, id: `${node.sourceRef}:video`, type: 'video', preview }] : []
+    }
+    const previews = images.length ? images.map((image: any, index: number) => ({ ...base, id: `${node.sourceRef}:image:${index}`, type: 'image', preview: String(image.dataUrl || image.url || image.src || '') })) : [{ ...base, id: `${node.sourceRef}:image`, type: 'image', preview: String(meta.imageDataUrl || meta.imagePath || '') }]
+    return previews.filter((item) => item.preview)
+  })
 }
 
 function normalizeNode(node: any): CanvasNode {
@@ -2476,75 +2869,7 @@ function parseAiImageSize(value: unknown) {
 }
 
 async function createCanvasAiImage(run: PendingAiImageRun, config: AiImageConfig) {
-  const endpoint = buildImageEndpoint(config.baseUrl ?? '', run.intent === 'edit')
-  const response = run.intent === 'edit' && run.image
-    ? await sendCanvasImageEditRequest(endpoint, run, config)
-    : await sendCanvasImageGenerationRequest(endpoint, run, config)
-
-  const responseText = await response.text()
-  if (!response.ok) {
-    throw new Error(`Image request failed: HTTP ${response.status} ${response.statusText}\n${responseText.slice(0, 1200)}`)
-  }
-  return parseCanvasImageResponse(responseText, run, config)
-}
-
-function buildImageEndpoint(baseUrl: string, isEdit: boolean) {
-  let raw = String(baseUrl || '').trim().replace(/\/+$/, '')
-  if (!raw) raw = 'https://api.openai.com/v1'
-
-  if (/\/v1\/chat\/completions$/i.test(raw)) raw = raw.replace(/\/v1\/chat\/completions$/i, '')
-  if (/\/v1\/images\/(generations|edits)$/i.test(raw)) {
-    raw = raw.replace(/\/v1\/images\/(generations|edits)$/i, '')
-  }
-
-  if (/\/v1$/i.test(raw)) return `${raw}${isEdit ? '/images/edits' : '/images/generations'}`
-  return `${raw}${isEdit ? '/v1/images/edits' : '/v1/images/generations'}`
-}
-
-async function sendCanvasImageGenerationRequest(endpoint: string, run: PendingAiImageRun, config: AiImageConfig) {
-  const body: Record<string, any> = {
-    model: config.model ?? '',
-    prompt: run.prompt,
-    response_format: 'url',
-  }
-  if (run.aspectRatio) body.aspect_ratio = run.aspectRatio
-  body.image_size = normalizeNanoBananaImageSize((run as any).imageSize ?? '4K')
-  if (run.count) body.n = clamp(Math.round(run.count), 1, 4)
-  if (run.image) {
-    const imageDataUrl = await resolveImageDataUrl(run.image)
-    if (imageDataUrl) body.image = [imageDataUrl]
-  }
-
-  return fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${config.apiKey ?? ''}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  })
-}
-
-async function sendCanvasImageEditRequest(endpoint: string, run: PendingAiImageRun, config: AiImageConfig) {
-  const imageDataUrl = await resolveImageDataUrl(run.image)
-  if (!imageDataUrl) throw new Error('AI image edit requires a connected image input.')
-  const { blob, mimeType } = dataUrlToBlob(imageDataUrl)
-  const form = new FormData()
-  form.append('model', config.model ?? '')
-  form.append('prompt', run.prompt)
-  form.append('response_format', 'url')
-  if (run.aspectRatio) form.append('aspect_ratio', run.aspectRatio)
-  form.append('image_size', normalizeNanoBananaImageSize((run as any).imageSize ?? '4K'))
-  if (run.count) form.append('n', String(clamp(Math.round(run.count), 1, 4)))
-  form.append('image', blob, `canvas-input.${mimeTypeToExtension(mimeType)}`)
-
-  return fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${config.apiKey ?? ''}`,
-    },
-    body: form,
-  })
+  throw new Error('Canvas AI image generation must be handled by the host proxy.')
 }
 
 function normalizeNanoBananaImageSize(value: unknown) {
@@ -2792,6 +3117,25 @@ function readFileAsDataUrl(file: File) {
     reader.onerror = () => reject(reader.error ?? new Error('Unable to read dropped image.'))
     reader.readAsDataURL(file)
   })
+}
+
+function formatBytes(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let size = value
+  let index = 0
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024
+    index += 1
+  }
+  return `${size.toFixed(index === 0 ? 0 : 1)} ${units[index]}`
+}
+
+function formatDateTime(value?: string) {
+  if (!value) return 'No date'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString()
 }
 
 function renderPorts(

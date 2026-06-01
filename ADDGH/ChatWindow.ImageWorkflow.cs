@@ -5,6 +5,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 
@@ -71,9 +72,441 @@ namespace ADDGH
                 ["baseUrl"] = providerSettings?.BaseUrl ?? "",
                 ["model"] = providerSettings?.ModelName ?? "",
                 ["apiKey"] = providerSettings?.ApiKey ?? "",
+                ["hostProxy"] = true,
                 ["proxyUrl"] = providerSettings?.ProxyUrl ?? "",
                 ["error"] = string.IsNullOrWhiteSpace(providerSettings?.ApiKey) ? "Image API key is empty." : ""
             };
+        }
+
+        private static async Task RunCanvasAiImageNodeAsync(JObject payload)
+        {
+            string sourceRef = payload?["sourceRef"]?.ToString() ?? "";
+            try
+            {
+                string prompt = payload?["prompt"]?.ToString() ?? "";
+                string intent = payload?["intent"]?.ToString() ?? "generate";
+                string aspectRatio = payload?["aspectRatio"]?.ToString() ?? "";
+                int count = Math.Max(1, Math.Min(4, payload?["count"]?.ToObject<int?>() ?? 1));
+                string size = payload?["size"]?.ToString() ?? "";
+                string imageSize = payload?["imageSize"]?.ToString() ?? "";
+                string imageDataUrl = ExtractCanvasImageDataUrl(payload?["image"]);
+
+                using (var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(8)))
+                {
+                    var result = await RunCanvasAiImageGenerationAsync(
+                        prompt,
+                        intent,
+                        aspectRatio,
+                        count,
+                        size,
+                        imageSize,
+                        imageDataUrl,
+                        cts.Token).ConfigureAwait(false);
+
+                    var images = new JArray((result.Images ?? new List<GeneratedImageRecord>()).Select(item => new JObject
+                    {
+                        ["dataUrl"] = BuildImageDataUrl(item.Path, item.MimeType),
+                        ["path"] = item.Path,
+                        ["mimeType"] = item.MimeType,
+                        ["prompt"] = item.Prompt,
+                        ["provider"] = item.Provider,
+                        ["model"] = item.Model,
+                        ["intent"] = item.Intent
+                    }));
+
+                    PostCanvasMessage("canvas_ai_image_result", new JObject
+                    {
+                        ["sourceRef"] = sourceRef,
+                        ["success"] = result.Success,
+                        ["provider"] = result.Provider,
+                        ["model"] = result.Model,
+                        ["prompt"] = result.Prompt,
+                        ["size"] = size,
+                        ["images"] = images,
+                        ["generatedAtUtc"] = DateTime.UtcNow.ToString("o"),
+                        ["error"] = result.Error ?? ""
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("RunCanvasAiImageNodeAsync failed: " + ex.Message);
+                PostCanvasMessage("canvas_ai_image_result", new JObject
+                {
+                    ["sourceRef"] = sourceRef,
+                    ["success"] = false,
+                    ["error"] = ex.Message
+                });
+            }
+        }
+
+        private static async Task<AiImageExecutionResult> RunCanvasAiImageGenerationAsync(string prompt, string intent, string aspectRatio, int count, string size, string imageSize, string imageDataUrl, System.Threading.CancellationToken ct)
+        {
+            var providerSettings = GetImageProviderRuntimeSettings();
+            string normalizedIntent = string.Equals(intent, "edit", StringComparison.OrdinalIgnoreCase) ? "edit" : "generate";
+            var outcome = new AiImageExecutionResult
+            {
+                Success = false,
+                Intent = normalizedIntent,
+                Provider = providerSettings?.Config?.DisplayName ?? "",
+                Model = providerSettings?.ModelName ?? "",
+                Prompt = prompt ?? "",
+                Error = ""
+            };
+
+            if (string.IsNullOrWhiteSpace(providerSettings?.ApiKey))
+            {
+                outcome.Error = BuildProviderDiagnostic(providerSettings, "Image generation failed: image API key is empty.");
+                return outcome;
+            }
+
+            try
+            {
+                if (!IsGeminiNativeImageModel(providerSettings.ModelName))
+                {
+                    outcome.Error = BuildProviderDiagnostic(providerSettings, "Canvas image generation failed: canvas AI Image only supports Gemini native image models.");
+                    return outcome;
+                }
+
+                string usedEndpoint = BuildGeminiNativeImageEndpoint(providerSettings.BaseUrl, providerSettings.ModelName);
+                string finalResponse = await PostCanvasGeminiNativeImageAsync(providerSettings, usedEndpoint, prompt, imageDataUrl, ct).ConfigureAwait(false);
+                outcome.Images = await SaveGeneratedImagesFromResponseAsync(finalResponse, prompt, normalizedIntent, providerSettings, ct).ConfigureAwait(false);
+                if (outcome.Images.Count == 0)
+                {
+                    outcome.Error = BuildProviderDiagnostic(providerSettings, "Image generation failed: request succeeded but no image data was found.", finalResponse, usedEndpoint);
+                    return outcome;
+                }
+
+                outcome.Success = true;
+                return outcome;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                outcome.Error = BuildProviderDiagnostic(providerSettings, "Canvas image generation failed: Gemini native request failed.", FormatExceptionChain(ex));
+                return outcome;
+            }
+        }
+
+        private static JObject BuildCanvasImageTaskRequestBody(ProviderRuntimeSettings providerSettings, string prompt, string intent, string aspectRatio, int count, string size, string imageSize, string imageDataUrl)
+        {
+            var body = new JObject
+            {
+                ["model"] = providerSettings.ModelName,
+                ["prompt"] = prompt ?? "",
+                ["n"] = Math.Max(1, Math.Min(4, count))
+            };
+
+            if (!string.IsNullOrWhiteSpace(size))
+                body["size"] = size.Trim();
+            if (!string.IsNullOrWhiteSpace(aspectRatio))
+                body["aspect_ratio"] = aspectRatio.Trim();
+            if (!string.IsNullOrWhiteSpace(imageSize))
+                body["image_size"] = imageSize.Trim();
+            if (!string.IsNullOrWhiteSpace(imageDataUrl))
+                body["image"] = new JArray(imageDataUrl);
+            if (string.Equals(intent, "edit", StringComparison.OrdinalIgnoreCase))
+                body["intent"] = "edit";
+
+            return body;
+        }
+
+        private static bool IsImageTaskModel(string modelName)
+        {
+            string model = (modelName ?? "").Trim();
+            return model.Equals("image2", StringComparison.OrdinalIgnoreCase)
+                || model.Equals("gpt-image-2", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsGeminiNativeImageModel(string modelName)
+        {
+            string model = (modelName ?? "").Trim();
+            return model.StartsWith("gemini-", StringComparison.OrdinalIgnoreCase)
+                && model.IndexOf("image", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static async Task<string> PostCanvasGeminiNativeImageAsync(ProviderRuntimeSettings providerSettings, string endpoint, string prompt, string imageDataUrl, System.Threading.CancellationToken ct)
+        {
+            var parts = new JArray
+            {
+                new JObject
+                {
+                    ["text"] = prompt ?? ""
+                }
+            };
+
+            if (!string.IsNullOrWhiteSpace(imageDataUrl))
+            {
+                string mimeType = "image/png";
+                string data = ExtractBase64Payload(imageDataUrl, out mimeType);
+                if (!string.IsNullOrWhiteSpace(data))
+                {
+                    parts.Add(new JObject
+                    {
+                        ["inline_data"] = new JObject
+                        {
+                            ["mime_type"] = mimeType,
+                            ["data"] = data
+                        }
+                    });
+                }
+            }
+
+            var body = new JObject
+            {
+                ["contents"] = new JArray
+                {
+                    new JObject
+                    {
+                        ["role"] = "user",
+                        ["parts"] = parts
+                    }
+                }
+            };
+
+            using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
+            {
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", providerSettings.ApiKey);
+                request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+                request.Content = new StringContent(body.ToString(), Encoding.UTF8, "application/json");
+
+                using (var response = await GetConfiguredHttpClient(providerSettings).SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false))
+                {
+                    string text = await ReadResponseTextAsync(response, ct).ConfigureAwait(false);
+                    if (!response.IsSuccessStatusCode)
+                        throw new Exception("POST " + endpoint + " returned HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase + "\n" + text);
+                    ParseJsonObjectResponse(text, "POST " + endpoint);
+                    return text;
+                }
+            }
+        }
+
+        private static async Task<string> PostImageChatCompletionAsync(ProviderRuntimeSettings providerSettings, string endpoint, JObject imageBody, string imageDataUrl, System.Threading.CancellationToken ct)
+        {
+            var content = new JArray
+            {
+                new JObject
+                {
+                    ["type"] = "text",
+                    ["text"] = imageBody["prompt"]?.ToString() ?? ""
+                }
+            };
+
+            if (!string.IsNullOrWhiteSpace(imageDataUrl))
+            {
+                content.Add(new JObject
+                {
+                    ["type"] = "image_url",
+                    ["image_url"] = new JObject { ["url"] = imageDataUrl }
+                });
+            }
+
+            var body = new JObject
+            {
+                ["model"] = providerSettings.ModelName,
+                ["stream"] = false,
+                ["messages"] = new JArray
+                {
+                    new JObject
+                    {
+                        ["role"] = "user",
+                        ["content"] = content
+                    }
+                }
+            };
+
+            using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
+            {
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", providerSettings.ApiKey);
+                request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+                request.Content = new StringContent(body.ToString(), Encoding.UTF8, "application/json");
+
+                using (var response = await GetConfiguredHttpClient(providerSettings).SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false))
+                {
+                    string text = await ReadResponseTextAsync(response, ct).ConfigureAwait(false);
+                    if (!response.IsSuccessStatusCode)
+                        throw new Exception("POST " + endpoint + " returned HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase + "\n" + text);
+                    ParseJsonObjectResponse(text, "POST " + endpoint);
+                    return text;
+                }
+            }
+        }
+
+        private static async Task<JObject> PostImageTaskAsync(ProviderRuntimeSettings providerSettings, string endpoint, JObject body, System.Threading.CancellationToken ct)
+        {
+            using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
+            {
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", providerSettings.ApiKey);
+                request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+                request.Content = new StringContent(body.ToString(), Encoding.UTF8, "application/json");
+
+                using (var response = await GetConfiguredHttpClient(providerSettings).SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false))
+                {
+                    string text = await ReadResponseTextAsync(response, ct).ConfigureAwait(false);
+                    if (!response.IsSuccessStatusCode)
+                        throw new Exception("POST " + endpoint + " returned HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase + "\n" + text);
+                    return ParseJsonObjectResponse(text, "POST " + endpoint);
+                }
+            }
+        }
+
+        private static async Task<string> PollImageTaskAsync(ProviderRuntimeSettings providerSettings, string taskEndpoint, string taskId, System.Threading.CancellationToken ct)
+        {
+            string url = taskEndpoint.TrimEnd('/') + "/" + Uri.EscapeDataString(taskId);
+            JObject last = null;
+            for (int attempt = 0; attempt < 120; attempt++)
+            {
+                if (attempt > 0)
+                    await Task.Delay(TimeSpan.FromSeconds(4), ct).ConfigureAwait(false);
+
+                using (var request = new HttpRequestMessage(HttpMethod.Get, url))
+                {
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", providerSettings.ApiKey);
+                    request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+                    using (var response = await GetConfiguredHttpClient(providerSettings).SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false))
+                    {
+                        string text = await ReadResponseTextAsync(response, ct).ConfigureAwait(false);
+                        if (!response.IsSuccessStatusCode)
+                            throw new Exception("GET " + url + " returned HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase + "\n" + text);
+
+                        last = ParseJsonObjectResponse(text, "GET " + url);
+                    }
+                }
+
+                string status = (last["status"]?.ToString() ?? "").Trim().ToLowerInvariant();
+                if (status == "succeeded" || status == "success" || status == "completed")
+                    return last.ToString();
+                if (status == "failed" || status == "failure" || status == "cancelled" || status == "canceled")
+                    throw new Exception("Image task failed: " + last.ToString());
+
+                if (HasImageResponseData(last))
+                    return last.ToString();
+            }
+
+            throw new TimeoutException("Image task timed out: " + (last?.ToString() ?? taskId));
+        }
+
+        private static JObject ParseJsonObjectResponse(string text, string context)
+        {
+            string trimmed = (text ?? "").TrimStart();
+            if (string.IsNullOrWhiteSpace(trimmed))
+                throw new Exception(context + " returned an empty response.");
+            if (trimmed[0] != '{')
+            {
+                string preview = trimmed.Length > 500 ? trimmed.Substring(0, 500) : trimmed;
+                throw new Exception(context + " returned non-JSON response. Check the image Base URL. Preview:\n" + preview);
+            }
+            return JObject.Parse(trimmed);
+        }
+
+        private static string BuildImageTaskEndpoint(string baseUrl)
+        {
+            string raw = (baseUrl ?? "").Trim().TrimEnd('/');
+            if (string.IsNullOrWhiteSpace(raw))
+                raw = "https://api.vibelearning.top/v1";
+
+            raw = StripEndpointSuffix(raw, "/v1/images/generations");
+            raw = StripEndpointSuffix(raw, "/v1/images/edits");
+            raw = StripEndpointSuffix(raw, "/v1/images/tasks");
+
+            if (raw.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+                return raw + "/images/tasks";
+
+            return raw + "/v1/images/tasks";
+        }
+
+        private static string BuildGeminiNativeImageEndpoint(string baseUrl, string modelName)
+        {
+            string raw = (baseUrl ?? "").Trim().TrimEnd('/');
+            if (string.IsNullOrWhiteSpace(raw))
+                raw = "https://api.vibelearning.top";
+
+            raw = StripEndpointSuffix(raw, "/v1/chat/completions");
+            raw = StripEndpointSuffix(raw, "/v1/images/generations");
+            raw = StripEndpointSuffix(raw, "/v1/images/edits");
+            raw = StripEndpointSuffix(raw, "/v1/images/tasks");
+            if (raw.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+                raw = raw.Substring(0, raw.Length - 3).TrimEnd('/');
+
+            string model = Uri.EscapeDataString((modelName ?? "").Trim());
+            return raw + "/v1beta/models/" + model + ":generateContent";
+        }
+
+        private static string BuildImageChatCompletionEndpoint(string baseUrl)
+        {
+            string raw = (baseUrl ?? "").Trim().TrimEnd('/');
+            if (string.IsNullOrWhiteSpace(raw))
+                raw = "https://api.vibelearning.top/v1";
+
+            raw = StripEndpointSuffix(raw, "/v1/images/generations");
+            raw = StripEndpointSuffix(raw, "/v1/images/edits");
+            raw = StripEndpointSuffix(raw, "/v1/images/tasks");
+            raw = StripEndpointSuffix(raw, "/v1/chat/completions");
+
+            if (raw.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+                return raw + "/chat/completions";
+
+            return raw + "/v1/chat/completions";
+        }
+
+        private static string StripEndpointSuffix(string value, string suffix)
+        {
+            if (string.IsNullOrWhiteSpace(value) || string.IsNullOrWhiteSpace(suffix))
+                return value ?? "";
+            return value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)
+                ? value.Substring(0, value.Length - suffix.Length).TrimEnd('/')
+                : value;
+        }
+
+        private static bool HasImageResponseData(JObject root)
+        {
+            if (root == null) return false;
+            if (root["b64_json"] != null || root["base64"] != null || root["image_base64"] != null || root["url"] != null || root["image_url"] != null || root["image"] != null)
+                return true;
+            if (HasImageResponseData(root["data"]))
+                return true;
+            if (HasImageResponseData(root["images"]))
+                return true;
+            if (HasImageResponseData(root["output"]))
+                return true;
+            return false;
+        }
+
+        private static bool HasImageResponseData(JToken token)
+        {
+            if (token == null) return false;
+            if (token is JObject obj)
+                return HasImageResponseData(obj);
+            if (token is JArray array)
+                return array.Any(HasImageResponseData);
+            return false;
+        }
+
+        private static string ExtractCanvasImageDataUrl(JToken image)
+        {
+            if (image == null || image.Type == JTokenType.Null || image.Type == JTokenType.Undefined)
+                return "";
+
+            if (image is JValue)
+                return image.ToString();
+
+            var obj = image as JObject;
+            if (obj == null)
+                return "";
+
+            string dataUrl = obj["dataUrl"]?.ToString() ?? obj["imageDataUrl"]?.ToString() ?? "";
+            if (!string.IsNullOrWhiteSpace(dataUrl))
+                return dataUrl;
+
+            string path = obj["path"]?.ToString() ?? obj["imagePath"]?.ToString() ?? "";
+            string mimeType = obj["mimeType"]?.ToString() ?? "image/png";
+            if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
+                return BuildImageDataUrl(path, mimeType);
+
+            return "";
         }
 
         private static async Task<AiImageExecutionResult> RunAiImageGenerationAsync(string prompt, string intent, bool useUploadedImages, string aspectRatio, System.Threading.CancellationToken ct)
@@ -244,22 +677,48 @@ namespace ADDGH
         {
             var result = new List<GeneratedImageRecord>();
             var root = JObject.Parse(responseText);
-            var data = root["data"] as JArray ?? new JArray();
+            var data = CollectGeneratedImageItems(root);
             int index = 0;
             foreach (var item in data.OfType<JObject>())
             {
                 string mimeType = "image/png";
                 byte[] bytes = null;
 
-                if (!string.IsNullOrWhiteSpace(item["b64_json"]?.ToString()))
+                string b64 = item["b64_json"]?.ToString()
+                    ?? item["base64"]?.ToString()
+                    ?? item["image_base64"]?.ToString();
+                string url = item["url"]?.ToString()
+                    ?? item["image_url"]?.ToString()
+                    ?? item["image"]?.ToString();
+
+                if (!string.IsNullOrWhiteSpace(b64) && !b64.StartsWith("http", StringComparison.OrdinalIgnoreCase))
                 {
-                    bytes = DecodeImageBytes(item["b64_json"]?.ToString(), out string detectedMimeType);
-                    mimeType = detectedMimeType ?? mimeType;
+                    bytes = DecodeImageBytes(b64, out string detectedMimeType);
+                    mimeType = item["mime_type"]?.ToString()
+                        ?? item["mimeType"]?.ToString()
+                        ?? detectedMimeType
+                        ?? mimeType;
                 }
-                else if (!string.IsNullOrWhiteSpace(item["url"]?.ToString()))
+                else if (!string.IsNullOrWhiteSpace(url))
                 {
-                    bytes = await DownloadImageBytesAsync(item["url"]?.ToString(), providerSettings, ct).ConfigureAwait(false);
-                    mimeType = GuessMimeTypeFromUrl(item["url"]?.ToString()) ?? mimeType;
+                    if (url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        bytes = DecodeImageBytes(url, out string detectedMimeType);
+                        mimeType = detectedMimeType ?? mimeType;
+                    }
+                    else
+                    {
+                        if (url.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                        {
+                            bytes = await DownloadImageBytesAsync(url, providerSettings, ct).ConfigureAwait(false);
+                            mimeType = GuessMimeTypeFromUrl(url) ?? mimeType;
+                        }
+                        else
+                        {
+                            bytes = DecodeImageBytes(url, out string detectedMimeType);
+                            mimeType = detectedMimeType ?? mimeType;
+                        }
+                    }
                 }
 
                 if (bytes == null || bytes.Length == 0)
@@ -280,6 +739,84 @@ namespace ADDGH
             return result;
         }
 
+        private static JArray CollectGeneratedImageItems(JToken token)
+        {
+            var items = new JArray();
+            CollectGeneratedImageItems(token, items);
+            return items;
+        }
+
+        private static void CollectGeneratedImageItems(JToken token, JArray items)
+        {
+            if (token == null) return;
+            if (token is JObject obj)
+            {
+                if (obj["b64_json"] != null || obj["base64"] != null || obj["image_base64"] != null ||
+                    obj["url"] != null || obj["image_url"] != null || obj["image"] != null ||
+                    obj["inlineData"] != null || obj["inline_data"] != null)
+                {
+                    items.Add(NormalizeGeneratedImageItem(obj));
+                    return;
+                }
+
+                CollectGeneratedImageItems(obj["data"], items);
+                CollectGeneratedImageItems(obj["images"], items);
+                CollectGeneratedImageItems(obj["output"], items);
+                CollectGeneratedImageItems(obj["result"], items);
+                CollectGeneratedImageItems(obj["candidates"], items);
+                CollectGeneratedImageItems(obj["choices"], items);
+                CollectGeneratedImageItems(obj["message"], items);
+                CollectGeneratedImageItems(obj["delta"], items);
+                CollectGeneratedImageItems(obj["content"], items);
+                CollectGeneratedImageItems(obj["parts"], items);
+                return;
+            }
+
+            if (token is JArray array)
+            {
+                foreach (var child in array)
+                    CollectGeneratedImageItems(child, items);
+                return;
+            }
+
+            if (token is JValue value && value.Type == JTokenType.String)
+            {
+                foreach (var item in CollectImageItemsFromText(value.ToString()))
+                    items.Add(item);
+            }
+        }
+
+        private static JObject NormalizeGeneratedImageItem(JObject obj)
+        {
+            var inlineData = obj["inlineData"] as JObject ?? obj["inline_data"] as JObject;
+            if (inlineData != null)
+            {
+                string data = inlineData["data"]?.ToString() ?? "";
+                string mimeType = inlineData["mimeType"]?.ToString()
+                    ?? inlineData["mime_type"]?.ToString()
+                    ?? "image/png";
+                return new JObject
+                {
+                    ["b64_json"] = data,
+                    ["mime_type"] = mimeType
+                };
+            }
+
+            return obj;
+        }
+
+        private static IEnumerable<JObject> CollectImageItemsFromText(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                yield break;
+
+            foreach (Match match in Regex.Matches(text, @"data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+", RegexOptions.IgnoreCase))
+                yield return new JObject { ["b64_json"] = match.Value };
+
+            foreach (Match match in Regex.Matches(text, @"https?:\/\/[^\s""'<>)]*\.(?:png|jpe?g|webp|gif)(?:\?[^\s""'<>)]*)?", RegexOptions.IgnoreCase))
+                yield return new JObject { ["url"] = match.Value };
+        }
+
         private static Task<byte[]> GetImageBytesFromAttachmentAsync(AttachmentItem sourceImage, System.Threading.CancellationToken ct)
         {
             if (!string.IsNullOrWhiteSpace(sourceImage?.Base64))
@@ -294,9 +831,19 @@ namespace ADDGH
         private static byte[] DecodeImageBytes(string raw, out string mimeType)
         {
             mimeType = "image/png";
-            string value = (raw ?? "").Trim();
+            string value = ExtractBase64Payload(raw, out mimeType);
             if (string.IsNullOrWhiteSpace(value))
                 return Array.Empty<byte>();
+
+            return Convert.FromBase64String(value);
+        }
+
+        private static string ExtractBase64Payload(string raw, out string mimeType)
+        {
+            mimeType = "image/png";
+            string value = (raw ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(value))
+                return "";
 
             if (value.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
             {
@@ -312,8 +859,7 @@ namespace ADDGH
                 }
             }
 
-            value = value.Replace("\r", "").Replace("\n", "").Trim();
-            return Convert.FromBase64String(value);
+            return value.Replace("\r", "").Replace("\n", "").Trim();
         }
 
         private static async Task<byte[]> DownloadImageBytesAsync(string url, ProviderRuntimeSettings providerSettings, System.Threading.CancellationToken ct)

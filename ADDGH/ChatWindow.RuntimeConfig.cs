@@ -158,8 +158,8 @@ namespace ADDGH
                 new ModelProviderConfig
                 {
                     ProviderId = "nanobanana-relay",
-                    DisplayName = "Nano-banana / Relay",
-                    DefaultBaseUrl = "https://your-relay-host/v1/images/generations",
+                    DisplayName = "VibeLearning Image Relay",
+                    DefaultBaseUrl = "https://api.vibelearning.top",
                     DefaultModel = "gemini-3.1-flash-image-preview",
                     SupportsTools = false,
                     SupportsVision = true
@@ -452,12 +452,26 @@ namespace ADDGH
                 providerId = GetCurrentImageProviderId();
 
             var config = GetProviderConfig(providerId);
+            string baseUrl = Grasshopper.Instances.Settings.GetValue(GetImageProviderSettingKey(providerId, "BaseUrl"), config.DefaultBaseUrl);
+            string modelName = Grasshopper.Instances.Settings.GetValue(GetImageProviderSettingKey(providerId, "ModelName"), config.DefaultModel);
+            if (providerId.Equals("nanobanana-relay", StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.IsNullOrWhiteSpace(baseUrl)
+                    || baseUrl.IndexOf("your-relay-host", StringComparison.OrdinalIgnoreCase) >= 0
+                    || baseUrl.IndexOf("ai.comfly.chat", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    baseUrl = config.DefaultBaseUrl;
+                }
+                if (string.IsNullOrWhiteSpace(modelName))
+                    modelName = config.DefaultModel;
+            }
+
             return new ProviderRuntimeSettings
             {
                 Config = config,
                 ApiKey = ReadResolvedImageApiKey(providerId),
-                BaseUrl = Grasshopper.Instances.Settings.GetValue(GetImageProviderSettingKey(providerId, "BaseUrl"), config.DefaultBaseUrl),
-                ModelName = Grasshopper.Instances.Settings.GetValue(GetImageProviderSettingKey(providerId, "ModelName"), config.DefaultModel),
+                BaseUrl = baseUrl,
+                ModelName = modelName,
                 ProxyUrl = ReadResolvedImageProxyUrl(providerId)
             };
         }
@@ -621,10 +635,10 @@ namespace ADDGH
             _isLoadingProviderSettings = true;
             try
             {
-                var config = GetProviderConfig(providerId);
+                var settings = GetImageProviderRuntimeSettings(providerId);
                 _txtImageApiKey.Text = ReadResolvedImageApiKey(providerId);
-                _txtImageApiBaseUrl.Text = Grasshopper.Instances.Settings.GetValue(GetImageProviderSettingKey(providerId, "BaseUrl"), config.DefaultBaseUrl);
-                _txtImageModel.Text = Grasshopper.Instances.Settings.GetValue(GetImageProviderSettingKey(providerId, "ModelName"), config.DefaultModel);
+                _txtImageApiBaseUrl.Text = settings.BaseUrl ?? "";
+                _txtImageModel.Text = settings.ModelName ?? "";
                 _txtImageProxyUrl.Text = Grasshopper.Instances.Settings.GetValue(GetImageProviderSettingKey(providerId, "ProxyUrl"), ReadResolvedImageProxyUrl(providerId));
             }
             finally
