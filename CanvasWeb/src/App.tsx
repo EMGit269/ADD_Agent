@@ -371,6 +371,7 @@ function CanvasWorkbench() {
   const [currentUserName, setCurrentUserName] = useState('User')
   const [draftDrawingItem, setDraftDrawingItem] = useState<DrawingItem | null>(null)
   const [selectedDrawingItemId, setSelectedDrawingItemId] = useState<string | null>(null)
+  const [editingDrawingTextId, setEditingDrawingTextId] = useState<string | null>(null)
   const [marqueeRect, setMarqueeRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const surfaceRef = useRef<HTMLDivElement | null>(null)
@@ -505,6 +506,16 @@ function CanvasWorkbench() {
       if (event.key === 'Delete' && selectedSourceRefsRef.current.length) {
         event.preventDefault()
         deleteNodesBySourceRefs(selectedSourceRefsRef.current)
+        return
+      }
+
+      if (event.key === 'Delete' && selectedDrawingItemIdRef.current) {
+        event.preventDefault()
+        const id = selectedDrawingItemIdRef.current
+        pushHistorySnapshot(createSnapshotState())
+        setSelectedDrawingItemId(null)
+        selectedDrawingItemIdRef.current = null
+        updateDrawingItems((current) => current.filter((item) => item.id !== id))
       }
     }
     const handleKeyUp = (event: KeyboardEvent) => {
@@ -1988,7 +1999,7 @@ function CanvasWorkbench() {
             </g>
           </svg>
           <div className="drawing-html-layer" style={{ transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.z})` }}>
-            {drawingItems.map((item) => renderDrawingHtmlItem(item, updateDrawingText, currentUserName, selectedDrawingItemId, beginDrawingItemDrag))}
+            {drawingItems.map((item) => renderDrawingHtmlItem(item, updateDrawingText, currentUserName, selectedDrawingItemId, editingDrawingTextId, setEditingDrawingTextId, beginDrawingItemDrag))}
           </div>
         </div>
       </div>
@@ -2585,16 +2596,42 @@ function renderDrawingHtmlItem(
   onTextChange: (id: string, text: string) => void,
   fallbackAuthor: string,
   selectedId: string | null,
+  editingId: string | null,
+  setEditingId: (id: string | null) => void,
   onDragStart: (event: React.PointerEvent<HTMLElement | SVGElement>, item: DrawingItem, mode: 'move' | 'resize') => void,
 ) {
   if (item.kind !== 'text' && item.kind !== 'annotation' && item.kind !== 'sticky') return null
   const className = `drawing-text-item drawing-${item.kind}${selectedId === item.id ? ' selected' : ''}`
+  const isEditing = editingId === item.id
   return (
-    <div key={item.id} className={className} style={{ left: item.x, top: item.y, width: item.w, height: item.h }}>
-      <div className="drawing-move-handle" onPointerDown={(event) => onDragStart(event, item, 'move')}>
+    <div
+      key={item.id}
+      className={className}
+      style={{ left: item.x, top: item.y, width: item.w, height: item.h }}
+      onPointerDown={(event) => {
+        if (!isEditing) onDragStart(event, item, 'move')
+      }}
+      onDoubleClick={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        setEditingId(item.id)
+      }}
+    >
+      <div className="drawing-move-handle">
         {item.kind !== 'text' ? <span className="drawing-author">{item.author || fallbackAuthor || 'User'}</span> : null}
       </div>
-      <textarea value={item.text} onChange={(event) => onTextChange(item.id, event.target.value)} />
+      {isEditing ? (
+        <textarea
+          autoFocus
+          value={item.text}
+          onPointerDown={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+          onBlur={() => setEditingId(null)}
+          onChange={(event) => onTextChange(item.id, event.target.value)}
+        />
+      ) : (
+        <div className="drawing-text-readonly">{item.text || 'Text'}</div>
+      )}
       <button className="drawing-resize-handle" type="button" aria-label="Resize drawing item" onPointerDown={(event) => onDragStart(event, item, 'resize')} />
     </div>
   )
