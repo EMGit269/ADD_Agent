@@ -1636,7 +1636,42 @@ namespace ADDGH
                                 <ColumnDefinition Width=""Auto""/>
                             </Grid.ColumnDefinitions>
 
-                            <Button x:Name=""BtnUploadImage"" Grid.Column=""0"" Style=""{StaticResource IconButtonStyle}"" Content=""+"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""18"" FontWeight=""Medium"" Cursor=""Hand"" ToolTip=""上传图片或文件"" Margin=""0,0,6,0""/>
+                            <Button x:Name=""BtnUploadImage"" Grid.Column=""0"" Style=""{StaticResource IconButtonStyle}"" Content=""+"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""18"" FontWeight=""Medium"" Cursor=""Hand"" ToolTip=""添加附件或参考"" Margin=""0,0,6,0"">
+                                <Button.ContextMenu>
+                                    <ContextMenu Background=""#1E1E1E"" Foreground=""#E0E0E0"" BorderBrush=""#333"" BorderThickness=""1"" Padding=""4"">
+                                        <ContextMenu.Template>
+                                            <ControlTemplate TargetType=""ContextMenu"">
+                                                <Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""4"" Padding=""{TemplateBinding Padding}"">
+                                                    <ItemsPresenter/>
+                                                </Border>
+                                            </ControlTemplate>
+                                        </ContextMenu.Template>
+                                        <ContextMenu.Resources>
+                                            <Style TargetType=""MenuItem"">
+                                                <Setter Property=""Foreground"" Value=""#E0E0E0""/>
+                                                <Setter Property=""Background"" Value=""Transparent""/>
+                                                <Setter Property=""Padding"" Value=""12,8""/>
+                                                <Setter Property=""Template"">
+                                                    <Setter.Value>
+                                                        <ControlTemplate TargetType=""MenuItem"">
+                                                            <Border x:Name=""Bg"" Background=""{TemplateBinding Background}"" CornerRadius=""4"">
+                                                                <ContentPresenter Content=""{TemplateBinding Header}"" Margin=""{TemplateBinding Padding}""/>
+                                                            </Border>
+                                                            <ControlTemplate.Triggers>
+                                                                <Trigger Property=""IsHighlighted"" Value=""True"">
+                                                                    <Setter TargetName=""Bg"" Property=""Background"" Value=""#333333""/>
+                                                                </Trigger>
+                                                            </ControlTemplate.Triggers>
+                                                        </ControlTemplate>
+                                                    </Setter.Value>
+                                                </Setter>
+                                            </Style>
+                                        </ContextMenu.Resources>
+                                        <MenuItem x:Name=""MenuUploadFile"" Header=""上传文件""/>
+                                        <MenuItem x:Name=""MenuCreateReference"" Header=""创建参考""/>
+                                    </ContextMenu>
+                                </Button.ContextMenu>
+                            </Button>
                             <Button x:Name=""BtnStop"" Grid.Column=""1"" Style=""{StaticResource IconButtonStyle}"" Visibility=""Collapsed"" Foreground=""#FF6B6B"" Background=""Transparent"" BorderThickness=""0"" Cursor=""Hand"" ToolTip=""停止按钮"" Margin=""0,0,10,0"" Width=""28"" Height=""28"" Padding=""0"">
                                 <Grid Width=""28"" Height=""28"">
                                     <Border Width=""8"" Height=""8"" CornerRadius=""1"" Background=""#FF6B6B"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"" SnapsToDevicePixels=""True""/>
@@ -1678,43 +1713,6 @@ namespace ADDGH
                                     </ContextMenu>
                                 </Button.ContextMenu>
                             </Button>
-                            <Button x:Name=""BtnReference"" Grid.Column=""3"" Style=""{StaticResource IconButtonStyle}"" Content=""参考"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""13"" Cursor=""Hand"" ToolTip=""参考菜单"" Margin=""2,0,0,0"">
-                                <Button.ContextMenu>
-                                    <ContextMenu Background=""#1E1E1E"" Foreground=""#E0E0E0"" BorderBrush=""#333"" BorderThickness=""1"" Padding=""4"">
-                                        <ContextMenu.Template>
-                                            <ControlTemplate TargetType=""ContextMenu"">
-                                                <Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""4"" Padding=""{TemplateBinding Padding}"">
-                                                    <ItemsPresenter/>
-                                                </Border>
-                                            </ControlTemplate>
-                                        </ContextMenu.Template>
-                                        <ContextMenu.Resources>
-                                            <Style TargetType=""MenuItem"">
-                                                <Setter Property=""Foreground"" Value=""#E0E0E0""/>
-                                                <Setter Property=""Background"" Value=""Transparent""/>
-                                                <Setter Property=""Padding"" Value=""12,8""/>
-                                                <Setter Property=""Template"">
-                                                    <Setter.Value>
-                                                        <ControlTemplate TargetType=""MenuItem"">
-                                                            <Border x:Name=""Bg"" Background=""{TemplateBinding Background}"" CornerRadius=""4"">
-                                                                <ContentPresenter Content=""{TemplateBinding Header}"" Margin=""{TemplateBinding Padding}""/>
-                                                            </Border>
-                                                            <ControlTemplate.Triggers>
-                                                                <Trigger Property=""IsHighlighted"" Value=""True"">
-                                                                    <Setter TargetName=""Bg"" Property=""Background"" Value=""#333333""/>
-                                                                </Trigger>
-                                                            </ControlTemplate.Triggers>
-                                                        </ControlTemplate>
-                                                    </Setter.Value>
-                                                </Setter>
-                                            </Style>
-                                        </ContextMenu.Resources>
-                                        <MenuItem x:Name=""MenuCreateReference"" Header=""创建参考""/>
-                                        <MenuItem x:Name=""MenuMyReferences"" Header=""我的参考""/>
-                                    </ContextMenu>
-                                </Button.ContextMenu>
-                            </Button>
-
                             <Grid x:Name=""ContextMeterHost"" Grid.Column=""5"" Width=""17"" Height=""17"" Margin=""0,0,10,0"" VerticalAlignment=""Center"" ToolTip=""上下文使用情况"">
                                 <Ellipse Stroke=""#4A4A4A"" StrokeThickness=""1.3"" Fill=""Transparent""/>
                                 <Path x:Name=""ContextRingProgress"" Stroke=""#D8D8D8"" StrokeThickness=""1.3"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" Fill=""Transparent""/>
@@ -1946,6 +1944,22 @@ namespace ADDGH
                                                 </Button.Template>
                                             </Button>
                                         </Grid>
+                                    </StackPanel>
+                                </Border>
+                            </Expander>
+
+                            <Expander Header=""参考"" IsExpanded=""False"" Foreground=""#ECECEC"" Background=""#242424"" Margin=""0,0,0,10"">
+                                <Border Background=""#242424"" CornerRadius=""10"" Padding=""12"" BorderBrush=""#343434"" BorderThickness=""1"">
+                                    <StackPanel>
+                                        <Button x:Name=""BtnMyReferences"" Content=""我的参考"" Background=""#2E2E2E"" Foreground=""#E8E8E8"" BorderBrush=""#444444"" BorderThickness=""1"" Height=""34"" FontSize=""12"" Cursor=""Hand"">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType=""Button"">
+                                                    <Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""9"">
+                                                        <ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/>
+                                                    </Border>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                        </Button>
                                     </StackPanel>
                                 </Border>
                             </Expander>
@@ -2378,10 +2392,9 @@ namespace ADDGH
             }
 
             var btnUploadImage = (Button)_window.FindName("BtnUploadImage");
+            var menuUploadFile = (MenuItem)_window.FindName("MenuUploadFile");
             _btnClearImage = (Button)_window.FindName("BtnClearImage");
-
-            if (btnUploadImage != null) {
-            btnUploadImage.Click += (s, e) => {
+            Action openAttachmentPicker = () => {
                 var ofd = new Microsoft.Win32.OpenFileDialog {
                     Filter = "Supported Files|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp;*.txt;*.md;*.json;*.csv;*.xml;*.ghx;*.pdf;*.docx;*.xlsx;*.pptx;*.doc;*.xls;*.ppt|All Files|*.*",
                     Multiselect = true
@@ -2390,6 +2403,21 @@ namespace ADDGH
                     AddPendingAttachments(ofd.FileNames);
                 }
             };
+
+            if (btnUploadImage != null) {
+                btnUploadImage.Click += (s, e) => {
+                    if (btnUploadImage.ContextMenu != null) {
+                        btnUploadImage.ContextMenu.PlacementTarget = btnUploadImage;
+                        btnUploadImage.ContextMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.Top;
+                        btnUploadImage.ContextMenu.IsOpen = true;
+                    } else {
+                        openAttachmentPicker();
+                    }
+                };
+            }
+
+            if (menuUploadFile != null) {
+                menuUploadFile.Click += (s, e) => openAttachmentPicker();
             }
 
             if (_btnClearImage != null) {
@@ -2481,17 +2509,6 @@ namespace ADDGH
                 btnRefreshLib.Click += (s, e) => SyncComponentLibrary();
             }
 
-            var btnReference = (Button)_window.FindName("BtnReference");
-            if (btnReference != null) {
-                btnReference.Click += (s, e) => {
-                    if (btnReference.ContextMenu != null) {
-                        btnReference.ContextMenu.PlacementTarget = btnReference;
-                        btnReference.ContextMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.Top;
-                        btnReference.ContextMenu.IsOpen = true;
-                    }
-                };
-            }
-
             var menuCreateReference = (MenuItem)_window.FindName("MenuCreateReference");
             if (menuCreateReference != null) {
                 menuCreateReference.Click += (s, e) => {
@@ -2503,9 +2520,9 @@ namespace ADDGH
                 };
             }
 
-            var menuMyReferences = (MenuItem)_window.FindName("MenuMyReferences");
-            if (menuMyReferences != null) {
-                menuMyReferences.Click += (s, e) => {
+            var btnMyReferences = (Button)_window.FindName("BtnMyReferences");
+            if (btnMyReferences != null) {
+                btnMyReferences.Click += (s, e) => {
                     ShowReferenceLibraryUI();
                 };
             }
