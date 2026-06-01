@@ -2034,7 +2034,7 @@ function CanvasWorkbench() {
                 setActiveToolbarSection(section)
                 if (section === 'menu') setActiveCanvasTool('select')
               }}
-              title={section === 'menu' ? '鑿滃崟' : section === 'draw' ? '缁樺浘' : '鏄剧ず'}
+              title={section === 'menu' ? '菜单' : section === 'draw' ? '绘图' : '显示'}
             >
               <ToolbarIcon name={section === 'menu' ? 'menu' : section === 'draw' ? 'draw' : 'view'} />
             </button>
@@ -2043,28 +2043,28 @@ function CanvasWorkbench() {
         <div className="toolbar-tools">
           {activeToolbarSection === 'menu' ? (
             <>
-              <button type="button" title="娣诲姞鑺傜偣" aria-label="娣诲姞鑺傜偣" className={canvasManageOpen ? 'active' : ''} onClick={() => setCanvasManageOpen((current) => !current)}><ToolbarIcon name="plus" /></button>
-              <button type="button" title="涓婁紶鏂囦欢/鍥剧墖" aria-label="涓婁紶鏂囦欢/鍥剧墖" onClick={() => fileInputRef.current?.click()}><ToolbarIcon name="upload" /></button>
-              <button type="button" title="淇濆瓨鐢诲竷" aria-label="淇濆瓨鐢诲竷" onClick={saveCanvasNow}><ToolbarIcon name="save" /></button>
+              <button type="button" title="添加节点" aria-label="添加节点" className={canvasManageOpen ? 'active' : ''} onClick={() => setCanvasManageOpen((current) => !current)}><ToolbarIcon name="plus" /></button>
+              <button type="button" title="上传文件/图片" aria-label="上传文件/图片" onClick={() => fileInputRef.current?.click()}><ToolbarIcon name="upload" /></button>
+              <button type="button" title="保存画布" aria-label="保存画布" onClick={saveCanvasNow}><ToolbarIcon name="save" /></button>
               <button type="button" title="撤销" aria-label="撤销" onClick={performUndo}><ToolbarIcon name="undo" /></button>
               <button type="button" title="重做" aria-label="重做" onClick={performRedo}><ToolbarIcon name="redo" /></button>
-              <button type="button" title="鎴戠殑鐢诲竷" aria-label="鎴戠殑鐢诲竷" onClick={() => setMyCanvasOpen(true)}><ToolbarIcon name="boards" /></button>
-              <button type="button" title="鐢熸垚鍘嗗彶" aria-label="鐢熸垚鍘嗗彶" onClick={() => setGenerationHistoryOpen(true)}><ToolbarIcon name="history" /></button>
+              <button type="button" title="我的画布" aria-label="我的画布" onClick={() => setMyCanvasOpen(true)}><ToolbarIcon name="boards" /></button>
+              <button type="button" title="生成历史" aria-label="生成历史" onClick={() => setGenerationHistoryOpen(true)}><ToolbarIcon name="history" /></button>
             </>
           ) : null}
           {activeToolbarSection === 'draw' ? (
             <>
-              <button type="button" title="鐢荤瑪" aria-label="鐢荤瑪" className={activeCanvasTool === 'pen' ? 'active' : ''} onClick={() => setActiveCanvasTool('pen')}><ToolbarIcon name="pen" /></button>
-              <button type="button" title="姗＄毊" aria-label="姗＄毊" className={activeCanvasTool === 'eraser' ? 'active' : ''} onClick={() => setActiveCanvasTool('eraser')}><ToolbarIcon name="eraser" /></button>
-              <button type="button" title="褰㈢姸" aria-label="褰㈢姸" className={activeCanvasTool === 'shape' ? 'active' : ''} onClick={() => setActiveCanvasTool('shape')}><ToolbarIcon name="shape" /></button>
-              <button type="button" title="Text box" aria-label="Text box" className={activeCanvasTool === 'text' ? 'active' : ''} onClick={() => setActiveCanvasTool('text')}><ToolbarIcon name="text" /></button>
+              <button type="button" title="画笔" aria-label="画笔" className={activeCanvasTool === 'pen' ? 'active' : ''} onClick={() => setActiveCanvasTool('pen')}><ToolbarIcon name="pen" /></button>
+              <button type="button" title="橡皮" aria-label="橡皮" className={activeCanvasTool === 'eraser' ? 'active' : ''} onClick={() => setActiveCanvasTool('eraser')}><ToolbarIcon name="eraser" /></button>
+              <button type="button" title="形状" aria-label="形状" className={activeCanvasTool === 'shape' ? 'active' : ''} onClick={() => setActiveCanvasTool('shape')}><ToolbarIcon name="shape" /></button>
+              <button type="button" title="文本框" aria-label="文本框" className={activeCanvasTool === 'text' ? 'active' : ''} onClick={() => setActiveCanvasTool('text')}><ToolbarIcon name="text" /></button>
             </>
           ) : null}
           {activeToolbarSection === 'display' ? (
             <>
-              <button type="button" title="閫傞厤" aria-label="閫傞厤" onClick={onFit}><ToolbarIcon name="fit" /></button>
-              <button type="button" title={isDarkMode ? '娴呰壊' : '娣辫壊'} aria-label={isDarkMode ? '娴呰壊' : '娣辫壊'} onClick={() => setThemeMode((current) => current === 'dark' ? 'light' : 'dark')}><ToolbarIcon name="theme" /></button>
-              <button type="button" title="鎹曡幏 Rhino" aria-label="鎹曡幏 Rhino" onClick={onCaptureRhinoView}><ToolbarIcon name="capture" /></button>
+              <button type="button" title="适配视图" aria-label="适配视图" onClick={onFit}><ToolbarIcon name="fit" /></button>
+              <button type="button" title={isDarkMode ? '浅色' : '深色'} aria-label={isDarkMode ? '浅色' : '深色'} onClick={() => setThemeMode((current) => current === 'dark' ? 'light' : 'dark')}><ToolbarIcon name="theme" /></button>
+              <button type="button" title="捕获 Rhino" aria-label="捕获 Rhino" onClick={onCaptureRhinoView}><ToolbarIcon name="capture" /></button>
             </>
           ) : null}
         </div>
@@ -2094,10 +2094,10 @@ function CanvasWorkbench() {
         {activeToolbarSection === 'draw' && activeCanvasTool !== 'select' && activeCanvasTool !== 'text' ? (
           <div className="toolbar-options">
             {activeCanvasTool === 'pen' ? <>
-              <label>棰滆壊<input type="color" value={penColor} onChange={(event) => setPenColor(event.target.value)} /></label>
-              <label>绮楃粏<input type="range" min="1" max="32" value={penWidth} onChange={(event) => setPenWidth(Number(event.target.value))} /></label>
+              <label>颜色<input type="color" value={penColor} onChange={(event) => setPenColor(event.target.value)} /></label>
+              <label>粗细<input type="range" min="1" max="32" value={penWidth} onChange={(event) => setPenWidth(Number(event.target.value))} /></label>
             </> : null}
-            {activeCanvasTool === 'eraser' ? <label>澶у皬<input type="range" min="8" max="90" value={eraserSize} onChange={(event) => setEraserSize(Number(event.target.value))} /></label> : null}
+            {activeCanvasTool === 'eraser' ? <label>大小<input type="range" min="8" max="90" value={eraserSize} onChange={(event) => setEraserSize(Number(event.target.value))} /></label> : null}
             {activeCanvasTool === 'shape' ? <>
               <div className="shape-picker" role="group" aria-label="形状选择">
                 {([
@@ -2110,9 +2110,9 @@ function CanvasWorkbench() {
                   </button>
                 ))}
               </div>
-              <label>鎻忚竟<input type="color" value={shapeStrokeColor} onChange={(event) => setShapeStrokeColor(event.target.value)} /></label>
-              <label>濉厖<input type="color" value={shapeFillColor.slice(0, 7)} onChange={(event) => setShapeFillColor(`${event.target.value}33`)} /></label>
-              <label>绾垮<input type="range" min="1" max="18" value={shapeStrokeWidth} onChange={(event) => setShapeStrokeWidth(Number(event.target.value))} /></label>
+              <label>描边<input type="color" value={shapeStrokeColor} onChange={(event) => setShapeStrokeColor(event.target.value)} /></label>
+              <label>填充<input type="color" value={shapeFillColor.slice(0, 7)} onChange={(event) => setShapeFillColor(`${event.target.value}33`)} /></label>
+              <label>线宽<input type="range" min="1" max="18" value={shapeStrokeWidth} onChange={(event) => setShapeStrokeWidth(Number(event.target.value))} /></label>
             </> : null}
           </div>
         ) : null}
@@ -2164,7 +2164,7 @@ function CanvasWorkbench() {
         <div className="canvas-modal-backdrop" onClick={() => setMyCanvasOpen(false)}>
           <section className="canvas-modal" onClick={(event) => event.stopPropagation()}>
             <header>
-              <h2>鎴戠殑鐢诲竷</h2>
+              <h2>我的画布</h2>
               <button type="button" onClick={() => setMyCanvasOpen(false)}>Close</button>
             </header>
             <div className="canvas-card-grid">
@@ -2179,7 +2179,7 @@ function CanvasWorkbench() {
                       <small>nodes</small>
                     </div>
                     <h3>{item.title || item.canvasId}</h3>
-                    <p>{formatDateTime(item.updatedAtUtc)} 路 {nodeCount ?? 0} nodes 路 {drawingCount ?? 0} drawings</p>
+                    <p>{formatDateTime(item.updatedAtUtc)} · {nodeCount ?? 0} nodes · {drawingCount ?? 0} drawings</p>
                     <div>
                       <button type="button" onClick={() => onOpenCanvas(item.canvasId)} disabled={isCurrent}>Open</button>
                       {isCurrent ? <button type="button" onClick={onNewCanvas}>New</button> : null}
@@ -2197,7 +2197,7 @@ function CanvasWorkbench() {
         <div className="canvas-modal-backdrop" onClick={() => setGenerationHistoryOpen(false)}>
           <section className="canvas-modal generation-modal" onClick={(event) => event.stopPropagation()}>
             <header>
-              <h2>鐢熸垚鍘嗗彶</h2>
+              <h2>生成历史</h2>
               <button type="button" onClick={() => setGenerationHistoryOpen(false)}>Close</button>
             </header>
             <div className="generation-list">
@@ -2206,7 +2206,7 @@ function CanvasWorkbench() {
                   {item.preview ? item.type === 'video' ? <video src={item.preview} muted /> : <img src={item.preview} alt={item.title} /> : <div className="generation-empty" />}
                   <div>
                     <strong>{item.title}</strong>
-                    <span>{item.type} 路 {item.model || 'model'} 路 {formatDateTime(item.createdAtUtc)}</span>
+                    <span>{item.type} · {item.model || 'model'} · {formatDateTime(item.createdAtUtc)}</span>
                   </div>
                   <button type="button" onClick={() => locateGenerationNode(item.sourceRef)}>Locate</button>
                 </article>
