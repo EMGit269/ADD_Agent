@@ -228,6 +228,11 @@ type ContextMenuState = {
   sourceRef?: string
 } | null
 
+type DrawingObjectDragState =
+  | { mode: 'move'; pointerId: number; itemId: string; start: DrawingPoint; original: DrawingItem }
+  | { mode: 'resize'; pointerId: number; itemId: string; start: DrawingPoint; original: DrawingItem }
+  | null
+
 declare global {
   interface Window {
     chrome?: {
@@ -365,11 +370,13 @@ function CanvasWorkbench() {
   const [generationHistoryOpen, setGenerationHistoryOpen] = useState(false)
   const [currentUserName, setCurrentUserName] = useState('User')
   const [draftDrawingItem, setDraftDrawingItem] = useState<DrawingItem | null>(null)
+  const [selectedDrawingItemId, setSelectedDrawingItemId] = useState<string | null>(null)
   const [marqueeRect, setMarqueeRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const surfaceRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<DragState>(null)
   const drawingDragRef = useRef<{ pointerId: number; item: DrawingItem } | null>(null)
+  const drawingObjectDragRef = useRef<DrawingObjectDragState>(null)
   const saveTimerRef = useRef<number | null>(null)
   const nodesRef = useRef(nodes)
   const connectionsRef = useRef(connections)
@@ -377,6 +384,7 @@ function CanvasWorkbench() {
   const viewportRef = useRef(viewport)
   const selectedSourceRefRef = useRef<string | null>(selectedSourceRef)
   const selectedSourceRefsRef = useRef<string[]>(selectedSourceRefs)
+  const selectedDrawingItemIdRef = useRef<string | null>(selectedDrawingItemId)
   const cardMetaRef = useRef<Record<string, any>>({})
   const historyRef = useRef<CanvasHistoryState>({ past: [], future: [] })
   const lastMessagesSignatureRef = useRef('')
@@ -414,6 +422,10 @@ function CanvasWorkbench() {
   useEffect(() => {
     selectedSourceRefsRef.current = selectedSourceRefs
   }, [selectedSourceRefs])
+
+  useEffect(() => {
+    selectedDrawingItemIdRef.current = selectedDrawingItemId
+  }, [selectedDrawingItemId])
 
   useEffect(() => {
     currentConversationIdRef.current = conversationId
@@ -1673,6 +1685,19 @@ function CanvasWorkbench() {
   }
 
   function onDrawingPointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    const objectDrag = drawingObjectDragRef.current
+    if (objectDrag && objectDrag.pointerId === event.pointerId) {
+      event.preventDefault()
+      event.stopPropagation()
+      const point = drawingPointFromEvent(event)
+      const dx = point.x - objectDrag.start.x
+      const dy = point.y - objectDrag.start.y
+      const next = objectDrag.mode === 'move'
+        ? moveDrawingItem(objectDrag.original, dx, dy)
+        : resizeDrawingItem(objectDrag.original, dx, dy)
+      updateDrawingItems((current) => current.map((item) => item.id === objectDrag.itemId ? next : item), false)
+      return
+    }
     const drag = drawingDragRef.current
     if (!drag || drag.pointerId !== event.pointerId) return
     event.preventDefault()
@@ -1688,6 +1713,14 @@ function CanvasWorkbench() {
   }
 
   function onDrawingPointerUp(event: React.PointerEvent<HTMLDivElement>) {
+    const objectDrag = drawingObjectDragRef.current
+    if (objectDrag && objectDrag.pointerId === event.pointerId) {
+      event.preventDefault()
+      event.stopPropagation()
+      drawingObjectDragRef.current = null
+      scheduleSave()
+      return
+    }
     const drag = drawingDragRef.current
     if (!drag || drag.pointerId !== event.pointerId) return
     event.preventDefault()
@@ -1699,6 +1732,23 @@ function CanvasWorkbench() {
 
   function updateDrawingText(id: string, text: string) {
     updateDrawingItems((current) => current.map((item) => item.id === id ? { ...item, text } as DrawingItem : item))
+  }
+
+  function beginDrawingItemDrag(event: React.PointerEvent<HTMLElement | SVGElement>, item: DrawingItem, mode: 'move' | 'resize') {
+    event.preventDefault()
+    event.stopPropagation()
+    setSelectedDrawingItemId(item.id)
+    setSelectedSourceRef(null)
+    setSelectedSourceRefs([])
+    pushHistorySnapshot(createSnapshotState())
+    drawingObjectDragRef.current = {
+      mode,
+      pointerId: event.pointerId,
+      itemId: item.id,
+      start: drawingPointFromEvent(event as React.PointerEvent<HTMLElement>),
+      original: cloneDrawingItems([item])[0],
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
   }
 
   function locateGenerationNode(sourceRef: string) {
@@ -1934,11 +1984,11 @@ function CanvasWorkbench() {
         >
           <svg className="drawing-svg">
             <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.z})`}>
-              {drawingLayerItems.map((item) => renderDrawingSvgItem(item))}
+              {drawingLayerItems.map((item) => renderDrawingSvgItem(item, selectedDrawingItemId, beginDrawingItemDrag))}
             </g>
           </svg>
           <div className="drawing-html-layer" style={{ transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.z})` }}>
-            {drawingItems.map((item) => renderDrawingHtmlItem(item, updateDrawingText, currentUserName))}
+            {drawingItems.map((item) => renderDrawingHtmlItem(item, updateDrawingText, currentUserName, selectedDrawingItemId, beginDrawingItemDrag))}
           </div>
         </div>
       </div>
@@ -1969,7 +2019,6 @@ function CanvasWorkbench() {
               <button type="button" title="保存画布" aria-label="保存画布" onClick={saveCanvasNow}><ToolbarIcon name="save" /></button>
               <button type="button" title="我的画布" aria-label="我的画布" onClick={() => setMyCanvasOpen(true)}><ToolbarIcon name="boards" /></button>
               <button type="button" title="生成历史" aria-label="生成历史" onClick={() => setGenerationHistoryOpen(true)}><ToolbarIcon name="history" /></button>
-              <button type="button" title="代码视图" aria-label="代码视图" onClick={() => postHostMessage('canvas_switch_to_code', { canvasId: canvasIdRef.current })}><ToolbarIcon name="code" /></button>
             </>
           ) : null}
           {activeToolbarSection === 'draw' ? (
@@ -2479,30 +2528,74 @@ function cloneDrawingItems(items: DrawingItem[]) {
   return items.map((item) => item.kind === 'pen' ? { ...item, points: item.points.map((point) => ({ ...point })) } : { ...item }) as DrawingItem[]
 }
 
-function renderDrawingSvgItem(item: DrawingItem) {
+function renderDrawingSvgItem(
+  item: DrawingItem,
+  selectedId: string | null,
+  onDragStart: (event: React.PointerEvent<HTMLElement | SVGElement>, item: DrawingItem, mode: 'move' | 'resize') => void,
+) {
+  const selected = selectedId === item.id
   if (item.kind === 'pen') {
     if (item.points.length < 2) return null
-    return <polyline key={item.id} points={item.points.map((point) => `${point.x},${point.y}`).join(' ')} fill="none" stroke={item.color} strokeWidth={item.width} strokeLinecap="round" strokeLinejoin="round" />
+    const bounds = drawingBounds(item)
+    return (
+      <g key={item.id} className={`drawing-svg-item${selected ? ' selected' : ''}`}>
+        <polyline
+          points={item.points.map((point) => `${point.x},${point.y}`).join(' ')}
+          fill="none"
+          stroke={item.color}
+          strokeWidth={item.width}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          onPointerDown={(event) => onDragStart(event, item, 'move')}
+        />
+        {selected ? <rect className="drawing-selection-box" x={bounds.x - 6} y={bounds.y - 6} width={bounds.w + 12} height={bounds.h + 12} /> : null}
+      </g>
+    )
   }
   if (item.kind === 'shape') {
     const x = Math.min(item.x, item.x + item.w)
     const y = Math.min(item.y, item.y + item.h)
     const w = Math.abs(item.w)
     const h = Math.abs(item.h)
-    if (item.shape === 'ellipse') return <ellipse key={item.id} cx={x + w / 2} cy={y + h / 2} rx={w / 2} ry={h / 2} fill={item.fillColor} stroke={item.strokeColor} strokeWidth={item.strokeWidth} />
-    if (item.shape === 'line') return <line key={item.id} x1={item.x} y1={item.y} x2={item.x + item.w} y2={item.y + item.h} stroke={item.strokeColor} strokeWidth={item.strokeWidth} strokeLinecap="round" />
-    return <rect key={item.id} x={x} y={y} width={w} height={h} fill={item.fillColor} stroke={item.strokeColor} strokeWidth={item.strokeWidth} rx={4} />
+    const shapeElement = item.shape === 'ellipse'
+      ? <ellipse cx={x + w / 2} cy={y + h / 2} rx={w / 2} ry={h / 2} fill={item.fillColor} stroke={item.strokeColor} strokeWidth={item.strokeWidth} onPointerDown={(event) => onDragStart(event, item, 'move')} />
+      : item.shape === 'line'
+        ? <>
+          <line x1={item.x} y1={item.y} x2={item.x + item.w} y2={item.y + item.h} stroke={item.strokeColor} strokeWidth={item.strokeWidth} strokeLinecap="round" />
+          <line x1={item.x} y1={item.y} x2={item.x + item.w} y2={item.y + item.h} stroke="transparent" strokeWidth={Math.max(item.strokeWidth + 10, 12)} strokeLinecap="round" onPointerDown={(event) => onDragStart(event, item, 'move')} />
+        </>
+        : <rect x={x} y={y} width={w} height={h} fill={item.fillColor} stroke={item.strokeColor} strokeWidth={item.strokeWidth} rx={4} onPointerDown={(event) => onDragStart(event, item, 'move')} />
+    return (
+      <g key={item.id} className={`drawing-svg-item${selected ? ' selected' : ''}`}>
+        {shapeElement}
+        {selected ? (
+          <>
+            <rect className="drawing-selection-box" x={x - 4} y={y - 4} width={w + 8} height={h + 8} />
+            <rect className="drawing-resize-handle-svg" x={x + w - 5} y={y + h - 5} width={10} height={10} onPointerDown={(event) => onDragStart(event, item, 'resize')} />
+          </>
+        ) : null}
+      </g>
+    )
   }
   return null
 }
 
-function renderDrawingHtmlItem(item: DrawingItem, onTextChange: (id: string, text: string) => void, fallbackAuthor: string) {
+function renderDrawingHtmlItem(
+  item: DrawingItem,
+  onTextChange: (id: string, text: string) => void,
+  fallbackAuthor: string,
+  selectedId: string | null,
+  onDragStart: (event: React.PointerEvent<HTMLElement | SVGElement>, item: DrawingItem, mode: 'move' | 'resize') => void,
+) {
   if (item.kind !== 'text' && item.kind !== 'annotation' && item.kind !== 'sticky') return null
-  const className = `drawing-text-item drawing-${item.kind}`
+  const className = `drawing-text-item drawing-${item.kind}${selectedId === item.id ? ' selected' : ''}`
   return (
-    <div key={item.id} className={className} style={{ left: item.x, top: item.y, width: item.w, height: item.h }} onPointerDown={(event) => event.stopPropagation()}>
-      {item.kind !== 'text' ? <div className="drawing-author">{item.author || fallbackAuthor || 'User'}</div> : null}
+    <div key={item.id} className={className} style={{ left: item.x, top: item.y, width: item.w, height: item.h }}>
+      <div className="drawing-move-handle" onPointerDown={(event) => onDragStart(event, item, 'move')}>
+        {item.kind !== 'text' ? <span className="drawing-author">{item.author || fallbackAuthor || 'User'}</span> : null}
+      </div>
       <textarea value={item.text} onChange={(event) => onTextChange(item.id, event.target.value)} />
+      <button className="drawing-resize-handle" type="button" aria-label="Resize drawing item" onPointerDown={(event) => onDragStart(event, item, 'resize')} />
     </div>
   )
 }
@@ -2523,6 +2616,19 @@ function drawingBounds(item: DrawingItem) {
   }
   if (item.kind === 'shape') return { x: Math.min(item.x, item.x + item.w), y: Math.min(item.y, item.y + item.h), w: Math.abs(item.w), h: Math.abs(item.h) }
   return { x: item.x, y: item.y, w: item.w, h: item.h }
+}
+
+function moveDrawingItem(item: DrawingItem, dx: number, dy: number): DrawingItem {
+  if (item.kind === 'pen') return { ...item, points: item.points.map((point) => ({ x: point.x + dx, y: point.y + dy })) }
+  return { ...item, x: item.x + dx, y: item.y + dy } as DrawingItem
+}
+
+function resizeDrawingItem(item: DrawingItem, dx: number, dy: number): DrawingItem {
+  if (item.kind === 'shape') return { ...item, w: item.w + dx, h: item.h + dy }
+  if (item.kind === 'text' || item.kind === 'annotation' || item.kind === 'sticky') {
+    return { ...item, w: Math.max(80, item.w + dx), h: Math.max(48, item.h + dy) } as DrawingItem
+  }
+  return item
 }
 
 function distance(a: DrawingPoint, b: DrawingPoint) {
