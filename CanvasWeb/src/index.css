@@ -1217,8 +1217,14 @@ html, body, #root {
   display: grid;
   place-items: center;
   gap: 2px;
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 0;
+}
+
+.toolbar-icon {
+  width: 20px;
+  height: 20px;
+  color: currentColor;
+  display: block;
 }
 
 .toolbar-sections button span,
@@ -1264,8 +1270,9 @@ html, body, #root {
   width: 38px;
   height: 38px;
   cursor: pointer;
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 0;
+  display: grid;
+  place-items: center;
 }
 
 .toolbar-options label {

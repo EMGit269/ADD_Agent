@@ -119,6 +119,33 @@ type CanvasHistoryItem = {
 type ToolbarSection = 'menu' | 'draw' | 'display'
 type CanvasTool = 'select' | 'pen' | 'eraser' | 'shape' | 'text'
 type ShapeKind = 'rect' | 'ellipse' | 'line'
+type ToolbarIconName =
+  | 'menu'
+  | 'draw'
+  | 'view'
+  | 'plus'
+  | 'upload'
+  | 'save'
+  | 'boards'
+  | 'history'
+  | 'code'
+  | 'pen'
+  | 'eraser'
+  | 'shape'
+  | 'text'
+  | 'fit'
+  | 'theme'
+  | 'capture'
+  | 'file'
+  | 'panel'
+  | 'image'
+  | 'aiImage'
+  | 'video'
+  | 'slider'
+  | 'csharp'
+  | 'note'
+  | 'annotation'
+  | 'sticky'
 
 type DrawingPoint = {
   x: number
@@ -226,6 +253,46 @@ type ErrorBoundaryProps = {
 
 type ErrorBoundaryState = {
   error: Error | null
+}
+
+function ToolbarIcon({ name }: { name: ToolbarIconName }) {
+  const common = {
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.8,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+  }
+  return (
+    <svg className="toolbar-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      {name === 'menu' ? <><path {...common} d="M5 7h14" /><path {...common} d="M5 12h14" /><path {...common} d="M5 17h14" /></> : null}
+      {name === 'draw' ? <><path {...common} d="M5 19l4-1 9-9a2.1 2.1 0 0 0-3-3l-9 9-1 4z" /><path {...common} d="M13.5 7.5l3 3" /></> : null}
+      {name === 'view' ? <><path {...common} d="M3.5 12s3.2-5 8.5-5 8.5 5 8.5 5-3.2 5-8.5 5-8.5-5-8.5-5z" /><circle {...common} cx="12" cy="12" r="2.5" /></> : null}
+      {name === 'plus' ? <><path {...common} d="M12 5v14" /><path {...common} d="M5 12h14" /></> : null}
+      {name === 'upload' ? <><path {...common} d="M12 16V5" /><path {...common} d="M8 9l4-4 4 4" /><path {...common} d="M5 19h14" /></> : null}
+      {name === 'save' ? <><path {...common} d="M6 4h10l2 2v14H6z" /><path {...common} d="M8 4v6h8" /><path {...common} d="M9 20v-6h6v6" /></> : null}
+      {name === 'boards' ? <><rect {...common} x="4" y="5" width="7" height="6" rx="1.2" /><rect {...common} x="13" y="5" width="7" height="6" rx="1.2" /><rect {...common} x="4" y="13" width="7" height="6" rx="1.2" /><rect {...common} x="13" y="13" width="7" height="6" rx="1.2" /></> : null}
+      {name === 'history' ? <><path {...common} d="M5 8v-4" /><path {...common} d="M5 4h4" /><path {...common} d="M5.2 8A7 7 0 1 1 5 16" /><path {...common} d="M12 8v4l3 2" /></> : null}
+      {name === 'code' ? <><path {...common} d="M9 7l-5 5 5 5" /><path {...common} d="M15 7l5 5-5 5" /></> : null}
+      {name === 'pen' ? <><path {...common} d="M5 19l3.5-.8 9.8-9.8a2 2 0 0 0-2.8-2.8L5.7 15.4z" /><path {...common} d="M13.8 7.2l3 3" /></> : null}
+      {name === 'eraser' ? <><path {...common} d="M4.5 14.5l8-8a2 2 0 0 1 2.8 0l4.2 4.2a2 2 0 0 1 0 2.8L14 19H8z" /><path {...common} d="M10 9l5 5" /></> : null}
+      {name === 'shape' ? <><rect {...common} x="5" y="5" width="14" height="14" rx="2" /><circle {...common} cx="16" cy="8" r="2" /></> : null}
+      {name === 'text' ? <><path {...common} d="M5 6h14" /><path {...common} d="M12 6v12" /><path {...common} d="M9 18h6" /></> : null}
+      {name === 'fit' ? <><path {...common} d="M8 4H4v4" /><path {...common} d="M16 4h4v4" /><path {...common} d="M8 20H4v-4" /><path {...common} d="M16 20h4v-4" /></> : null}
+      {name === 'theme' ? <><circle {...common} cx="12" cy="12" r="5" /><path {...common} d="M12 2v2" /><path {...common} d="M12 20v2" /><path {...common} d="M4 12H2" /><path {...common} d="M22 12h-2" /></> : null}
+      {name === 'capture' ? <><rect {...common} x="4" y="7" width="16" height="12" rx="2" /><path {...common} d="M8 7l1.5-2h5L16 7" /><circle {...common} cx="12" cy="13" r="3" /></> : null}
+      {name === 'file' ? <><path {...common} d="M7 3h7l4 4v14H7z" /><path {...common} d="M14 3v5h4" /></> : null}
+      {name === 'panel' ? <><rect {...common} x="4" y="5" width="16" height="14" rx="2" /><path {...common} d="M8 9h8" /><path {...common} d="M8 13h6" /></> : null}
+      {name === 'image' ? <><rect {...common} x="4" y="5" width="16" height="14" rx="2" /><circle {...common} cx="9" cy="10" r="1.4" /><path {...common} d="M6.5 17l4-4 2.5 2.5 2-2L18 17" /></> : null}
+      {name === 'aiImage' ? <><rect {...common} x="4" y="5" width="16" height="14" rx="2" /><path {...common} d="M8 15l3-3 2 2 2-2 3 3" /><path {...common} d="M15.5 7.5l.5-1 .5 1 1 .5-1 .5-.5 1-.5-1-1-.5z" /></> : null}
+      {name === 'video' ? <><rect {...common} x="4" y="7" width="11" height="10" rx="2" /><path {...common} d="M15 11l5-3v8l-5-3" /></> : null}
+      {name === 'slider' ? <><path {...common} d="M5 7h14" /><path {...common} d="M5 12h14" /><path {...common} d="M5 17h14" /><circle {...common} cx="9" cy="7" r="1.5" /><circle {...common} cx="15" cy="12" r="1.5" /><circle {...common} cx="11" cy="17" r="1.5" /></> : null}
+      {name === 'csharp' ? <><path {...common} d="M8 8l-4 4 4 4" /><path {...common} d="M16 8l4 4-4 4" /><path {...common} d="M14 6l-4 12" /></> : null}
+      {name === 'note' ? <><path {...common} d="M6 4h12v13l-3 3H6z" /><path {...common} d="M15 17v3" /><path {...common} d="M15 17h3" /></> : null}
+      {name === 'annotation' ? <><path {...common} d="M5 5h14v10H9l-4 4z" /><path {...common} d="M8 9h8" /><path {...common} d="M8 12h5" /></> : null}
+      {name === 'sticky' ? <><path {...common} d="M6 4h12v10l-5 5H6z" /><path {...common} d="M13 19v-5h5" /></> : null}
+    </svg>
+  )
 }
 
 class CanvasErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
@@ -1890,57 +1957,57 @@ function CanvasWorkbench() {
               }}
               title={section === 'menu' ? '菜单' : section === 'draw' ? '绘图' : '显示'}
             >
-              {section === 'menu' ? 'M' : section === 'draw' ? 'D' : 'V'}
+              <ToolbarIcon name={section === 'menu' ? 'menu' : section === 'draw' ? 'draw' : 'view'} />
             </button>
           ))}
         </div>
         <div className="toolbar-tools">
           {activeToolbarSection === 'menu' ? (
             <>
-              <button type="button" title="添加节点" className={canvasManageOpen ? 'active' : ''} onClick={() => setCanvasManageOpen((current) => !current)}>+</button>
-              <button type="button" title="上传文件/图片" onClick={() => fileInputRef.current?.click()}>U</button>
-              <button type="button" title="保存画布" onClick={saveCanvasNow}>S</button>
-              <button type="button" title="我的画布" onClick={() => setMyCanvasOpen(true)}>B</button>
-              <button type="button" title="生成历史" onClick={() => setGenerationHistoryOpen(true)}>H</button>
-              <button type="button" title="代码视图" onClick={() => postHostMessage('canvas_switch_to_code', { canvasId: canvasIdRef.current })}>C</button>
+              <button type="button" title="添加节点" aria-label="添加节点" className={canvasManageOpen ? 'active' : ''} onClick={() => setCanvasManageOpen((current) => !current)}><ToolbarIcon name="plus" /></button>
+              <button type="button" title="上传文件/图片" aria-label="上传文件/图片" onClick={() => fileInputRef.current?.click()}><ToolbarIcon name="upload" /></button>
+              <button type="button" title="保存画布" aria-label="保存画布" onClick={saveCanvasNow}><ToolbarIcon name="save" /></button>
+              <button type="button" title="我的画布" aria-label="我的画布" onClick={() => setMyCanvasOpen(true)}><ToolbarIcon name="boards" /></button>
+              <button type="button" title="生成历史" aria-label="生成历史" onClick={() => setGenerationHistoryOpen(true)}><ToolbarIcon name="history" /></button>
+              <button type="button" title="代码视图" aria-label="代码视图" onClick={() => postHostMessage('canvas_switch_to_code', { canvasId: canvasIdRef.current })}><ToolbarIcon name="code" /></button>
             </>
           ) : null}
           {activeToolbarSection === 'draw' ? (
             <>
-              <button type="button" title="画笔" className={activeCanvasTool === 'pen' ? 'active' : ''} onClick={() => setActiveCanvasTool('pen')}>P</button>
-              <button type="button" title="橡皮" className={activeCanvasTool === 'eraser' ? 'active' : ''} onClick={() => setActiveCanvasTool('eraser')}>E</button>
-              <button type="button" title="形状" className={activeCanvasTool === 'shape' ? 'active' : ''} onClick={() => setActiveCanvasTool('shape')}>R</button>
-              <button type="button" title="文本框" className={activeCanvasTool === 'text' ? 'active' : ''} onClick={() => setActiveCanvasTool('text')}>T</button>
+              <button type="button" title="画笔" aria-label="画笔" className={activeCanvasTool === 'pen' ? 'active' : ''} onClick={() => setActiveCanvasTool('pen')}><ToolbarIcon name="pen" /></button>
+              <button type="button" title="橡皮" aria-label="橡皮" className={activeCanvasTool === 'eraser' ? 'active' : ''} onClick={() => setActiveCanvasTool('eraser')}><ToolbarIcon name="eraser" /></button>
+              <button type="button" title="形状" aria-label="形状" className={activeCanvasTool === 'shape' ? 'active' : ''} onClick={() => setActiveCanvasTool('shape')}><ToolbarIcon name="shape" /></button>
+              <button type="button" title="文本框" aria-label="文本框" className={activeCanvasTool === 'text' ? 'active' : ''} onClick={() => setActiveCanvasTool('text')}><ToolbarIcon name="text" /></button>
             </>
           ) : null}
           {activeToolbarSection === 'display' ? (
             <>
-              <button type="button" title="适配" onClick={onFit}>F</button>
-              <button type="button" title={isDarkMode ? '浅色' : '深色'} onClick={() => setThemeMode((current) => current === 'dark' ? 'light' : 'dark')}>{isDarkMode ? 'L' : 'K'}</button>
-              <button type="button" title="捕获 Rhino" onClick={onCaptureRhinoView}>R</button>
+              <button type="button" title="适配" aria-label="适配" onClick={onFit}><ToolbarIcon name="fit" /></button>
+              <button type="button" title={isDarkMode ? '浅色' : '深色'} aria-label={isDarkMode ? '浅色' : '深色'} onClick={() => setThemeMode((current) => current === 'dark' ? 'light' : 'dark')}><ToolbarIcon name="theme" /></button>
+              <button type="button" title="捕获 Rhino" aria-label="捕获 Rhino" onClick={onCaptureRhinoView}><ToolbarIcon name="capture" /></button>
             </>
           ) : null}
         </div>
         {activeToolbarSection === 'menu' && canvasManageOpen ? (
           <div className="toolbar-node-palette">
             {([
-              ['prompt', 'P', 'Prompt'],
-              ['file_upload', 'F', 'File'],
-              ['code', 'K', 'Code'],
-              ['panel', 'N', 'Panel'],
-              ['image', 'I', 'Image'],
-              ['gen_img', 'G', 'AI Image'],
-              ['gen_video', 'V', 'AI Video'],
-              ['slider', 'S', 'Slider'],
-              ['c_sharp', '#', 'C#'],
-              ['note', 'O', 'Note'],
-              ['annotation', 'A', '批注'],
-              ['sticky', 'Y', '便签'],
-            ] as Array<[CanvasNodeType, string, string]>).map(([nodeType, icon, label]) => (
+              ['prompt', 'text', 'Prompt'],
+              ['file_upload', 'file', 'File'],
+              ['code', 'code', 'Code'],
+              ['panel', 'panel', 'Panel'],
+              ['image', 'image', 'Image'],
+              ['gen_img', 'aiImage', 'AI Image'],
+              ['gen_video', 'video', 'AI Video'],
+              ['slider', 'slider', 'Slider'],
+              ['c_sharp', 'csharp', 'C#'],
+              ['note', 'note', 'Note'],
+              ['annotation', 'annotation', '批注'],
+              ['sticky', 'sticky', '便签'],
+            ] as Array<[CanvasNodeType, ToolbarIconName, string]>).map(([nodeType, icon, label]) => (
               <button key={nodeType} type="button" onClick={() => {
                 onAddTypedNode(nodeType)
                 setCanvasManageOpen(false)
-              }} title={label}>{icon}</button>
+              }} title={label} aria-label={label}><ToolbarIcon name={icon} /></button>
             ))}
           </div>
         ) : null}
