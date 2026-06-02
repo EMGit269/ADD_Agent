@@ -2793,6 +2793,9 @@ namespace ADDGH
             public string Declaration;
         }
 
+        private const string CSharpTypedAliasBlockStart = "// <addgh:auto-typed-inputs>";
+        private const string CSharpTypedAliasBlockEnd = "// </addgh:auto-typed-inputs>";
+
         private static string NormalizeCSharpTypeHint(string typeHint)
         {
             string norm = (typeHint ?? "").Trim().ToLowerInvariant();
@@ -2922,6 +2925,7 @@ namespace ADDGH
 
         private static string ApplyCSharpTypedInputBindingsToBody(string body, List<CSharpTypedInputBinding> bindings, List<string> warnings = null)
         {
+            body = StripExistingCSharpTypedInputAliasBlock(body ?? "");
             if (string.IsNullOrWhiteSpace(body) || bindings == null || bindings.Count == 0)
                 return body ?? "";
 
@@ -2935,13 +2939,98 @@ namespace ADDGH
             }
 
             var prefix = new StringBuilder();
+            prefix.AppendLine(CSharpTypedAliasBlockStart);
             prefix.AppendLine("// Auto-injected typed aliases from C# input type hints");
             foreach (var binding in bindings)
                 prefix.AppendLine(binding.Declaration);
+            prefix.AppendLine(CSharpTypedAliasBlockEnd);
             prefix.AppendLine();
 
             warnings?.Add("body 中的输入名已自动改写为强类型别名，避免重复手写 object -> 标量/几何转换。");
             return prefix + rewritten.TrimStart();
+        }
+
+        private static string StripExistingCSharpTypedInputAliasBlock(string body)
+        {
+            if (string.IsNullOrEmpty(body)) return body ?? "";
+
+            string markedPattern =
+                @"(?ms)^[ \t]*" + System.Text.RegularExpressions.Regex.Escape(CSharpTypedAliasBlockStart) +
+                @".*?^[ \t]*" + System.Text.RegularExpressions.Regex.Escape(CSharpTypedAliasBlockEnd) +
+                @"[ \t]*(?:\r?\n){0,2}";
+            string stripped = System.Text.RegularExpressions.Regex.Replace(body, markedPattern, "");
+
+            const string legacyHeader = "// Auto-injected typed aliases from C# input type hints";
+            int legacy = stripped.IndexOf(legacyHeader, StringComparison.Ordinal);
+            if (legacy < 0) return stripped;
+
+            string newline = stripped.IndexOf("\r\n", StringComparison.Ordinal) >= 0 ? "\r\n" : "\n";
+            int lineStart = stripped.LastIndexOf('\n', Math.Max(0, legacy - 1));
+            lineStart = lineStart < 0 ? 0 : lineStart + 1;
+
+            int scan = stripped.IndexOf('\n', legacy);
+            if (scan < 0) return stripped.Substring(0, lineStart).TrimEnd();
+            scan += 1;
+
+            while (scan < stripped.Length)
+            {
+                int lineEnd = stripped.IndexOf('\n', scan);
+                if (lineEnd < 0) lineEnd = stripped.Length;
+                string line = stripped.Substring(scan, lineEnd - scan).Trim();
+
+                if (line.Length == 0)
+                {
+                    scan = Math.Min(stripped.Length, lineEnd + 1);
+                    break;
+                }
+
+                if (line.IndexOf("__addgh_in_", StringComparison.Ordinal) < 0)
+                    break;
+
+                scan = Math.Min(stripped.Length, lineEnd + 1);
+            }
+
+            return stripped.Substring(0, lineStart).TrimEnd() + newline + stripped.Substring(scan).TrimStart();
+        }
+
+        private static List<string> GetCSharpOutputVariableNames(Grasshopper.Kernel.IGH_DocumentObject obj)
+        {
+            var names = new List<string>();
+            if (!(obj is Grasshopper.Kernel.IGH_Component comp)) return names;
+
+            foreach (var param in comp.Params.Output)
+            {
+                string name = (param?.Name ?? param?.NickName ?? "").Trim();
+                if (string.Equals(name, "out", StringComparison.OrdinalIgnoreCase)) continue;
+                if (!IsValidCSharpIdentifier(name)) continue;
+                if (!names.Contains(name)) names.Add(name);
+            }
+
+            return names;
+        }
+
+        private static bool TryValidateCSharpOutputUsage(string body, IEnumerable<string> outputNames, out string error)
+        {
+            error = null;
+            if (string.IsNullOrWhiteSpace(body) || outputNames == null) return true;
+
+            string[] mutatingMembers = { "Add", "AddRange", "Clear", "Insert", "Remove", "RemoveAt", "RemoveRange" };
+            foreach (string outputName in outputNames)
+            {
+                foreach (string member in mutatingMembers)
+                {
+                    string pattern = @"\b" + System.Text.RegularExpressions.Regex.Escape(outputName) + @"\s*\.\s*" + member + @"\s*\(";
+                    var match = System.Text.RegularExpressions.Regex.Match(body, pattern);
+                    if (!match.Success) continue;
+
+                    error = "C# Script output '" + outputName + "' is a ref object parameter; do not call "
+                        + outputName + "." + member + "(...). Collect values in a local List<T> or variable, then assign "
+                        + outputName + " = result at the end.";
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private static void ApplyPortMetadata(Grasshopper.Kernel.IGH_Param param, JToken specToken, bool forceCSharpOutputName = false, int portIndex = 0, List<string> warnings = null)
@@ -2949,9 +3038,16 @@ namespace ADDGH
             if (param == null || specToken == null) return;
             string name = specToken["name"]?.ToString();
             string typeHint = specToken["type_hint"]?.ToString();
-            bool appliedRuntimeTypeHint = false;
             if (!string.IsNullOrWhiteSpace(typeHint))
-                appliedRuntimeTypeHint = TryApplyRuntimeTypeHint(param, typeHint, warnings);
+                TryApplyRuntimeTypeHint(param, typeHint, warnings);
+            string typeHintDescription = "";
+            if (!string.IsNullOrWhiteSpace(typeHint))
+            {
+                string trimmedTypeHint = typeHint.Trim();
+                typeHintDescription = !string.IsNullOrWhiteSpace(NormalizeCSharpTypeHint(trimmedTypeHint))
+                    ? "[type_hint] " + trimmedTypeHint
+                    : trimmedTypeHint;
+            }
             if (forceCSharpOutputName)
             {
                 string forced = GetCSharpOutputPortName(portIndex);
@@ -2969,11 +3065,11 @@ namespace ADDGH
                 param.Name = name.Trim();
                 param.NickName = name.Trim();
                 if (!string.IsNullOrWhiteSpace(typeHint))
-                    param.Description = appliedRuntimeTypeHint ? "[type_hint] " + typeHint.Trim() : typeHint.Trim();
+                    param.Description = typeHintDescription;
             }
             else if (!string.IsNullOrWhiteSpace(typeHint))
             {
-                param.Description = appliedRuntimeTypeHint ? "[type_hint] " + typeHint.Trim() : typeHint.Trim();
+                param.Description = typeHintDescription;
             }
             param.Attributes?.ExpireLayout();
         }
@@ -3405,6 +3501,12 @@ namespace ADDGH
                 }
 
                 var warnings = new List<string>();
+                if (!TryValidateCSharpOutputUsage(body, GetCSharpOutputVariableNames(obj), out string outputUsageError))
+                {
+                    result = "Error: " + outputUsageError;
+                    return;
+                }
+
                 var typedBindings = BuildCSharpTypedInputBindingsFromComponent(obj, warnings);
                 string rewrittenBody = ApplyCSharpTypedInputBindingsToBody(body, typedBindings, warnings);
                 bool wrote = TrySetCSharpScriptBodyIntoTemplate(obj, rewrittenBody, warnings);
@@ -3522,6 +3624,12 @@ namespace ADDGH
                 }
 
                 TryConfigureCSharpScriptPortsAfterDefaultCreate(scriptObj, inputs, outputSpecs, warnings);
+
+                if (!TryValidateCSharpOutputUsage(body, GetCSharpOutputVariableNames(scriptObj), out string outputUsageError))
+                {
+                    result = "Error: " + outputUsageError;
+                    return;
+                }
 
                 var typedBindings = BuildCSharpTypedInputBindings(inputs, warnings);
                 string rewrittenBody = ApplyCSharpTypedInputBindingsToBody(body ?? "", typedBindings, warnings);

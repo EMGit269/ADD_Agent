@@ -180,7 +180,8 @@ namespace ADDGH
 2. 命名：Number Slider 必须设 label；普通电池严禁改 label。
 3. 最终回复用结构化 Markdown（短标题、列表、重点加粗）；代码/JSON/表达式/关键参数放在 ``` 代码块中，勿把大段技术内容堆在普通段落里。
 4. 参考画布（reference）：先完成建模思路与 GH 逻辑规划，再查阅 skills/reference_index.md；仅当条目与**已确定方案**明显相关时才调用 read_reference_json 读 JSON 做对照或局部复用，勿「先读参考再空想」。
-4a. 联网查询：当用户要求联网、最新信息、网页核对，或写 RhinoCommon/C# 时需要查证官方 API，可调用 `web_research`；已知官方 URL 时必须优先用 `mode=fetch` 直连。尽量少用 `mode=search`，只有遇到 API 报错、签名/类型不确定、已有代码疑似用错，或不知道具体官方页面时才搜索。写 Rhino/Grasshopper API 时按官方 API 精准查询策略：先 fetch 官方根 URL，未知类型再用 `allowed_domains` 限制到 `developer.rhino3d.com`、`mcneel.github.io` 做站内搜索，找到类型/方法页后继续 fetch，不做泛搜。不要把网页搜索结果当作画布事实或视觉事实。
+4a. Skills 很重要，且必须发生在建模规划前：首条系统消息会给出当前项目可用 skill 的 name/description/file；收到建模、修改、报错诊断或 C# Script/RhinoCommon 任务后，先根据用户任务、关键词和实现领域匹配相关 skill，并优先调用 `read_skill_file` 阅读正文，再制定建模方案、选择电池或修改画布。不要先凭记忆规划，再事后补读 skill；已有专项 skill 覆盖的工作流必须以 skill 正文为准，尤其是 C# Script、RhinoCommon API、标注/出图、ClippingDrawing、Bake、可视化预览和参考画布复用。
+4b. 联网查询：当用户要求联网、最新信息、网页核对，或写 RhinoCommon/C# 时需要查证官方 API，可调用 `web_research`；已知官方 URL 时必须优先用 `mode=fetch` 直连。尽量少用 `mode=search`，只有遇到 API 报错、签名/类型不确定、已有代码疑似用错，或不知道具体官方页面时才搜索。写 Rhino/Grasshopper API 时按官方 API 精准查询策略：先 fetch 官方根 URL，未知类型再用 `allowed_domains` 限制到 `developer.rhino3d.com`、`mcneel.github.io` 做站内搜索，找到类型/方法页后继续 fetch，不做泛搜。不要把网页搜索结果当作画布事实或视觉事实。
 5. 完成建模或修改后必须检查关键输出是否正确，不能以“没有报错”作为完成标准；目标电池可能仍输出 `Null`、空列表、空树或明显不符合预期的数据。
 6. 检查时优先围绕目标结果相关的关键电池做验证：必要时先触发 recompute，再读取组件状态、预览信息或关键输出；如果仅靠现有信息无法确认，允许在目标输出端临时或直接连接 `Panel` 检查实际输出内容。
 7. 若检查发现输出为 `Null`、空数据、类型不对、数据结构不对或结果与用户目标不一致，不能宣称完成；应继续定位并修正，再次验证后再结束。
@@ -2367,7 +2368,7 @@ namespace ADDGH
                     {
                         e.Handled = true;
                     }
-                    else if (e.Key == Key.Enter && Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) {
+                    else if (e.Key == Key.Enter && Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)) {
                         e.Handled = true;
                         int caret = _txtInput.CaretIndex;
                         _txtInput.SelectedText = Environment.NewLine;
@@ -2717,7 +2718,7 @@ namespace ADDGH
                 }
             }
 
-            warnings?.Add("Type hint '" + rawTypeHint + "' was recognized but could not be applied to runtime parameter type " + paramType.Name + ".");
+            warnings?.Add("Type hint '" + rawTypeHint + "' was recognized but could not be applied to runtime parameter type " + paramType.Name + "; C# Script ports may still expose object values, so the body writer should use generated aliases or explicit conversion.");
             return false;
         }
 
@@ -4628,7 +4629,9 @@ namespace ADDGH
                 }
 
                 if (summaries.Count > 0) {
-                    return "\n\n【当前项目可用技能库】:\n" + string.Join("\n", summaries) + "\n(你可以随时调用工具阅读上述文件以获取详细操作技能。)";
+                    return "\n\n【当前项目可用技能库】:\n"
+                        + string.Join("\n", summaries)
+                        + "\n规则：当用户任务、报错关键词或实现领域与某个 skill 描述匹配时，优先调用 read_skill_file 阅读该文件正文，再规划或修改画布。Skills 是项目经验与官方参考的主要入口，不要只看摘要就凭记忆实现。";
                 }
             } catch (Exception ex) {
                 AddGhLog.Warn("GetSkillsSummary failed: " + ex.Message);

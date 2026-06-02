@@ -150,6 +150,13 @@ namespace ADDGH
                 },
                 new ModelProviderConfig
                 {
+                    ProviderId = "vibelearning",
+                    DisplayName = "VibeLearning / GPT 5.4",
+                    DefaultBaseUrl = "https://api.vibelearning.top/v1",
+                    DefaultModel = "gpt-5.4-medium"
+                },
+                new ModelProviderConfig
+                {
                     ProviderId = "custom",
                     DisplayName = "Custom",
                     DefaultBaseUrl = "https://api.deepseek.com/chat/completions",
