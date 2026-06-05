@@ -180,8 +180,8 @@ namespace ADDGH
 2. 命名：Number Slider 必须设 label；普通电池严禁改 label。
 3. 最终回复用结构化 Markdown（短标题、列表、重点加粗）；代码/JSON/表达式/关键参数放在 ``` 代码块中，勿把大段技术内容堆在普通段落里。
 4. 参考画布（reference）：先完成建模思路与 GH 逻辑规划，再查阅 skills/reference_index.md；仅当条目与**已确定方案**明显相关时才调用 read_reference_json 读 JSON 做对照或局部复用，勿「先读参考再空想」。
-4a. Skills 很重要，且必须发生在建模规划前：首条系统消息会给出当前项目可用 skill 的 name/description/file；收到建模、修改、报错诊断或 C# Script/RhinoCommon 任务后，先根据用户任务、关键词和实现领域匹配相关 skill，并优先调用 `read_skill_file` 阅读正文，再制定建模方案、选择电池或修改画布。不要先凭记忆规划，再事后补读 skill；已有专项 skill 覆盖的工作流必须以 skill 正文为准，尤其是 C# Script、RhinoCommon API、标注/出图、ClippingDrawing、Bake、可视化预览和参考画布复用。
-4b. 联网查询：当用户要求联网、最新信息、网页核对，或写 RhinoCommon/C# 时需要查证官方 API，可调用 `web_research`；已知官方 URL 时必须优先用 `mode=fetch` 直连。尽量少用 `mode=search`，只有遇到 API 报错、签名/类型不确定、已有代码疑似用错，或不知道具体官方页面时才搜索。写 Rhino/Grasshopper API 时按官方 API 精准查询策略：先 fetch 官方根 URL，未知类型再用 `allowed_domains` 限制到 `developer.rhino3d.com`、`mcneel.github.io` 做站内搜索，找到类型/方法页后继续 fetch，不做泛搜。不要把网页搜索结果当作画布事实或视觉事实。
+4a. Skills 很重要，且必须发生在建模规划前：首条系统消息会给出当前项目可用 skill 的 name/description/file；收到建模、修改、报错诊断或 C# Script 任务后，先根据用户任务、关键词和实现领域匹配相关专项 skill，并优先调用 `read_skill_file` 阅读正文，再制定建模方案、选择电池或修改画布。不要先凭记忆规划，再事后补读 skill；已有专项 skill 覆盖的工作流必须以 skill 正文为准，尤其是标注/出图、ClippingDrawing、Bake、可视化预览和参考画布复用。RhinoCommon API 查证 skill 是低频兜底，只在具体 API 不确定、API 编译错误、高风险 Rhino 文档操作或用户明确要求官方查证时读取。
+4b. 联网查询：当用户要求联网、最新信息、网页核对，或具体 Rhino/Grasshopper API 签名不确定时，可调用 `web_research`；普通建模、已有 reference/skill 可复用、基础 C# 几何逻辑明确时不要联网。已知官方 URL 时必须优先用 `mode=fetch` 直连。尽量少用 `mode=search`，只有遇到 API 报错、签名/类型不确定、已有代码疑似用错，或不知道具体官方页面时才搜索。写 Rhino/Grasshopper API 时按官方 API 精准查询策略：先 fetch 官方根 URL，未知类型再用 `allowed_domains` 限制到 `developer.rhino3d.com`、`mcneel.github.io` 做站内搜索，找到类型/方法页后继续 fetch，不做泛搜。不要把网页搜索结果当作画布事实或视觉事实。
 5. 完成建模或修改后必须检查关键输出是否正确，不能以“没有报错”作为完成标准；目标电池可能仍输出 `Null`、空列表、空树或明显不符合预期的数据。
 6. 检查时优先围绕目标结果相关的关键电池做验证：必要时先触发 recompute，再读取组件状态、预览信息或关键输出；如果仅靠现有信息无法确认，允许在目标输出端临时或直接连接 `Panel` 检查实际输出内容。
 7. 若检查发现输出为 `Null`、空数据、类型不对、数据结构不对或结果与用户目标不一致，不能宣称完成；应继续定位并修正，再次验证后再结束。
@@ -204,12 +204,9 @@ namespace ADDGH
 10. 收到结构化视觉报告后，把“视觉事实”当高优先级参考；视觉报告只提供图片事实，不决定是否回答、出图或操作 Grasshopper。
 11. 对“按参考图修改”“与图片保持一致”“看起来不对但未报错”这类任务，不要只依赖无报错和非 Null 数据；完成数据级检查后仍要说明剩余视觉偏差或不确定性。
 12. 视觉报告与工具核实冲突时，以工具结果为准，并简短说明依据。
-13. `capture_rhino_viewport` 是可用工具，由你根据用户请求和任务需要自行决定是否调用；不要为了替代数据级检查而默认截图。
-13a. 截图前先整理预览：当截图用于结果展示或视觉检查时，应优先调用 `prepare_visual_review_preview`，把最终要检查的输出连接到一个干净的 Geometry 预览电池上；该工具会硬编码关闭所有 C# Script 预览。不要依赖脚本过程预览做视觉核验。
-13b. `capture_rhino_viewport` 返回给你的路径、bbox、预览计数等都不是视觉事实，只是截图传输元数据。除非该截图随后被送入视觉模型，否则你不能根据这些元数据推断形态是否正确、分段是否合理、长度是否匹配，也不能把 bbox 尺寸当作曲线/曲面 UV 路径长度。
-13c. 当用户问“截图里看到了什么”“你真的看得到截图吗”或需要基于截图做外观判断时，调用 `capture_rhino_viewport` 并显式设置 `visual_check=true`；默认 `visual_detail=low` 会使用压缩图节省 token，只有需要读小字/细节时才设为 `high`。只有该工具返回的 `visual_analysis` 才能作为截图视觉事实；如果返回 `visual_analysis_error` 或 `visual_check=false`，必须明确说明未完成视觉分析，不能根据截图元数据猜测。
-14. 当用户要求检查模型形态、外观、轮廓、比例或整体效果，而数据级检查不足以判断时，可先做最小代价验证：优先检查报错、Null、空数据、Panel 与关键输出；仍无法确认或需要展示时，再调用 `capture_rhino_viewport` 获取最小必要截图。不要默认触发视觉复核，只在有图片输入且确有视觉判断必要时使用。
-15. 当用户提供了图像参考，或用图片指出当前结果存在问题时，最终完成前应进行一次截图级视觉复核：先完成数据级检查，再调用 `capture_rhino_viewport` 获取当前结果截图，并以该截图作为最终核验依据之一；不要仅凭无报错、非 Null 或局部 Panel 检查就宣称与图片要求一致。
+13. `capture_rhino_viewport` 不作为 AI tool 暴露；不要尝试调用截图工具。用户可通过画布界面手动捕获 Rhino/GH 截图。
+14. 当用户要求检查模型形态、外观、轮廓、比例或整体效果时，优先做数据级验证：检查报错、Null、空数据、Panel 与关键输出；不要把截图路径、bbox 或预览计数等元数据当作视觉事实。
+15. 当用户提供图像参考或用图片指出问题时，最终完成前仍应完成数据级检查；不要主动触发自动截图级视觉复核，也不要声称已由视觉模型核验，除非宿主明确返回了视觉分析结果。
 16. 当用户目标是 AI 创作图片而不是 GH 建模时，调用 `create_ai_image`，不要先进入 VisualWorkflow，也不要擅自把图片要求转成 GH 画布操作。
 16a. 当 `create_ai_image` 返回成功后，不要输出 Markdown 图片语法、模板变量、代码占位符或诸如 `${result.savedImages[0].path}` 之类的路径引用。图片展示由宿主界面负责；你只需用自然语言简短说明结果与可继续调整的方向。
 
@@ -328,13 +325,16 @@ namespace ADDGH
 2. Existing C# Script body edits must use edit_csharp_script_component, not gh_native_script_editor or set_gh_component_value.
 3. The body field must contain only the RunScript method body. Do not include using statements, class declarations, the RunScript signature, or the default C# Script template.
 4. The create tool first places a default C# Script component, waits for it to initialize, then applies the requested name, ports, and body.
-5. Default C# outputs such as out/a are preserved. Output specs are business labels only; requested extra output variables start at b, c, d...; assign to those variables in the body. Do not assign to a in generated C# bodies because it is a default UI port.
-6. Do not create unnecessary outputs. Prefer one or a few structured outputs; split into multiple script components only when the logic is genuinely clearer.
-7. Do not declare local variables whose names collide with output variables currently in use, such as a, b, c.
-8. Non-script helper components in this mode are limited to Params and Display categories for input, output, preview, and debugging.
-9. When the user brings a new requirement or asks for an additive change, prefer adding one new C# Script component to extend the graph instead of rewriting an existing healthy C# Script component.
-10. If an existing C# Script component has no bug and already satisfies its current responsibility, leave it unchanged unless modifying it is clearly necessary for correctness, shared interface changes, or a simpler overall graph boundary.
-11. When creating a C# Script with its own sliders, panels, geometry params, value lists, preview, or debug helpers, put those helpers and the C# Script in one Grasshopper Group. Prefer create_csharp_script_component.components plus group_name; if helpers are added later, use manage_gh_groups to add them to the same group.";
+5. Default C# outputs such as out/a are preserved. Requested outputs use their valid `outputs[].name` values as C# variables and port names; assign to those names in the body. Do not assign to a unless intentionally using the default output.
+6. In C# priority mode, do not use modify_gh_component_ports as the normal way to change C# Script inputs or outputs. Prefer create_csharp_script_component for new scripts and edit_csharp_script_component for existing script logic; use modify_gh_component_ports only as a fallback repair tool when a dynamic port is visibly out of sync.
+7. For real Rhino C# Script type hints, use known menu names such as bool, int, string, double, Point3d, Point3dList, Vector3d, Plane, Interval, Line, Circle, Arc, Curve, Polyline, Rectangle3d, Mesh, Surface, Brep, GeometryBase, TextDot, and TextEntity. Do not invent native Rhino type hint names.
+8. ADD Agent conversion-only hints such as curve[], circle[], double[], and int[] are allowed only to drive defensive alias injection; they are not native Rhino port type hints.
+9. Do not create unnecessary outputs. Prefer one or a few structured outputs; split into multiple script components only when the logic is genuinely clearer.
+10. Do not declare local variables whose names collide with output variables currently in use.
+11. Non-script helper components in this mode are limited to Params and Display categories for input, output, preview, and debugging.
+12. When the user brings a new requirement or asks for an additive change, prefer adding one new C# Script component to extend the graph instead of rewriting an existing healthy C# Script component.
+13. If an existing C# Script component has no bug and already satisfies its current responsibility, leave it unchanged unless modifying it is clearly necessary for correctness, shared interface changes, or a simpler overall graph boundary.
+14. When creating a C# Script with its own sliders, panels, geometry params, value lists, preview, or debug helpers, put those helpers and the C# Script in one Grasshopper Group. Prefer create_csharp_script_component.components plus group_name; if helpers are added later, use manage_gh_groups to add them to the same group.";
         }
 
         private static string BuildCSharpTypedInputPrompt()
@@ -361,10 +361,12 @@ namespace ADDGH
 4. Use `create_csharp_script_component` for new core logic. Do not use `create_component_graph` or `create_script_component_graph` as a substitute for the core implementation.
 5. Existing C# Script logic must be edited with `edit_csharp_script_component`. Do not write C# source through generic value-setting tools.
 6. The C# body must contain only the RunScript method body. Do not include using statements, class declarations, full templates, or a custom RunScript signature.
-7. Business meaning for outputs belongs in labels, panels, or the final explanation. Do not encode business naming by inventing custom output variable conventions in the script body.
-8. If port changes temporarily desync the script signature, recompute and then fix the method body. Do not rewrite the full source template to work around it.
-9. For each new user requirement, prefer extending the canvas with a new C# Script component that owns the new responsibility, instead of folding fresh logic into an existing healthy script.
-10. Treat an existing correct C# Script component as stable by default. Do not modify it unless required by bug fixing, shared interface changes, or a clearly better script boundary that reduces overall complexity.";
+7. Requested C# outputs should use valid, explicit output names. Assign to those variables in the body.
+8. Do not use `modify_gh_component_ports` as the normal C# Script edit path. It is a fallback repair tool for visibly desynced dynamic ports; normal C# interface changes should be made through C# script creation/editing tools.
+9. Use Rhino C# Script menu type hint names for real port hints; list-like names such as curve[] or circle[] are ADD Agent conversion hints only, not native Rhino port hints.
+10. If port changes temporarily desync the script signature, recompute and then fix the method body. Do not rewrite the full source template to work around it.
+11. For each new user requirement, prefer extending the canvas with a new C# Script component that owns the new responsibility, instead of folding fresh logic into an existing healthy script.
+12. Treat an existing correct C# Script component as stable by default. Do not modify it unless required by bug fixing, shared interface changes, or a clearly better script boundary that reduces overall complexity.";
             }
 
             if (mode == LayoutMode.Battery)
@@ -629,6 +631,7 @@ namespace ADDGH
         }
 
         private static List<object> _messages = new List<object>();
+        private static List<object> _displayMessages = new List<object>();
         private static string _cachedCanvasState = null;  // 画布状态缓存
         private static string _cachedRhinoUnitSignature = null;
         private static bool _canvasChanged = true;  // 画布是否改变标记
@@ -680,6 +683,61 @@ namespace ADDGH
         {
             ChatMessageHelpers.TrimMessageHistory(_messages, DeploymentOptions.MaxPersistedChatMessages);
             RefreshContextMeter();
+        }
+
+        private static List<object> GetDisplayMessagesForUi()
+        {
+            return _displayMessages != null && _displayMessages.Count > 0
+                ? _displayMessages
+                : _messages;
+        }
+
+        private static JToken CloneMessageToken(object msg)
+        {
+            if (msg == null) return JValue.CreateNull();
+            if (msg is JToken token) return token.DeepClone();
+            return JToken.FromObject(msg);
+        }
+
+        private static void AddDisplayMessage(object msg)
+        {
+            if (_displayMessages == null)
+                _displayMessages = new List<object>();
+            _displayMessages.Add(CloneMessageToken(msg));
+        }
+
+        private static List<(string primary, string secondary)> ReadToolOperationSummaries(JArray summaries)
+        {
+            var result = new List<(string primary, string secondary)>();
+            if (summaries == null) return result;
+
+            foreach (var item in summaries.OfType<JObject>())
+            {
+                string primary = item["summary"]?.ToString() ?? item["primary"]?.ToString() ?? "";
+                string secondary = item["summary_detail"]?.ToString() ?? item["secondary"]?.ToString() ?? "";
+                if (!string.IsNullOrWhiteSpace(primary))
+                    result.Add((primary, secondary));
+            }
+
+            return result;
+        }
+
+        private static JArray BuildToolOperationSummaryArray(List<(string primary, string secondary, string undoId)> operationCards)
+        {
+            var arr = new JArray();
+            if (operationCards == null) return arr;
+
+            foreach (var item in operationCards)
+            {
+                if (string.IsNullOrWhiteSpace(item.primary)) continue;
+                arr.Add(new JObject
+                {
+                    ["summary"] = item.primary,
+                    ["summary_detail"] = item.secondary ?? ""
+                });
+            }
+
+            return arr;
         }
 
         /// <summary>Rhino/GH 退出或聊天窗口关闭时取消进行中的请求并释放计时器等资源。</summary>
@@ -1066,10 +1124,7 @@ namespace ADDGH
 
             if (_chatScroll.VerticalOffset <= 0.5)
             {
-                _stickyUserMessageHost.Visibility = Visibility.Collapsed;
-                _stickyUserMessageCurrentText = null;
-                SetStickyUserMessageSource(null);
-                _stickyUserMessageStack.Children.Clear();
+                HideStickyUserMessage(scrollDelta);
                 return;
             }
 
@@ -1094,8 +1149,17 @@ namespace ADDGH
 
                 if (top <= activationY)
                 {
-                    activeText = userText;
-                    activeSource = child;
+                    double bottom = top + Math.Max(0, child.ActualHeight);
+                    if (IsUserMessageOverStickyLineLimit(child) && bottom > activationY)
+                    {
+                        activeText = null;
+                        activeSource = null;
+                    }
+                    else
+                    {
+                        activeText = userText;
+                        activeSource = child;
+                    }
                 }
                 else
                     break;
@@ -1103,10 +1167,7 @@ namespace ADDGH
 
             if (string.IsNullOrWhiteSpace(activeText))
             {
-                _stickyUserMessageHost.Visibility = Visibility.Collapsed;
-                _stickyUserMessageCurrentText = null;
-                SetStickyUserMessageSource(null);
-                _stickyUserMessageStack.Children.Clear();
+                HideStickyUserMessage(scrollDelta);
                 return;
             }
 
@@ -1131,13 +1192,25 @@ namespace ADDGH
         {
             if (ReferenceEquals(_stickyUserMessageSource, source)) return;
 
+            bool isFirstStickySource = _stickyUserMessageSource == null && source != null;
+
             if (_stickyUserMessageSource != null)
                 AnimateElementOpacity(_stickyUserMessageSource, 1, 100);
 
             _stickyUserMessageSource = source;
 
             if (_stickyUserMessageSource != null)
-                AnimateElementOpacity(_stickyUserMessageSource, 0, 100);
+            {
+                if (isFirstStickySource)
+                {
+                    _stickyUserMessageSource.BeginAnimation(UIElement.OpacityProperty, null);
+                    _stickyUserMessageSource.Opacity = 0;
+                }
+                else
+                {
+                    AnimateElementOpacity(_stickyUserMessageSource, 0, 100);
+                }
+            }
         }
 
         private static void AnimateElementOpacity(UIElement element, double opacity, int milliseconds)
@@ -1152,8 +1225,39 @@ namespace ADDGH
             element.BeginAnimation(UIElement.OpacityProperty, animation, HandoffBehavior.SnapshotAndReplace);
         }
 
+        private static bool IsUserMessageOverStickyLineLimit(FrameworkElement source)
+        {
+            double contentHeight = GetPrimaryUserMessageTextHeight(source);
+            if (contentHeight <= 0)
+                contentHeight = Math.Max(0, (source?.ActualHeight ?? 0) - 16);
+
+            return contentHeight > GetStickyUserMessageTextMaxHeight() + 2;
+        }
+
+        private static double GetPrimaryUserMessageTextHeight(DependencyObject source)
+        {
+            if (source == null) return 0;
+
+            foreach (var richTextBox in FindVisualChildren<RichTextBox>(source))
+            {
+                if (richTextBox.ActualHeight > 0)
+                    return richTextBox.ActualHeight;
+            }
+
+            return 0;
+        }
+
+        private static double GetStickyUserMessageTextMaxHeight()
+        {
+            return ChatBodyLineHeight * 4;
+        }
+
         private static Border CreateStickyUserMessageCard(string text)
         {
+            var content = BuildMarkdownPanel(text, false);
+            content.MaxHeight = GetStickyUserMessageTextMaxHeight();
+            content.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
+
             var card = new Border
             {
                 Padding = new Thickness(14, 8, 14, 8),
@@ -1162,11 +1266,38 @@ namespace ADDGH
                 BorderBrush = new SolidColorBrush(Color.FromRgb(52, 52, 52)),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(9),
-                Child = BuildMarkdownPanel(text, false),
+                ClipToBounds = true,
+                Child = content,
                 RenderTransform = new TranslateTransform()
             };
 
             return card;
+        }
+
+        private static void HideStickyUserMessage(double scrollDelta)
+        {
+            if (_stickyUserMessageHost == null || _stickyUserMessageStack == null)
+                return;
+
+            _stickyUserMessageCurrentText = null;
+            RestoreStickyUserMessageSourceInstantly();
+            foreach (var card in _stickyUserMessageStack.Children.OfType<FrameworkElement>())
+            {
+                card.BeginAnimation(UIElement.OpacityProperty, null);
+                if (card.RenderTransform is TranslateTransform transform)
+                    transform.BeginAnimation(TranslateTransform.YProperty, null);
+            }
+            _stickyUserMessageStack.Children.Clear();
+            _stickyUserMessageHost.Visibility = Visibility.Collapsed;
+        }
+
+        private static void RestoreStickyUserMessageSourceInstantly()
+        {
+            if (_stickyUserMessageSource == null) return;
+
+            _stickyUserMessageSource.BeginAnimation(UIElement.OpacityProperty, null);
+            _stickyUserMessageSource.Opacity = 1;
+            _stickyUserMessageSource = null;
         }
 
         private static void TransitionStickyUserMessage(string text, double scrollDelta)
@@ -1181,10 +1312,10 @@ namespace ADDGH
 
             double offset = Math.Max(18, oldCards.FirstOrDefault()?.ActualHeight ?? 34);
             var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+            double direction = scrollDelta < -0.01 ? -1 : 1;
 
             if (oldCards.Count > 0)
             {
-                double direction = scrollDelta < -0.01 ? -1 : 1;
                 ((TranslateTransform)nextCard.RenderTransform).Y = offset * direction;
 
                 foreach (var oldCard in oldCards)
@@ -1288,7 +1419,7 @@ namespace ADDGH
         MinHeight=""520"" MinWidth=""410""
         ResizeMode=""CanResize""
         WindowStyle=""SingleBorderWindow"" Background=""#141414""
-        Topmost=""True"" WindowStartupLocation=""CenterScreen"" x:Name=""SquirrelWindow"">
+        Topmost=""True"" WindowStartupLocation=""CenterScreen"" x:Name=""MaipoWindow"">
     <Window.Resources>
         <sys:Double x:Key=""ToolbarButtonSize"" xmlns:sys=""clr-namespace:System;assembly=mscorlib"">42</sys:Double>
         <sys:Double x:Key=""ToolbarIconSize"" xmlns:sys=""clr-namespace:System;assembly=mscorlib"">21</sys:Double>
@@ -1542,7 +1673,7 @@ namespace ADDGH
                                 </Grid>
                             </Viewbox>
                         </Button>
-                        <TextBlock Text=""Squirrel"" Foreground=""#DDE1E7"" FontSize=""17"" FontWeight=""SemiBold"" VerticalAlignment=""Center"" Margin=""12,0,0,0""/>
+                        <TextBlock Text=""Maipo"" Foreground=""#DDE1E7"" FontSize=""17"" FontWeight=""SemiBold"" VerticalAlignment=""Center"" Margin=""12,0,0,0""/>
                     </StackPanel>
                     <StackPanel Orientation=""Horizontal"" HorizontalAlignment=""Right"">
                         <Button x:Name=""BtnToggleViewMode"" Content=""JSON"" Foreground=""#B8B8B8"" Background=""#242A32"" BorderThickness=""1"" BorderBrush=""#3A404A"" FontSize=""10"" Padding=""9,5"" Cursor=""Hand"" VerticalAlignment=""Center"" Margin=""0"" Visibility=""Collapsed"">
@@ -1600,7 +1731,7 @@ namespace ADDGH
 
                 <Border Grid.Row=""1"" Grid.RowSpan=""2"" Grid.Column=""1"" Panel.ZIndex=""8"" Background=""{x:Null}"" CornerRadius=""0"" Padding=""18,12,18,24"" x:Name=""InputAreaBorder"" HorizontalAlignment=""Center"" VerticalAlignment=""Bottom"">
                 <StackPanel>
-                    <TextBlock x:Name=""EmptyChatPrompt"" Text=""要用Squirrel创造什么？"" Foreground=""#F3F3F3"" FontSize=""24"" FontWeight=""SemiBold"" TextAlignment=""Center"" HorizontalAlignment=""Center"" Margin=""0,0,0,24""/>
+                    <TextBlock x:Name=""EmptyChatPrompt"" Text=""要用Maipo创造什么？"" Foreground=""#F3F3F3"" FontSize=""24"" FontWeight=""SemiBold"" TextAlignment=""Center"" HorizontalAlignment=""Center"" Margin=""0,0,0,24""/>
                     <!-- Warning Bar -->
                     <Border x:Name=""WarningBar"" Visibility=""Collapsed"" Background=""#2A2A2A"" BorderBrush=""Transparent"" BorderThickness=""0"" CornerRadius=""8"" Padding=""12,8"" Margin=""0,0,0,10"">
                     <Grid>
@@ -2436,6 +2567,7 @@ namespace ADDGH
                 ResetTransientConversationState();
                 _messages.Clear();
                 _messages.AddRange(BuildInitialSystemMessages());
+                _displayMessages?.Clear();
                     if (_chatPanel != null) _chatPanel.Children.Clear();
                     _cachedCanvasState = null;
                     _canvasChanged = true;
@@ -3277,10 +3409,14 @@ namespace ADDGH
                     ? null
                     : BuildPrimaryModelImageContextNote(_activeImageInputRoute, attachmentsToSend);
                 var contentArr = BuildUserMessageContent(input, attachmentsToSend, includeImagesInPrimaryMessage, imageContextNote);
-                _messages.Add(new { role = "user", content = contentArr });
+                var userMessage = new { role = "user", content = contentArr };
+                _messages.Add(userMessage);
+                AddDisplayMessage(userMessage);
                 AppendUserMessageWithAttachments(displayInput, attachmentsToSend);
             } else {
-                _messages.Add(new { role = "user", content = input });
+                var userMessage = new { role = "user", content = input };
+                _messages.Add(userMessage);
+                AddDisplayMessage(userMessage);
                 AppendBubble(displayInput, true);
             }
 
@@ -3467,12 +3603,40 @@ namespace ADDGH
                 if (!string.Equals(role, "user", StringComparison.OrdinalIgnoreCase)
                     && !string.Equals(role, "assistant", StringComparison.OrdinalIgnoreCase))
                     continue;
+                string toolSummary = TryGetToolOperationPreview(msg);
+                if (!string.IsNullOrWhiteSpace(toolSummary))
+                    return toolSummary.Length > 64 ? toolSummary.Substring(0, 64) + "…" : toolSummary;
                 string content = ChatMessageHelpers.TryGetPlainTextContent(msg);
                 if (string.IsNullOrWhiteSpace(content)) continue;
                 content = content.Replace("\r", " ").Replace("\n", " ").Trim();
                 return content.Length > 64 ? content.Substring(0, 64) + "…" : content;
             }
             return "空白对话";
+        }
+
+        private static string TryGetToolOperationPreview(object msg)
+        {
+            try
+            {
+                JObject jo = msg as JObject ?? (msg is JToken token ? token as JObject : null);
+                if (jo == null && msg != null)
+                    jo = JObject.FromObject(msg);
+                var summaries = jo?["tool_operation_summaries"] as JArray;
+                if (summaries == null || summaries.Count == 0)
+                    return null;
+
+                var parts = summaries
+                    .OfType<JObject>()
+                    .Select(item => item["summary"]?.ToString())
+                    .Where(text => !string.IsNullOrWhiteSpace(text))
+                    .Take(3)
+                    .ToList();
+                return parts.Count == 0 ? null : "工具：" + string.Join(" / ", parts);
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private static string FormatConversationTime(DateTime utcTime)
@@ -3568,12 +3732,16 @@ namespace ADDGH
             var conv = GetOrCreateActiveHistoryConversation(titleSeed);
             if (conv == null) return;
 
+            var sourceMessages = _displayMessages != null && _displayMessages.Count > 0
+                ? _displayMessages
+                : _messages;
+
             var payload = new JArray();
-            foreach (var msg in _messages)
+            foreach (var msg in sourceMessages)
             {
                 string role = ChatMessageHelpers.TryGetRole(msg);
                 if (string.Equals(role, "system", StringComparison.OrdinalIgnoreCase)) continue;
-                payload.Add(JToken.FromObject(msg));
+                payload.Add(CloneMessageToken(msg));
             }
 
             conv.Messages = payload;
@@ -3603,10 +3771,13 @@ namespace ADDGH
             {
                 _activeHistoryId = conv.Id;
                 _messages = new List<object>(BuildInitialSystemMessages());
+                _displayMessages = new List<object>();
                 foreach (var token in conv.Messages ?? new JArray())
                 {
-                    if (token is JObject jo) _messages.Add(jo.DeepClone());
-                    else _messages.Add(token);
+                    JToken cloned = token.DeepClone();
+                    if (cloned is JObject jo) _messages.Add(jo.DeepClone());
+                    else _messages.Add(cloned);
+                    _displayMessages.Add(cloned.DeepClone());
                 }
 
                 if (_chatPanel != null) _chatPanel.Children.Clear();
@@ -3636,6 +3807,7 @@ namespace ADDGH
                 {
                     _messages.Clear();
                     _messages.AddRange(BuildInitialSystemMessages());
+                    _displayMessages?.Clear();
                     if (_chatPanel != null) _chatPanel.Children.Clear();
                     AppendSystemMessage("当前对话已删除，已切换到新会话。");
                     RefreshContextMeter();
@@ -3764,6 +3936,16 @@ namespace ADDGH
                     Foreground = new SolidColorBrush(Color.FromRgb(98, 98, 98)),
                     FontSize = 10,
                     Margin = new Thickness(0, 8, 0, 0)
+                });
+                info.Children.Add(new TextBlock
+                {
+                    Text = GetConversationPreview(conv),
+                    Foreground = new SolidColorBrush(Color.FromRgb(126, 126, 126)),
+                    FontSize = 11,
+                    TextWrapping = TextWrapping.Wrap,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    MaxHeight = 34,
+                    Margin = new Thickness(0, 7, 0, 0)
                 });
 
                 Grid.SetColumn(info, 0);
@@ -4408,6 +4590,9 @@ namespace ADDGH
                 });
 
                 _messages.Add(messageNode);
+                if (_displayMessages == null)
+                    _displayMessages = new List<object>();
+                _displayMessages.Add(messageNode);
                 EnforceChatHistoryLimit();
 
                 int addComp = 0, delComp = 0, addConn = 0, delConn = 0, addCodeLines = 0, delCodeLines = 0;
@@ -4447,6 +4632,8 @@ namespace ADDGH
 
                         if (dispatch.EndApiRoundAwaitingUser)
                         {
+                            if (operationCards.Count > 0)
+                                messageNode["tool_operation_summaries"] = BuildToolOperationSummaryArray(operationCards);
                             SyncActiveHistoryConversation();
                             return dispatch.EarlyResponse ?? new ApiResponse { Content = fullContent, Reasoning = fullReasoning };
                         }
@@ -4468,10 +4655,15 @@ namespace ADDGH
                             latestStatsUndoId = dispatch.UndoId;
                         }
 
-                        _messages.Add(new { role = "tool", tool_call_id = callId, name = funcName, content = toolResult });
+                        var toolMessage = new { role = "tool", tool_call_id = callId, name = funcName, content = toolResult };
+                        _messages.Add(toolMessage);
+                        AddDisplayMessage(toolMessage);
                     }
 
                     EnforceChatHistoryLimit();
+
+                    if (operationCards.Count > 0)
+                        messageNode["tool_operation_summaries"] = BuildToolOperationSummaryArray(operationCards);
 
                     if (operationCards.Count > 0)
                         AppendToolOperationCards(operationCards);
@@ -4485,7 +4677,7 @@ namespace ADDGH
                         && _finalVisualReviewSourceImages != null
                         && _finalVisualReviewSourceImages.Any(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64)))
                     {
-                        _pendingFinalVisualReview = true;
+                        _pendingFinalVisualReview = false;
                     }
 
                     SyncActiveHistoryConversation();

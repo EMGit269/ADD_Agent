@@ -2750,12 +2750,18 @@ namespace ADDGH
             for (int i = 0; i < count; i++)
             {
                 var spec = outputLabels != null && i < outputLabels.Count ? outputLabels[i] as JObject : null;
+                string name = spec?["name"]?.ToString();
                 string label = spec?["label"]?.ToString();
-                if (string.IsNullOrWhiteSpace(label)) label = spec?["name"]?.ToString();
                 string typeHint = spec?["type_hint"]?.ToString();
+                string variableName = !string.IsNullOrWhiteSpace(name)
+                    ? name.Trim()
+                    : (!string.IsNullOrWhiteSpace(label) && IsValidCSharpIdentifier(label.Trim())
+                        ? label.Trim()
+                        : GetCSharpOutputPortName(i));
                 outputs.Add(new JObject
                 {
-                    ["name"] = string.IsNullOrWhiteSpace(label) ? GetCSharpOutputPortName(i) : label.Trim(),
+                    ["name"] = variableName,
+                    ["label"] = label ?? "",
                     ["type_hint"] = typeHint ?? ""
                 });
             }
@@ -2807,9 +2813,21 @@ namespace ADDGH
                 case "float":
                 case "double":
                     return "double";
+                case "double[]":
+                case "doublelist":
+                case "list<double>":
+                case "list<number>":
+                    return "doublelist";
                 case "int":
                 case "integer":
                     return "int";
+                case "int[]":
+                case "integer[]":
+                case "intlist":
+                case "integerlist":
+                case "list<int>":
+                case "list<integer>":
+                    return "intlist";
                 case "bool":
                 case "boolean":
                     return "bool";
@@ -2824,6 +2842,17 @@ namespace ADDGH
                     return "vector3d";
                 case "curve":
                     return "curve";
+                case "curve[]":
+                case "curvelist":
+                case "list<curve>":
+                    return "curvelist";
+                case "circle":
+                    return "circle";
+                case "circle[]":
+                case "circles":
+                case "circlelist":
+                case "list<circle>":
+                    return "circlelist";
                 case "brep":
                     return "brep";
                 case "mesh":
@@ -2846,45 +2875,58 @@ namespace ADDGH
                 if (!IsValidCSharpIdentifier(name)) continue;
 
                 string normalized = NormalizeCSharpTypeHint(token["type_hint"]?.ToString());
-                if (string.IsNullOrWhiteSpace(normalized)) continue;
 
                 string alias = "__addgh_in_" + name;
-                string declaration = null;
+                string declaration = "object " + alias + " = __addgh_unwrap(" + name + ");";
                 switch (normalized)
                 {
                     case "double":
-                        declaration = "double " + alias + " = System.Convert.ToDouble(" + name + ", System.Globalization.CultureInfo.InvariantCulture);";
+                        declaration = "double " + alias + " = __addgh_to_double(" + name + ");";
+                        break;
+                    case "doublelist":
+                        declaration = "System.Collections.Generic.List<double> " + alias + " = __addgh_to_double_list(" + name + ");";
                         break;
                     case "int":
-                        declaration = "int " + alias + " = System.Convert.ToInt32(" + name + ", System.Globalization.CultureInfo.InvariantCulture);";
+                        declaration = "int " + alias + " = __addgh_to_int(" + name + ");";
+                        break;
+                    case "intlist":
+                        declaration = "System.Collections.Generic.List<int> " + alias + " = __addgh_to_int_list(" + name + ");";
                         break;
                     case "bool":
-                        declaration = "bool " + alias + " = System.Convert.ToBoolean(" + name + ", System.Globalization.CultureInfo.InvariantCulture);";
+                        declaration = "bool " + alias + " = __addgh_to_bool(" + name + ");";
                         break;
                     case "string":
-                        declaration = "string " + alias + " = " + name + " == null ? string.Empty : " + name + ".ToString();";
+                        declaration = "string " + alias + " = __addgh_to_string(" + name + ");";
                         break;
                     case "point3d":
-                        declaration = "Rhino.Geometry.Point3d " + alias + " = " + name + " is Rhino.Geometry.Point3d v_" + name + " ? v_" + name + " : Rhino.Geometry.Point3d.Unset;";
+                        declaration = "object __addgh_raw_" + name + " = __addgh_unwrap(" + name + "); Rhino.Geometry.Point3d " + alias + " = __addgh_raw_" + name + " is Rhino.Geometry.Point3d v_" + name + " ? v_" + name + " : Rhino.Geometry.Point3d.Unset;";
                         break;
                     case "vector3d":
-                        declaration = "Rhino.Geometry.Vector3d " + alias + " = " + name + " is Rhino.Geometry.Vector3d v_" + name + " ? v_" + name + " : Rhino.Geometry.Vector3d.Unset;";
+                        declaration = "object __addgh_raw_" + name + " = __addgh_unwrap(" + name + "); Rhino.Geometry.Vector3d " + alias + " = __addgh_raw_" + name + " is Rhino.Geometry.Vector3d v_" + name + " ? v_" + name + " : Rhino.Geometry.Vector3d.Unset;";
                         break;
                     case "curve":
-                        declaration = "Rhino.Geometry.Curve " + alias + " = " + name + " as Rhino.Geometry.Curve;";
+                        declaration = "Rhino.Geometry.Curve " + alias + " = __addgh_to_curve(" + name + ");";
+                        break;
+                    case "curvelist":
+                        declaration = "System.Collections.Generic.List<Rhino.Geometry.Curve> " + alias + " = __addgh_to_curve_list(" + name + ");";
+                        break;
+                    case "circle":
+                        declaration = "Rhino.Geometry.Circle " + alias + " = __addgh_to_circle(" + name + ");";
+                        break;
+                    case "circlelist":
+                        declaration = "System.Collections.Generic.List<Rhino.Geometry.Circle> " + alias + " = __addgh_to_circle_list(" + name + ");";
                         break;
                     case "brep":
-                        declaration = "Rhino.Geometry.Brep " + alias + " = " + name + " as Rhino.Geometry.Brep;";
+                        declaration = "Rhino.Geometry.Brep " + alias + " = __addgh_unwrap(" + name + ") as Rhino.Geometry.Brep;";
                         break;
                     case "mesh":
-                        declaration = "Rhino.Geometry.Mesh " + alias + " = " + name + " as Rhino.Geometry.Mesh;";
+                        declaration = "Rhino.Geometry.Mesh " + alias + " = __addgh_unwrap(" + name + ") as Rhino.Geometry.Mesh;";
                         break;
                     case "plane":
-                        declaration = "Rhino.Geometry.Plane " + alias + " = " + name + " is Rhino.Geometry.Plane v_" + name + " ? v_" + name + " : Rhino.Geometry.Plane.Unset;";
+                        declaration = "object __addgh_raw_" + name + " = __addgh_unwrap(" + name + "); Rhino.Geometry.Plane " + alias + " = __addgh_raw_" + name + " is Rhino.Geometry.Plane v_" + name + " ? v_" + name + " : Rhino.Geometry.Plane.Unset;";
                         break;
                 }
 
-                if (string.IsNullOrWhiteSpace(declaration)) continue;
                 bindings.Add(new CSharpTypedInputBinding
                 {
                     Name = name,
@@ -2895,8 +2937,180 @@ namespace ADDGH
             }
 
             if (bindings.Count > 0)
-                warnings?.Add("已根据 C# 输入端口 type_hint 自动注入强类型局部变量，body 可直接按输入名使用常见标量/几何类型。");
+                warnings?.Add("C# input aliases were injected per port. Ports with recognized type_hint use defensive typed aliases; ports without type_hint use unwrapped object aliases.");
             return bindings;
+        }
+
+        private static string BuildCSharpTypedInputHelperBlock()
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("System.Func<object, object> __addgh_unwrap = value =>");
+            sb.AppendLine("{");
+            sb.AppendLine("    object current = value;");
+            sb.AppendLine("    for (int __addgh_i = 0; __addgh_i < 6 && current != null; __addgh_i++)");
+            sb.AppendLine("    {");
+            sb.AppendLine("        var goo = current as Grasshopper.Kernel.Types.IGH_Goo;");
+            sb.AppendLine("        if (goo != null)");
+            sb.AppendLine("        {");
+            sb.AppendLine("            object scriptValue = goo.ScriptVariable();");
+            sb.AppendLine("            if (scriptValue != null && !object.ReferenceEquals(scriptValue, current))");
+            sb.AppendLine("            {");
+            sb.AppendLine("                current = scriptValue;");
+            sb.AppendLine("                continue;");
+            sb.AppendLine("            }");
+            sb.AppendLine("        }");
+            sb.AppendLine("        var prop = current.GetType().GetProperty(\"Value\", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);");
+            sb.AppendLine("        if (prop == null || prop.GetIndexParameters().Length != 0) break;");
+            sb.AppendLine("        object next = prop.GetValue(current, null);");
+            sb.AppendLine("        if (next == null || object.ReferenceEquals(next, current)) break;");
+            sb.AppendLine("        current = next;");
+            sb.AppendLine("    }");
+            sb.AppendLine("    return current;");
+            sb.AppendLine("};");
+            sb.AppendLine("System.Func<object, string> __addgh_to_string = value =>");
+            sb.AppendLine("{");
+            sb.AppendLine("    object raw = __addgh_unwrap(value);");
+            sb.AppendLine("    return raw == null ? string.Empty : raw.ToString();");
+            sb.AppendLine("};");
+            sb.AppendLine("System.Func<object, double> __addgh_to_double = value =>");
+            sb.AppendLine("{");
+            sb.AppendLine("    object raw = __addgh_unwrap(value);");
+            sb.AppendLine("    if (raw == null) return 0.0;");
+            sb.AppendLine("    if (raw is double) return (double)raw;");
+            sb.AppendLine("    if (raw is float) return (double)(float)raw;");
+            sb.AppendLine("    if (raw is int) return (double)(int)raw;");
+            sb.AppendLine("    if (raw is long) return (double)(long)raw;");
+            sb.AppendLine("    if (raw is decimal) return (double)(decimal)raw;");
+            sb.AppendLine("    double parsed;");
+            sb.AppendLine("    if (double.TryParse(raw.ToString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out parsed)) return parsed;");
+            sb.AppendLine("    if (double.TryParse(raw.ToString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.CurrentCulture, out parsed)) return parsed;");
+            sb.AppendLine("    return 0.0;");
+            sb.AppendLine("};");
+            sb.AppendLine("System.Func<object, int> __addgh_to_int = value =>");
+            sb.AppendLine("{");
+            sb.AppendLine("    object raw = __addgh_unwrap(value);");
+            sb.AppendLine("    if (raw == null) return 0;");
+            sb.AppendLine("    if (raw is int) return (int)raw;");
+            sb.AppendLine("    if (raw is long) return (int)(long)raw;");
+            sb.AppendLine("    double parsed = __addgh_to_double(raw);");
+            sb.AppendLine("    return (int)System.Math.Round(parsed);");
+            sb.AppendLine("};");
+            sb.AppendLine("System.Func<object, bool> __addgh_to_bool = value =>");
+            sb.AppendLine("{");
+            sb.AppendLine("    object raw = __addgh_unwrap(value);");
+            sb.AppendLine("    if (raw == null) return false;");
+            sb.AppendLine("    if (raw is bool) return (bool)raw;");
+            sb.AppendLine("    bool parsed;");
+            sb.AppendLine("    if (bool.TryParse(raw.ToString(), out parsed)) return parsed;");
+            sb.AppendLine("    double numeric;");
+            sb.AppendLine("    if (double.TryParse(raw.ToString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out numeric)) return System.Math.Abs(numeric) > double.Epsilon;");
+            sb.AppendLine("    return false;");
+            sb.AppendLine("};");
+            sb.AppendLine("System.Func<object, System.Collections.IEnumerable> __addgh_to_sequence = value =>");
+            sb.AppendLine("{");
+            sb.AppendLine("    object raw = __addgh_unwrap(value);");
+            sb.AppendLine("    if (raw == null || raw is string) return null;");
+            sb.AppendLine("    return raw as System.Collections.IEnumerable;");
+            sb.AppendLine("};");
+            sb.AppendLine("System.Func<object, Rhino.Geometry.Curve> __addgh_to_curve = null;");
+            sb.AppendLine("__addgh_to_curve = value =>");
+            sb.AppendLine("{");
+            sb.AppendLine("    object raw = __addgh_unwrap(value);");
+            sb.AppendLine("    if (raw == null) return null;");
+            sb.AppendLine("    if (raw is Rhino.Geometry.Curve) return raw as Rhino.Geometry.Curve;");
+            sb.AppendLine("    if (raw is Rhino.Geometry.Circle) return ((Rhino.Geometry.Circle)raw).ToNurbsCurve();");
+            sb.AppendLine("    if (raw is Rhino.Geometry.Arc) return ((Rhino.Geometry.Arc)raw).ToNurbsCurve();");
+            sb.AppendLine("    var seq = raw as System.Collections.IEnumerable;");
+            sb.AppendLine("    if (seq != null && !(raw is string))");
+            sb.AppendLine("    {");
+            sb.AppendLine("        foreach (object item in seq)");
+            sb.AppendLine("        {");
+            sb.AppendLine("            Rhino.Geometry.Curve crv = __addgh_to_curve(item);");
+            sb.AppendLine("            if (crv != null) return crv;");
+            sb.AppendLine("        }");
+            sb.AppendLine("    }");
+            sb.AppendLine("    return null;");
+            sb.AppendLine("};");
+            sb.AppendLine("System.Func<object, System.Collections.Generic.List<Rhino.Geometry.Curve>> __addgh_to_curve_list = value =>");
+            sb.AppendLine("{");
+            sb.AppendLine("    var list = new System.Collections.Generic.List<Rhino.Geometry.Curve>();");
+            sb.AppendLine("    object raw = __addgh_unwrap(value);");
+            sb.AppendLine("    var seq = raw as System.Collections.IEnumerable;");
+            sb.AppendLine("    if (seq != null && !(raw is string))");
+            sb.AppendLine("    {");
+            sb.AppendLine("        foreach (object item in seq)");
+            sb.AppendLine("        {");
+            sb.AppendLine("            Rhino.Geometry.Curve crv = __addgh_to_curve(item);");
+            sb.AppendLine("            if (crv != null) list.Add(crv);");
+            sb.AppendLine("        }");
+            sb.AppendLine("    }");
+            sb.AppendLine("    else");
+            sb.AppendLine("    {");
+            sb.AppendLine("        Rhino.Geometry.Curve crv = __addgh_to_curve(raw);");
+            sb.AppendLine("        if (crv != null) list.Add(crv);");
+            sb.AppendLine("    }");
+            sb.AppendLine("    return list;");
+            sb.AppendLine("};");
+            sb.AppendLine("System.Func<object, Rhino.Geometry.Circle> __addgh_to_circle = null;");
+            sb.AppendLine("__addgh_to_circle = value =>");
+            sb.AppendLine("{");
+            sb.AppendLine("    object raw = __addgh_unwrap(value);");
+            sb.AppendLine("    if (raw is Rhino.Geometry.Circle) return (Rhino.Geometry.Circle)raw;");
+            sb.AppendLine("    if (raw is Rhino.Geometry.Curve)");
+            sb.AppendLine("    {");
+            sb.AppendLine("        Rhino.Geometry.Circle circle;");
+            sb.AppendLine("        if (((Rhino.Geometry.Curve)raw).TryGetCircle(out circle)) return circle;");
+            sb.AppendLine("    }");
+            sb.AppendLine("    var seq = raw as System.Collections.IEnumerable;");
+            sb.AppendLine("    if (seq != null && !(raw is string))");
+            sb.AppendLine("    {");
+            sb.AppendLine("        foreach (object item in seq)");
+            sb.AppendLine("        {");
+            sb.AppendLine("            Rhino.Geometry.Circle circle = __addgh_to_circle(item);");
+            sb.AppendLine("            if (circle.IsValid) return circle;");
+            sb.AppendLine("        }");
+            sb.AppendLine("    }");
+            sb.AppendLine("    return Rhino.Geometry.Circle.Unset;");
+            sb.AppendLine("};");
+            sb.AppendLine("System.Func<object, System.Collections.Generic.List<Rhino.Geometry.Circle>> __addgh_to_circle_list = value =>");
+            sb.AppendLine("{");
+            sb.AppendLine("    var list = new System.Collections.Generic.List<Rhino.Geometry.Circle>();");
+            sb.AppendLine("    object raw = __addgh_unwrap(value);");
+            sb.AppendLine("    var seq = raw as System.Collections.IEnumerable;");
+            sb.AppendLine("    if (seq != null && !(raw is string))");
+            sb.AppendLine("    {");
+            sb.AppendLine("        foreach (object item in seq)");
+            sb.AppendLine("        {");
+            sb.AppendLine("            Rhino.Geometry.Circle circle = __addgh_to_circle(item);");
+            sb.AppendLine("            if (circle.IsValid) list.Add(circle);");
+            sb.AppendLine("        }");
+            sb.AppendLine("    }");
+            sb.AppendLine("    else");
+            sb.AppendLine("    {");
+            sb.AppendLine("        Rhino.Geometry.Circle circle = __addgh_to_circle(raw);");
+            sb.AppendLine("        if (circle.IsValid) list.Add(circle);");
+            sb.AppendLine("    }");
+            sb.AppendLine("    return list;");
+            sb.AppendLine("};");
+            sb.AppendLine("System.Func<object, System.Collections.Generic.List<double>> __addgh_to_double_list = value =>");
+            sb.AppendLine("{");
+            sb.AppendLine("    var list = new System.Collections.Generic.List<double>();");
+            sb.AppendLine("    object raw = __addgh_unwrap(value);");
+            sb.AppendLine("    var seq = raw as System.Collections.IEnumerable;");
+            sb.AppendLine("    if (seq != null && !(raw is string)) foreach (object item in seq) list.Add(__addgh_to_double(item));");
+            sb.AppendLine("    else list.Add(__addgh_to_double(raw));");
+            sb.AppendLine("    return list;");
+            sb.AppendLine("};");
+            sb.AppendLine("System.Func<object, System.Collections.Generic.List<int>> __addgh_to_int_list = value =>");
+            sb.AppendLine("{");
+            sb.AppendLine("    var list = new System.Collections.Generic.List<int>();");
+            sb.AppendLine("    object raw = __addgh_unwrap(value);");
+            sb.AppendLine("    var seq = raw as System.Collections.IEnumerable;");
+            sb.AppendLine("    if (seq != null && !(raw is string)) foreach (object item in seq) list.Add(__addgh_to_int(item));");
+            sb.AppendLine("    else list.Add(__addgh_to_int(raw));");
+            sb.AppendLine("    return list;");
+            sb.AppendLine("};");
+            return sb.ToString();
         }
 
         private static List<CSharpTypedInputBinding> BuildCSharpTypedInputBindingsFromComponent(Grasshopper.Kernel.IGH_DocumentObject obj, List<string> warnings = null)
@@ -2940,7 +3154,8 @@ namespace ADDGH
 
             var prefix = new StringBuilder();
             prefix.AppendLine(CSharpTypedAliasBlockStart);
-            prefix.AppendLine("// Auto-injected typed aliases from C# input type hints");
+            prefix.AppendLine("// Auto-injected defensive typed aliases from C# input type hints");
+            prefix.Append(BuildCSharpTypedInputHelperBlock());
             foreach (var binding in bindings)
                 prefix.AppendLine(binding.Declaration);
             prefix.AppendLine(CSharpTypedAliasBlockEnd);
@@ -3037,6 +3252,7 @@ namespace ADDGH
         {
             if (param == null || specToken == null) return;
             string name = specToken["name"]?.ToString();
+            string label = specToken["label"]?.ToString();
             string typeHint = specToken["type_hint"]?.ToString();
             if (!string.IsNullOrWhiteSpace(typeHint))
                 TryApplyRuntimeTypeHint(param, typeHint, warnings);
@@ -3064,8 +3280,13 @@ namespace ADDGH
             {
                 param.Name = name.Trim();
                 param.NickName = name.Trim();
+                var descParts = new List<string>();
+                if (!string.IsNullOrWhiteSpace(label) && !string.Equals(label.Trim(), name.Trim(), StringComparison.Ordinal))
+                    descParts.Add("label: " + label.Trim());
                 if (!string.IsNullOrWhiteSpace(typeHint))
-                    param.Description = typeHintDescription;
+                    descParts.Add(typeHintDescription);
+                if (descParts.Count > 0)
+                    param.Description = string.Join("; ", descParts);
             }
             else if (!string.IsNullOrWhiteSpace(typeHint))
             {
@@ -3384,16 +3605,18 @@ namespace ADDGH
             var requestedOutputParams = new List<Grasshopper.Kernel.IGH_Param>();
             for (int i = 0; i < outputTargets.Count; i++)
             {
-                string forcedName = GetCSharpOutputPortName(i);
+                string requestedName = outputTargets[i]?["name"]?.ToString()?.Trim();
+                if (string.IsNullOrWhiteSpace(requestedName))
+                    requestedName = GetCSharpOutputPortName(i);
                 var existing = comp.Params.Output.FirstOrDefault(p =>
-                    string.Equals(p.Name, forcedName, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(p.NickName, forcedName, StringComparison.OrdinalIgnoreCase));
+                    string.Equals(p.Name, requestedName, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(p.NickName, requestedName, StringComparison.OrdinalIgnoreCase));
 
                 if (existing == null)
                 {
                     if (!AddPort(Grasshopper.Kernel.GH_ParameterSide.Output, out existing))
                     {
-                        warnings?.Add("Failed to add C# output port " + forcedName + "; default out/a outputs were preserved.");
+                        warnings?.Add("Failed to add C# output port " + requestedName + "; default out/a outputs were preserved.");
                         continue;
                     }
                 }
@@ -3411,7 +3634,7 @@ namespace ADDGH
                 ApplyPortMetadata(comp.Params.Input[i], inputs[i], false, i, warnings);
 
             for (int i = 0; i < outputTargets.Count && i < requestedOutputParams.Count; i++)
-                ApplyPortMetadata(requestedOutputParams[i], outputTargets[i], true, i, warnings);
+                ApplyPortMetadata(requestedOutputParams[i], outputTargets[i], false, i, warnings);
 
             return true;
         }
@@ -3543,8 +3766,25 @@ namespace ADDGH
 
                 aliasId = string.IsNullOrWhiteSpace(aliasId) ? "core" : aliasId.Trim();
                 var outputSpecs = BuildCSharpOutputPortsFromLabels(outputs);
-                var outputNames = new HashSet<string>(Enumerable.Range(0, outputSpecs.Count).Select(GetCSharpOutputPortName), StringComparer.Ordinal);
-                outputNames.Add("a");
+                var outputNames = new HashSet<string>(StringComparer.Ordinal)
+                {
+                    "a",
+                    "out"
+                };
+                foreach (var outputSpec in outputSpecs.OfType<JObject>())
+                {
+                    string outputName = outputSpec["name"]?.ToString()?.Trim();
+                    if (!IsValidCSharpIdentifier(outputName))
+                    {
+                        result = "Error: C# output port name must be a valid identifier: " + (outputName ?? "");
+                        return;
+                    }
+                    if (!outputNames.Add(outputName))
+                    {
+                        result = "Error: duplicate C# output port name: " + outputName;
+                        return;
+                    }
+                }
 
                 for (int i = 0; inputs != null && i < inputs.Count; i++)
                 {
@@ -3724,7 +3964,7 @@ namespace ADDGH
                     ["created_connections"] = connected,
                     ["skipped_connections"] = connections?.Count ?? 0,
                     ["script_write_ok"] = wrote ? 1 : 0,
-                    ["forced_output_variables"] = new JArray(Enumerable.Range(0, outputSpecs.Count).Select(GetCSharpOutputPortName)),
+                    ["output_variables"] = new JArray(outputSpecs.OfType<JObject>().Select(o => o["name"]?.ToString()).Where(n => !string.IsNullOrWhiteSpace(n))),
                     ["aliases"] = aliasMap,
                     ["warnings"] = new JArray(warnings)
                 };
@@ -4109,6 +4349,9 @@ namespace ADDGH
 
         private static string ExecuteCaptureRhinoViewport(string framing, int? width, int? height, double? paddingRatio)
         {
+            if (IsScreenshotCaptureTemporarilyDisabled())
+                return "Error: capture_rhino_viewport is disabled.";
+
             string result = "";
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
             {
@@ -4220,12 +4463,14 @@ namespace ADDGH
                         Directory.CreateDirectory(dir);
                         string filePath = Path.Combine(dir, "rhino_capture_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".png");
                         bitmap.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
-                        string dataUrl = "data:image/png;base64," + Convert.ToBase64String(File.ReadAllBytes(filePath));
+                        string mimeType = GetMimeType(Path.GetExtension(filePath).ToLowerInvariant());
+                        string dataUrl = "data:" + mimeType + ";base64," + Convert.ToBase64String(File.ReadAllBytes(filePath));
 
                         var payload = new JObject
                         {
                             ["path"] = filePath,
                             ["dataUrl"] = dataUrl,
+                            ["mimeType"] = mimeType,
                             ["width"] = captureWidth,
                             ["height"] = captureHeight,
                             ["framing"] = framingMode,
@@ -4755,6 +5000,11 @@ namespace ADDGH
             return result;
         }
 
+        private static bool IsScreenshotCaptureTemporarilyDisabled()
+        {
+            return false;
+        }
+
         private static string ExecutePrepareVisualReviewPreview(string sourceId, int sourceOutputIndex, string label)
         {
             string result = "";
@@ -4856,7 +5106,23 @@ namespace ADDGH
             return result;
         }
 
-        private static string ExecuteModifyGhComponentPorts(string id, bool isInput, string action, string portName = null, int? index = null)
+        private static void RefreshCSharpTypedAliasesAfterPortChange(Grasshopper.Kernel.IGH_DocumentObject obj, List<string> warnings)
+        {
+            if (!IsCSharpScriptComponent(obj)) return;
+
+            if (!TryReadCSharpScriptBodyPreservingTemplate(obj, out string currentBody, out string detail))
+            {
+                warnings?.Add("C# Script body was not refreshed after port change because the editable body block could not be read.");
+                return;
+            }
+
+            var bindings = BuildCSharpTypedInputBindingsFromComponent(obj, warnings);
+            string rewritten = ApplyCSharpTypedInputBindingsToBody(currentBody, bindings, warnings);
+            if (!TrySetCSharpScriptBodyIntoTemplate(obj, rewritten, warnings))
+                warnings?.Add("C# Script body was not refreshed after port change because the editable body block could not be written.");
+        }
+
+        private static string ExecuteModifyGhComponentPorts(string id, bool isInput, string action, string portName = null, int? index = null, string typeHint = null)
         {
             string result = "";
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
@@ -4869,13 +5135,25 @@ namespace ADDGH
                 var comp = obj as Grasshopper.Kernel.IGH_Component;
                 if (comp == null) { result = "Error: 无法作为组件处理。"; return; }
 
+                var warnings = new List<string>();
+
                 if (action == "add") {
                     if (isInput) {
                         var newParam = vpc.CreateParameter(Grasshopper.Kernel.GH_ParameterSide.Input, comp.Params.Input.Count);
                         comp.Params.RegisterInputParam(newParam);
+                        ApplyPortMetadata(newParam, new JObject
+                        {
+                            ["name"] = string.IsNullOrWhiteSpace(portName) ? newParam?.Name : portName.Trim(),
+                            ["type_hint"] = typeHint ?? ""
+                        }, false, comp.Params.Input.Count - 1, warnings);
                     } else {
                         var newParam = vpc.CreateParameter(Grasshopper.Kernel.GH_ParameterSide.Output, comp.Params.Output.Count);
                         comp.Params.RegisterOutputParam(newParam);
+                        ApplyPortMetadata(newParam, new JObject
+                        {
+                            ["name"] = string.IsNullOrWhiteSpace(portName) ? newParam?.Name : portName.Trim(),
+                            ["type_hint"] = typeHint ?? ""
+                        }, false, comp.Params.Output.Count - 1, warnings);
                     }
                 } else if (action == "remove") {
                     var list = isInput ? comp.Params.Input : comp.Params.Output;
@@ -4925,11 +5203,22 @@ namespace ADDGH
 
                 vpc.VariableParameterMaintenance();
                 comp.Params.OnParametersChanged();
+                RefreshCSharpTypedAliasesAfterPortChange(obj, warnings);
                 obj.ExpireSolution(true);
                 _canvasChanged = true;
                 try { doc.ScheduleSolution(150); }
                 catch (Exception ex) { AddGhLog.Warn("ExecuteModifyGhComponentPorts Schedule failed: " + ex.Message); }
-                result = "端口修改成功。";
+                if (warnings.Count > 0)
+                {
+                    var payload = new JObject
+                    {
+                        ["status"] = "ok",
+                        ["warnings"] = new JArray(warnings)
+                    };
+                    result = payload.ToString(Formatting.None);
+                }
+                else
+                    result = "端口修改成功。";
             }));
             return result;
         }

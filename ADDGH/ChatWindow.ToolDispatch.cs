@@ -133,11 +133,7 @@ namespace ADDGH
                 }
                 else if (funcName == "capture_rhino_viewport")
                 {
-                    result.ToolResult = ExecuteCaptureRhinoViewport(
-                        argsObj["framing"]?.ToString(),
-                        ReadNullableInt(argsObj, "width"),
-                        ReadNullableInt(argsObj, "height"),
-                        ReadNullableDouble(argsObj, "padding_ratio"));
+                    result.ToolResult = "Error: capture_rhino_viewport is not exposed to AI tools.";
                 }
                 else if (funcName == "gh_native_script_editor")
                 {
@@ -342,10 +338,7 @@ namespace ADDGH
                 }
                 else if (funcName == "prepare_visual_review_preview")
                 {
-                    result.ToolResult = ExecutePrepareVisualReviewPreview(
-                        ResolveToolObjectId(argsObj["source_id"]?.ToString()),
-                        argsObj["source_output_index"]?.ToObject<int?>() ?? 0,
-                        argsObj["label"]?.ToString());
+                    result.ToolResult = "Error: prepare_visual_review_preview is disabled.";
                 }
                 else if (funcName == "modify_gh_component_ports")
                 {
@@ -354,7 +347,8 @@ namespace ADDGH
                         argsObj["is_input"]?.ToObject<bool>() ?? false,
                         argsObj["action"]?.ToString(),
                         argsObj["port_name"]?.ToString(),
-                        argsObj["index"]?.ToObject<int?>());
+                        argsObj["index"]?.ToObject<int?>(),
+                        argsObj["type_hint"]?.ToString());
                 }
                 else if (funcName == "modify_gh_port_data")
                 {
@@ -379,6 +373,14 @@ namespace ADDGH
                 else if (funcName == "read_reference_json")
                 {
                     result.ToolResult = ExecuteReadReferenceJson(argsObj["file_name"]?.ToString());
+                }
+                else if (funcName == "import_reference_gh")
+                {
+                    result.ToolResult = ExecuteImportReferenceGh(
+                        argsObj["file_name"]?.ToString(),
+                        ReadNullableDouble(argsObj, "offset_x"),
+                        ReadNullableDouble(argsObj, "offset_y"),
+                        argsObj["group_name"]?.ToString());
                 }
                 else if (funcName == "create_gh_skill")
                 {
@@ -462,15 +464,7 @@ namespace ADDGH
                 }
                 else if (string.Equals(funcName, "capture_rhino_viewport", StringComparison.Ordinal))
                 {
-                    result.ToolResult = await ExecuteCaptureRhinoViewportAsync(
-                        argsObj["question"]?.ToString(),
-                        argsObj["framing"]?.ToString(),
-                        ReadNullableInt(argsObj, "width"),
-                        ReadNullableInt(argsObj, "height"),
-                        ReadNullableDouble(argsObj, "padding_ratio"),
-                        ReadNullableBool(argsObj, "visual_check") ?? false,
-                        argsObj["visual_detail"]?.ToString(),
-                        ct);
+                    result.ToolResult = "Error: capture_rhino_viewport is not exposed to AI tools.";
                 }
                 else if (string.Equals(funcName, "web_research", StringComparison.Ordinal))
                 {
