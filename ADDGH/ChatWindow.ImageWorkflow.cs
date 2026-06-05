@@ -21,6 +21,8 @@ namespace ADDGH
             public string Provider { get; set; }
             public string Model { get; set; }
             public string Intent { get; set; }
+            public int Width { get; set; }
+            public int Height { get; set; }
         }
 
         private sealed class AiImageExecutionResult
@@ -108,6 +110,8 @@ namespace ADDGH
                         ["dataUrl"] = BuildImageDataUrl(item.Path, item.MimeType),
                         ["path"] = item.Path,
                         ["mimeType"] = item.MimeType,
+                        ["width"] = item.Width,
+                        ["height"] = item.Height,
                         ["prompt"] = item.Prompt,
                         ["provider"] = item.Provider,
                         ["model"] = item.Model,
@@ -169,8 +173,16 @@ namespace ADDGH
                 }
 
                 string usedEndpoint = BuildGeminiNativeImageEndpoint(providerSettings.BaseUrl, providerSettings.ModelName);
-                string finalResponse = await PostCanvasGeminiNativeImageAsync(providerSettings, usedEndpoint, prompt, imageDataUrl, ct).ConfigureAwait(false);
-                outcome.Images = await SaveGeneratedImagesFromResponseAsync(finalResponse, prompt, normalizedIntent, providerSettings, ct).ConfigureAwait(false);
+                int requestedCount = Math.Max(1, Math.Min(4, count));
+                var generatedImages = new List<GeneratedImageRecord>();
+                string finalResponse = "";
+                for (int i = 0; i < requestedCount; i++)
+                {
+                    finalResponse = await PostCanvasGeminiNativeImageAsync(providerSettings, usedEndpoint, prompt, imageDataUrl, aspectRatio, imageSize, ct).ConfigureAwait(false);
+                    var saved = await SaveGeneratedImagesFromResponseAsync(finalResponse, prompt, normalizedIntent, providerSettings, ct).ConfigureAwait(false);
+                    generatedImages.AddRange(saved);
+                }
+                outcome.Images = generatedImages;
                 if (outcome.Images.Count == 0)
                 {
                     outcome.Error = BuildProviderDiagnostic(providerSettings, "Image generation failed: request succeeded but no image data was found.", finalResponse, usedEndpoint);
@@ -196,7 +208,7 @@ namespace ADDGH
             var body = new JObject
             {
                 ["model"] = providerSettings.ModelName,
-                ["prompt"] = prompt ?? "",
+                ["prompt"] = InjectImageGenerationTrigger(prompt),
                 ["n"] = Math.Max(1, Math.Min(4, count))
             };
 
@@ -214,6 +226,58 @@ namespace ADDGH
             return body;
         }
 
+        private static string InjectImageGenerationTrigger(string prompt)
+        {
+            string text = prompt ?? "";
+            if (text.IndexOf("生成图片", StringComparison.OrdinalIgnoreCase) >= 0)
+                return text;
+
+            if (string.IsNullOrWhiteSpace(text))
+                return "生成图片";
+
+            return "生成图片\n" + text;
+        }
+
+        private static JObject BuildGeminiImageConfig(string aspectRatio, string imageSize)
+        {
+            var config = new JObject();
+            string normalizedAspectRatio = NormalizeGeminiAspectRatio(aspectRatio);
+            if (!string.IsNullOrWhiteSpace(normalizedAspectRatio))
+                config["aspectRatio"] = normalizedAspectRatio;
+
+            string normalizedImageSize = NormalizeGeminiImageSize(imageSize);
+            if (!string.IsNullOrWhiteSpace(normalizedImageSize))
+                config["imageSize"] = normalizedImageSize;
+
+            return config;
+        }
+
+        private static string NormalizeGeminiAspectRatio(string aspectRatio)
+        {
+            string text = (aspectRatio ?? "").Trim().ToLowerInvariant().Replace(" ", "");
+            if (string.IsNullOrWhiteSpace(text) || text == "original")
+                return "";
+
+            var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "1:1",
+                "3:4",
+                "4:3",
+                "9:16",
+                "16:9",
+                "21:9",
+                "2:3",
+                "3:2"
+            };
+            return allowed.Contains(text) ? text : "";
+        }
+
+        private static string NormalizeGeminiImageSize(string imageSize)
+        {
+            string text = (imageSize ?? "").Trim().ToUpperInvariant();
+            return text == "1K" || text == "2K" || text == "4K" ? text : "";
+        }
+
         private static bool IsImageTaskModel(string modelName)
         {
             string model = (modelName ?? "").Trim();
@@ -228,13 +292,14 @@ namespace ADDGH
                 && model.IndexOf("image", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
-        private static async Task<string> PostCanvasGeminiNativeImageAsync(ProviderRuntimeSettings providerSettings, string endpoint, string prompt, string imageDataUrl, System.Threading.CancellationToken ct)
+        private static async Task<string> PostCanvasGeminiNativeImageAsync(ProviderRuntimeSettings providerSettings, string endpoint, string prompt, string imageDataUrl, string aspectRatio, string imageSize, System.Threading.CancellationToken ct)
         {
+            string requestPrompt = InjectImageGenerationTrigger(prompt);
             var parts = new JArray
             {
                 new JObject
                 {
-                    ["text"] = prompt ?? ""
+                    ["text"] = requestPrompt
                 }
             };
 
@@ -266,6 +331,22 @@ namespace ADDGH
                     }
                 }
             };
+            JObject imageConfig = BuildGeminiImageConfig(aspectRatio, imageSize);
+            if (imageConfig.Count > 0)
+            {
+                body["generationConfig"] = new JObject
+                {
+                    ["responseModalities"] = new JArray("TEXT", "IMAGE"),
+                    ["imageConfig"] = imageConfig
+                };
+            }
+            else
+            {
+                body["generationConfig"] = new JObject
+                {
+                    ["responseModalities"] = new JArray("TEXT", "IMAGE")
+                };
+            }
 
             using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
             {
@@ -286,12 +367,13 @@ namespace ADDGH
 
         private static async Task<string> PostImageChatCompletionAsync(ProviderRuntimeSettings providerSettings, string endpoint, JObject imageBody, string imageDataUrl, System.Threading.CancellationToken ct)
         {
+            string requestPrompt = InjectImageGenerationTrigger(imageBody["prompt"]?.ToString());
             var content = new JArray
             {
                 new JObject
                 {
                     ["type"] = "text",
-                    ["text"] = imageBody["prompt"]?.ToString() ?? ""
+                    ["text"] = requestPrompt
                 }
             };
 
@@ -624,7 +706,7 @@ namespace ADDGH
             var body = new JObject
             {
                 ["model"] = providerSettings.ModelName,
-                ["prompt"] = prompt ?? "",
+                ["prompt"] = InjectImageGenerationTrigger(prompt),
                 ["response_format"] = "b64_json"
             };
 
@@ -647,7 +729,7 @@ namespace ADDGH
 
             var form = new MultipartFormDataContent();
             form.Add(new StringContent(providerSettings.ModelName ?? ""), "model");
-            form.Add(new StringContent(prompt ?? ""), "prompt");
+            form.Add(new StringContent(InjectImageGenerationTrigger(prompt)), "prompt");
             form.Add(new StringContent("b64_json"), "response_format");
             if (!string.IsNullOrWhiteSpace(aspectRatio))
                 form.Add(new StringContent(aspectRatio.Trim()), "aspect_ratio");
@@ -725,6 +807,9 @@ namespace ADDGH
                     continue;
 
                 string path = SaveImageBytesToConversationPath(bytes, mimeType, index++);
+                int imageWidth = 0;
+                int imageHeight = 0;
+                TryReadImageDimensions(path, out imageWidth, out imageHeight);
                 result.Add(new GeneratedImageRecord
                 {
                     Path = path,
@@ -732,11 +817,36 @@ namespace ADDGH
                     Prompt = prompt ?? "",
                     Provider = providerSettings?.Config?.DisplayName ?? "",
                     Model = providerSettings?.ModelName ?? "",
-                    Intent = intent
+                    Intent = intent,
+                    Width = imageWidth,
+                    Height = imageHeight
                 });
             }
 
             return result;
+        }
+
+        private static bool TryReadImageDimensions(string path, out int width, out int height)
+        {
+            width = 0;
+            height = 0;
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                return false;
+
+            try
+            {
+                using (var image = System.Drawing.Image.FromFile(path))
+                {
+                    width = image.Width;
+                    height = image.Height;
+                    return width > 0 && height > 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Debug("TryReadImageDimensions failed: " + ex.Message);
+                return false;
+            }
         }
 
         private static JArray CollectGeneratedImageItems(JToken token)
@@ -919,6 +1029,8 @@ namespace ADDGH
                 {
                     ["path"] = item.Path,
                     ["mimeType"] = item.MimeType,
+                    ["width"] = item.Width,
+                    ["height"] = item.Height,
                     ["prompt"] = item.Prompt,
                     ["provider"] = item.Provider,
                     ["model"] = item.Model,
@@ -959,7 +1071,9 @@ namespace ADDGH
                         Prompt = item["prompt"]?.ToString() ?? root["prompt"]?.ToString() ?? "",
                         Provider = item["provider"]?.ToString() ?? root["provider"]?.ToString() ?? "",
                         Model = item["model"]?.ToString() ?? root["model"]?.ToString() ?? "",
-                        Intent = item["intent"]?.ToString() ?? root["intent"]?.ToString() ?? ""
+                        Intent = item["intent"]?.ToString() ?? root["intent"]?.ToString() ?? "",
+                        Width = item["width"]?.ToObject<int?>() ?? 0,
+                        Height = item["height"]?.ToObject<int?>() ?? 0
                     });
                 }
 
@@ -984,6 +1098,8 @@ namespace ADDGH
                 {
                     ["path"] = item.Path,
                     ["mimeType"] = item.MimeType,
+                    ["width"] = item.Width,
+                    ["height"] = item.Height,
                     ["prompt"] = item.Prompt,
                     ["provider"] = item.Provider,
                     ["model"] = item.Model,
@@ -1035,6 +1151,10 @@ namespace ADDGH
             {
                 var item = generated[i];
                 string sourceRef = $"generated_image:{conversationId}:{DateTime.UtcNow.Ticks}:{i}";
+                double nodeWidth = item.Width > 0 ? Math.Min(520, Math.Max(160, item.Width)) : 360;
+                double nodeHeight = item.Width > 0 && item.Height > 0
+                    ? Math.Min(420, Math.Max(110, nodeWidth * item.Height / item.Width))
+                    : 260;
                 typedNodes.Add(NormalizeCanvasImageNode(new JObject
                 {
                     ["id"] = "node:" + sourceRef.Replace(":", "_"),
@@ -1042,8 +1162,8 @@ namespace ADDGH
                     ["nodeType"] = "image",
                     ["x"] = centerX + i * 380,
                     ["y"] = centerY,
-                    ["w"] = 360,
-                    ["h"] = 260,
+                    ["w"] = nodeWidth,
+                    ["h"] = nodeHeight,
                     ["meta"] = new JObject
                     {
                         ["sourceRef"] = sourceRef,
@@ -1053,6 +1173,9 @@ namespace ADDGH
                         ["body"] = item.Prompt ?? "",
                         ["imagePath"] = item.Path,
                         ["imageDataUrl"] = BuildImageDataUrl(item.Path, item.MimeType),
+                        ["mimeType"] = item.MimeType ?? "image/png",
+                        ["naturalWidth"] = item.Width,
+                        ["naturalHeight"] = item.Height,
                         ["prompt"] = item.Prompt ?? "",
                         ["provider"] = item.Provider ?? "",
                         ["model"] = item.Model ?? "",
@@ -1062,8 +1185,8 @@ namespace ADDGH
                             new JObject { ["id"] = "in", ["label"] = "Input", ["direction"] = "input", ["dataType"] = "image", ["slot"] = 0 },
                             new JObject { ["id"] = "out", ["label"] = "Output", ["direction"] = "output", ["dataType"] = "image", ["slot"] = 1 }
                         },
-                        ["w"] = 360,
-                        ["h"] = 260
+                        ["w"] = nodeWidth,
+                        ["h"] = nodeHeight
                     }
                 }));
             }

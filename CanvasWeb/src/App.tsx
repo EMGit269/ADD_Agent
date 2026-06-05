@@ -894,7 +894,7 @@ function CanvasWorkbench() {
     if (naturalWidth <= 0 || naturalHeight <= 0) return
     updateNodes((current) =>
       current.map((node) => {
-        if (node.sourceRef !== sourceRef || node.nodeType !== 'image') return node
+        if (node.sourceRef !== sourceRef || (node.nodeType !== 'image' && node.nodeType !== 'gen_img')) return node
         if (node.meta.userResized || node.meta.naturalWidth === naturalWidth && node.meta.naturalHeight === naturalHeight) return node
         const size = fitImageInitialSize(naturalWidth, naturalHeight)
         const nextMeta = {
@@ -2335,7 +2335,7 @@ function CanvasFlowNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
                 decoding="async"
                 draggable={false}
                 onLoad={(event) => {
-                  if (!isAiImage) data.onImageLoaded(node.sourceRef, event.currentTarget.naturalWidth, event.currentTarget.naturalHeight)
+                  data.onImageLoaded(node.sourceRef, event.currentTarget.naturalWidth, event.currentTarget.naturalHeight)
                 }}
                 onDoubleClick={(event) => {
                   event.stopPropagation()

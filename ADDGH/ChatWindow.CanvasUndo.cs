@@ -41,9 +41,9 @@ namespace ADDGH
                 case "create_csharp_script_component":
                 case "edit_csharp_script_component":
                 case "create_script_component_graph":
+                case "import_reference_gh":
                 case "set_gh_component_status":
                 case "set_all_csharp_script_previews":
-                case "prepare_visual_review_preview":
                 case "modify_gh_component_ports":
                 case "modify_gh_port_data":
                 case "manage_gh_groups":

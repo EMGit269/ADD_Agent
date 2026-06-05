@@ -326,7 +326,7 @@ namespace ADDGH
 3. The body field must contain only the RunScript method body. Do not include using statements, class declarations, the RunScript signature, or the default C# Script template.
 4. The create tool first places a default C# Script component, waits for it to initialize, then applies the requested name, ports, and body.
 5. Default C# outputs such as out/a are preserved. Requested outputs use their valid `outputs[].name` values as C# variables and port names; assign to those names in the body. Do not assign to a unless intentionally using the default output.
-6. In C# priority mode, do not use modify_gh_component_ports as the normal way to change C# Script inputs or outputs. Prefer create_csharp_script_component for new scripts and edit_csharp_script_component for existing script logic; use modify_gh_component_ports only as a fallback repair tool when a dynamic port is visibly out of sync.
+6. In C# priority mode, modify_gh_component_ports is not available for C# Script components. Change C# Script inputs and outputs through create_csharp_script_component or edit_csharp_script_component so ports, body, and aliases stay synchronized.
 7. For real Rhino C# Script type hints, use known menu names such as bool, int, string, double, Point3d, Point3dList, Vector3d, Plane, Interval, Line, Circle, Arc, Curve, Polyline, Rectangle3d, Mesh, Surface, Brep, GeometryBase, TextDot, and TextEntity. Do not invent native Rhino type hint names.
 8. ADD Agent conversion-only hints such as curve[], circle[], double[], and int[] are allowed only to drive defensive alias injection; they are not native Rhino port type hints.
 9. Do not create unnecessary outputs. Prefer one or a few structured outputs; split into multiple script components only when the logic is genuinely clearer.
@@ -362,7 +362,7 @@ namespace ADDGH
 5. Existing C# Script logic must be edited with `edit_csharp_script_component`. Do not write C# source through generic value-setting tools.
 6. The C# body must contain only the RunScript method body. Do not include using statements, class declarations, full templates, or a custom RunScript signature.
 7. Requested C# outputs should use valid, explicit output names. Assign to those variables in the body.
-8. Do not use `modify_gh_component_ports` as the normal C# Script edit path. It is a fallback repair tool for visibly desynced dynamic ports; normal C# interface changes should be made through C# script creation/editing tools.
+8. Do not use `modify_gh_component_ports` for C# Script components. Normal C# interface changes must be made through C# script creation/editing tools.
 9. Use Rhino C# Script menu type hint names for real port hints; list-like names such as curve[] or circle[] are ADD Agent conversion hints only, not native Rhino port hints.
 10. If port changes temporarily desync the script signature, recompute and then fix the method body. Do not rewrite the full source template to work around it.
 11. For each new user requirement, prefer extending the canvas with a new C# Script component that owns the new responsibility, instead of folding fresh logic into an existing healthy script.

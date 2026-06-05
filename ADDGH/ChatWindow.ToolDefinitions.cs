@@ -784,6 +784,7 @@ namespace ADDGH
                 blocked.Add("create_component_graph");
                 blocked.Add("create_script_component_graph");
                 blocked.Add("gh_native_script_editor");
+                blocked.Add("modify_gh_component_ports");
                 if (_agentMode == AgentMode.Create)
                 {
                     blocked.Add("read_reference_json");

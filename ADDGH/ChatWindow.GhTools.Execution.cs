@@ -5131,6 +5131,11 @@ namespace ADDGH
                 if (!Guid.TryParse(id, out Guid guid)) { result = "Error: ID 格式错误。"; return; }
                 var obj = doc.FindObject(guid, true);
                 if (!(obj is Grasshopper.Kernel.IGH_VariableParameterComponent vpc)) { result = "Error: 该电池不支持动态端口。"; return; }
+                if (_layoutMode == LayoutMode.CSharpFirst && IsCSharpScriptComponent(obj))
+                {
+                    result = "Error: C# priority mode does not allow modify_gh_component_ports on C# Script components. Change C# Script interfaces through create_csharp_script_component or edit_csharp_script_component so ports, body, and aliases stay synchronized.";
+                    return;
+                }
 
                 var comp = obj as Grasshopper.Kernel.IGH_Component;
                 if (comp == null) { result = "Error: 无法作为组件处理。"; return; }

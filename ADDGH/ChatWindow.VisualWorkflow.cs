@@ -65,6 +65,9 @@ namespace ADDGH
 
         private static bool ShouldRunFinalVisualReviewThisRound(JArray fullToolCalls)
         {
+            if (IsVisualReviewTemporarilyDisabled())
+                return false;
+
             if (_agentMode == AgentMode.Plan)
                 return false;
 
@@ -73,6 +76,11 @@ namespace ADDGH
                 && !_finalVisualReviewCompleted
                 && !_finalVisualReviewAttempted
                 && _currentTurnHadToolExecution;
+        }
+
+        private static bool IsVisualReviewTemporarilyDisabled()
+        {
+            return true;
         }
 
         private static async Task<ApiResponse> TryContinueWithFinalVisualReviewAsync(string apiKey, int depth, string fullContent, System.Threading.CancellationToken ct)
@@ -291,11 +299,12 @@ namespace ADDGH
                 payload = new JObject { ["raw_capture_result"] = captureJson };
             }
 
-            if (!visualCheck)
+            bool visionAnalysisDisabled = true;
+            if (visionAnalysisDisabled)
             {
                 payload["visual_check"] = false;
                 payload["visual_detail"] = "none";
-                payload["visual_warning"] = "This screenshot was not analyzed by a vision model. Do not infer visual facts from metadata.";
+                payload["visual_warning"] = "Vision analysis is temporarily disabled. This screenshot was not analyzed by a vision model. Do not infer visual facts from metadata.";
                 return payload.ToString(Formatting.None);
             }
 

@@ -21,7 +21,8 @@ namespace ADDGH
         {
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
                 _chatPanel.Children.Clear();
-                foreach (var msg in _messages)
+                var displayMessages = GetDisplayMessagesForUi();
+                foreach (var msg in displayMessages)
                 {
                     var m = ConvertMessageToJObject(msg);
                     if (m == null) continue;
@@ -43,6 +44,7 @@ namespace ADDGH
                         string content = m["content"]?.ToString();
                         var toolCalls = m["tool_calls"] as JArray;
                         var generatedImages = m["generated_images"] as JArray;
+                        var toolOperationSummaries = m["tool_operation_summaries"] as JArray;
 
                         if (ChatMessageHelpers.ShouldDisplayReasoningBubble(reasoning, content, toolCalls))
                         {
@@ -56,6 +58,8 @@ namespace ADDGH
                             AppendBubble(content, false, false);
                         if (generatedImages != null && generatedImages.Count > 0)
                             AppendAssistantImageMessage(m);
+                        if (toolOperationSummaries != null && toolOperationSummaries.Count > 0)
+                            AppendToolOperationCards(ReadToolOperationSummaries(toolOperationSummaries));
                     }
                 }
                 UpdateEmptyChatLayout();
