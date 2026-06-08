@@ -698,6 +698,9 @@ namespace ADDGH
             _window.Resources["ThemePanelBrush"] = ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(30, 30, 30));
             _window.Resources["ThemeSurfaceBrush"] = ThemeBrush(Color.FromRgb(248, 249, 251), Color.FromRgb(36, 36, 36));
             _window.Resources["ThemeInputBrush"] = ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(42, 42, 42));
+            _window.Resources["ThemeHoverBrush"] = ThemeBrush(Color.FromRgb(232, 236, 243), Color.FromRgb(26, 29, 34));
+            _window.Resources["ThemePressedBrush"] = ThemeBrush(Color.FromRgb(220, 226, 235), Color.FromRgb(37, 42, 49));
+            _window.Resources["ThemeSelectedSurfaceBrush"] = ThemeBrush(Color.FromRgb(238, 242, 247), Color.FromRgb(58, 58, 58));
             _window.Resources["ThemeOverlayBrush"] = light
                 ? new SolidColorBrush(Color.FromArgb(180, 245, 247, 250))
                 : new SolidColorBrush(Color.FromArgb(165, 0, 0, 0));
@@ -778,6 +781,11 @@ namespace ADDGH
             if (_settingsPanel == null || _window == null) return;
             foreach (var text in FindVisualChildren<TextBlock>(_settingsPanel))
             {
+                if (HasVisualAncestor<ComboBox>(text))
+                {
+                    text.Foreground = (Brush)_window.Resources["ThemePrimaryTextBrush"];
+                    continue;
+                }
                 bool secondary = text.FontSize <= 12 && text.FontWeight != FontWeights.SemiBold && text.FontWeight != FontWeights.Bold;
                 text.Foreground = secondary
                     ? (Brush)_window.Resources["ThemeSecondaryTextBrush"]
@@ -1761,6 +1769,9 @@ namespace ADDGH
         <SolidColorBrush x:Key=""ThemePanelBrush"" Color=""#FFFFFF""/>
         <SolidColorBrush x:Key=""ThemeSurfaceBrush"" Color=""#F8F9FB""/>
         <SolidColorBrush x:Key=""ThemeInputBrush"" Color=""#FFFFFF""/>
+        <SolidColorBrush x:Key=""ThemeHoverBrush"" Color=""#E8ECF3""/>
+        <SolidColorBrush x:Key=""ThemePressedBrush"" Color=""#DCE2EB""/>
+        <SolidColorBrush x:Key=""ThemeSelectedSurfaceBrush"" Color=""#EEF2F7""/>
         <SolidColorBrush x:Key=""ThemeOverlayBrush"" Color=""#B4F5F7FA""/>
         <Style TargetType=""ScrollBar"">
             <Setter Property=""Background"" Value=""Transparent""/>
@@ -1852,7 +1863,7 @@ namespace ADDGH
             <Setter Property=""Width"" Value=""{DynamicResource ToolbarButtonSize}""/>
             <Setter Property=""Height"" Value=""{DynamicResource ToolbarButtonSize}""/>
             <Setter Property=""Background"" Value=""Transparent""/>
-            <Setter Property=""Foreground"" Value=""#D7D9DD""/>
+            <Setter Property=""Foreground"" Value=""{DynamicResource ThemeToolbarTextBrush}""/>
             <Setter Property=""BorderBrush"" Value=""Transparent""/>
             <Setter Property=""BorderThickness"" Value=""0""/>
             <Setter Property=""Padding"" Value=""0""/>
@@ -1865,14 +1876,14 @@ namespace ADDGH
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property=""IsMouseOver"" Value=""True"">
-                                <Setter TargetName=""Bd"" Property=""Background"" Value=""#1A1D22""/>
+                                <Setter TargetName=""Bd"" Property=""Background"" Value=""{DynamicResource ThemeHoverBrush}""/>
                             </Trigger>
                             <Trigger Property=""IsPressed"" Value=""True"">
-                                <Setter TargetName=""Bd"" Property=""Background"" Value=""#252A31""/>
-                                <Setter Property=""Foreground"" Value=""#FFFFFF""/>
+                                <Setter TargetName=""Bd"" Property=""Background"" Value=""{DynamicResource ThemePressedBrush}""/>
+                                <Setter Property=""Foreground"" Value=""{DynamicResource ThemePrimaryTextBrush}""/>
                             </Trigger>
                             <Trigger Property=""IsEnabled"" Value=""False"">
-                                <Setter Property=""Opacity"" Value=""0.42""/>
+                                <Setter Property=""Opacity"" Value=""0.72""/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -1880,9 +1891,9 @@ namespace ADDGH
             </Setter>
         </Style>
         <Style TargetType=""ComboBox"" x:Key=""DarkComboBoxStyle"">
-            <Setter Property=""Background"" Value=""#2A2A2A""/>
-            <Setter Property=""Foreground"" Value=""#EDEDED""/>
-            <Setter Property=""BorderBrush"" Value=""#3A3A3A""/>
+            <Setter Property=""Background"" Value=""{DynamicResource ThemeInputBrush}""/>
+            <Setter Property=""Foreground"" Value=""{DynamicResource ThemePrimaryTextBrush}""/>
+            <Setter Property=""BorderBrush"" Value=""{DynamicResource ThemeBorderBrush}""/>
             <Setter Property=""BorderThickness"" Value=""1""/>
             <Setter Property=""Padding"" Value=""10,6""/>
             <Setter Property=""Template"">
@@ -1892,17 +1903,17 @@ namespace ADDGH
                             <ToggleButton x:Name=""ToggleButton"" Focusable=""False"" IsChecked=""{Binding Path=IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"">
                                 <ToggleButton.Template>
                                     <ControlTemplate TargetType=""ToggleButton"">
-                                        <Border Background=""#2A2A2A"" BorderBrush=""#3A3A3A"" BorderThickness=""1"" CornerRadius=""8"">
+                                        <Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""1"" CornerRadius=""8"">
                                             <Grid>
-                                                <TextBlock Margin=""10,0,30,0"" VerticalAlignment=""Center"" HorizontalAlignment=""Left"" Foreground=""#EDEDED"" TextTrimming=""CharacterEllipsis"" Text=""{Binding Path=SelectedItem.Content, RelativeSource={RelativeSource AncestorType=ComboBox}}""/>
-                                                <TextBlock Text=""▼"" Foreground=""#888"" FontSize=""9"" HorizontalAlignment=""Right"" VerticalAlignment=""Center"" Margin=""0,0,10,0""/>
+                                                <TextBlock Margin=""10,0,30,0"" VerticalAlignment=""Center"" HorizontalAlignment=""Left"" Foreground=""{Binding Foreground, RelativeSource={RelativeSource AncestorType=ComboBox}}"" TextTrimming=""CharacterEllipsis"" Text=""{Binding Path=SelectedItem.Content, RelativeSource={RelativeSource AncestorType=ComboBox}}""/>
+                                                <Path Data=""M4,6 L8,10 L12,6"" Stroke=""{DynamicResource ThemeSecondaryTextBrush}"" StrokeThickness=""1.6"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" StrokeLineJoin=""Round"" Fill=""Transparent"" Width=""16"" Height=""16"" Stretch=""None"" HorizontalAlignment=""Right"" VerticalAlignment=""Center"" Margin=""0,0,10,0""/>
                                             </Grid>
                                         </Border>
                                     </ControlTemplate>
                                 </ToggleButton.Template>
                             </ToggleButton>
                             <Popup x:Name=""PART_Popup"" IsOpen=""{TemplateBinding IsDropDownOpen}"" Placement=""Bottom"" AllowsTransparency=""True"" Focusable=""False"" PopupAnimation=""Fade"">
-                                <Border Background=""#202020"" BorderBrush=""#3A3A3A"" BorderThickness=""1"" CornerRadius=""8"" Margin=""0,4,0,0"">
+                                <Border Background=""{DynamicResource ThemePanelBrush}"" BorderBrush=""{DynamicResource ThemeBorderBrush}"" BorderThickness=""1"" CornerRadius=""8"" Margin=""0,4,0,0"">
                                     <ScrollViewer MaxHeight=""220"">
                                         <ItemsPresenter/>
                                     </ScrollViewer>
@@ -1914,8 +1925,8 @@ namespace ADDGH
             </Setter>
         </Style>
         <Style TargetType=""ComboBoxItem"">
-            <Setter Property=""Foreground"" Value=""#EDEDED""/>
-            <Setter Property=""Background"" Value=""#202020""/>
+            <Setter Property=""Foreground"" Value=""{DynamicResource ThemePrimaryTextBrush}""/>
+            <Setter Property=""Background"" Value=""{DynamicResource ThemePanelBrush}""/>
             <Setter Property=""Padding"" Value=""10,8""/>
             <Setter Property=""Template"">
                 <Setter.Value>
@@ -1925,10 +1936,10 @@ namespace ADDGH
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property=""IsHighlighted"" Value=""True"">
-                                <Setter TargetName=""Bd"" Property=""Background"" Value=""#333333""/>
+                                <Setter TargetName=""Bd"" Property=""Background"" Value=""{DynamicResource ThemeHoverBrush}""/>
                             </Trigger>
                             <Trigger Property=""IsSelected"" Value=""True"">
-                                <Setter TargetName=""Bd"" Property=""Background"" Value=""#3A3A3A""/>
+                                <Setter TargetName=""Bd"" Property=""Background"" Value=""{DynamicResource ThemeSelectedSurfaceBrush}""/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -1950,7 +1961,7 @@ namespace ADDGH
                                             <Border Background=""Transparent"" Padding=""5"">
                                                 <StackPanel Orientation=""Horizontal"">
                                                     <Path x:Name=""Icon"" Data=""M6,4 L10,8 L6,12"" Stroke=""{DynamicResource ThemeSecondaryTextBrush}"" StrokeThickness=""1.6"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" StrokeLineJoin=""Round"" Fill=""Transparent"" Width=""15"" Height=""16"" Stretch=""None"" VerticalAlignment=""Center""/>
-                                                    <ContentPresenter VerticalAlignment=""Center"" TextElement.Foreground=""#EEE""/>
+                                                    <ContentPresenter VerticalAlignment=""Center"" TextElement.Foreground=""{DynamicResource ThemePrimaryTextBrush}""/>
                                                 </StackPanel>
                                             </Border>
                                             <ControlTemplate.Triggers>
@@ -2012,7 +2023,7 @@ namespace ADDGH
                                 </Grid>
                             </Viewbox>
                         </Button>
-                        <TextBlock Text=""Maipo"" Foreground=""#DDE1E7"" FontSize=""17"" FontWeight=""SemiBold"" VerticalAlignment=""Center"" Margin=""12,0,0,0""/>
+                        <TextBlock Text=""Maipo"" Foreground=""{DynamicResource ThemeToolbarTextBrush}"" FontSize=""17"" FontWeight=""SemiBold"" VerticalAlignment=""Center"" Margin=""12,0,0,0""/>
                     </StackPanel>
                     <StackPanel Orientation=""Horizontal"" HorizontalAlignment=""Right"">
                         <Button x:Name=""BtnToggleViewMode"" Content=""JSON"" Foreground=""#B8B8B8"" Background=""#242A32"" BorderThickness=""1"" BorderBrush=""#3A404A"" FontSize=""10"" Padding=""9,5"" Cursor=""Hand"" VerticalAlignment=""Center"" Margin=""0"" Visibility=""Collapsed"">
