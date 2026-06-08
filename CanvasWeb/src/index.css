@@ -402,6 +402,27 @@ html, body, #root {
   min-height: 118px;
 }
 
+.node-prompt-preview {
+  width: 100%;
+  min-height: 118px;
+  padding: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  background: var(--node-field-bg);
+  color: var(--node-panel-fg);
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow: hidden;
+  cursor: grab;
+  user-select: none;
+}
+
+.node-prompt-preview.is-empty {
+  color: var(--node-panel-muted);
+}
+
 .node-inline-textarea.code {
   min-height: 150px;
 }

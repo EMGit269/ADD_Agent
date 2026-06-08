@@ -324,14 +324,14 @@ namespace ADDGH
                     type = "function",
                     function = new {
                         name = "manage_gh_groups",
-                        description = "Description",
+                        description = "Create, update, or ungroup Grasshopper Groups. Use action=create to group component ids, add_to_group/remove_from_group to edit members, and ungroup to delete one or more group objects while leaving their member components on the canvas.",
                         parameters = new {
                             type = "object",
                             properties = new {
-                                action = new { type = "string", description = "Description" },
-                                ids = new { type = "array", items = new { type = "string" }, description = "Description" },
-                                group_id = new { type = "string", description = "Description" },
-                                name = new { type = "string", description = "Description" },
+                                action = new { type = "string", @enum = new[] { "create", "add_to_group", "remove_from_group", "ungroup" }, description = "Group operation to perform." },
+                                ids = new { type = "array", items = new { type = "string" }, description = "For create/add_to_group/remove_from_group: component ids. For ungroup: optional group ids when ungrouping multiple groups." },
+                                group_id = new { type = "string", description = "Target group id for add_to_group/remove_from_group/ungroup. Public ids such as G01 are accepted." },
+                                name = new { type = "string", description = "Group name when action=create." },
                                 summary = new { type = "string", description = "Description" },
                                 summary_detail = new { type = "string", description = "Description" }
                             },

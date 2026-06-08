@@ -62,6 +62,7 @@ Not allowed as core-logic substitutes:
 
 - When creating a C# Script and its dedicated sliders or helper inputs in one step, pass `group_name` so the script and helpers land in one Group.
 - If dedicated helpers are added later, add them to the script's existing Group with `manage_gh_groups`.
+- To dissolve an existing Group without deleting its member components, use `manage_gh_groups` with `action="ungroup"` and the target `group_id` or group ids in `ids`.
 - Do not group unrelated upstream/downstream logic just because it is nearby; the Group should represent the script's local control surface and immediate helper outputs.
 
 ## Plan-Mode Expectation

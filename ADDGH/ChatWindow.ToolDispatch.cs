@@ -364,7 +364,7 @@ namespace ADDGH
                     string groupName = argsObj["name"]?.ToString();
                     JArray idsArray = argsObj["ids"] as JArray;
                     List<string> idsList = ResolveToolObjectIds(idsArray?.Select(v => v.ToString()));
-                    result.ToolResult = ExecuteManageGhGroups(argsObj["action"]?.ToString(), idsList, groupId, groupName);
+                    result.ToolResult = ExecuteManageGhGroupsUnified(argsObj["action"]?.ToString(), idsList, groupId, groupName);
                 }
                 else if (funcName == "read_skill_file")
                 {

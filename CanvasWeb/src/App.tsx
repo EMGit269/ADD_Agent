@@ -2267,12 +2267,17 @@ function ColoredConnectionLine({
 
 function CanvasFlowNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
   const node = data.node
+  const [isPromptEditing, setIsPromptEditing] = useState(false)
   const isImage = node.nodeType === 'image'
   const isAiImage = node.nodeType === 'gen_img'
   const isAiVideo = node.nodeType === 'gen_video'
   const imageSrc = isImage || node.nodeType === 'gen_img' ? resolveCanvasImageSource(node.meta.imageDataUrl ?? node.meta.imagePath) : ''
   const aiImageSources = isAiImage ? getAiImageSources(node) : []
   const videoSrc = isAiVideo ? resolveCanvasImageSource(node.meta.videoUrl ?? node.meta.videoPath) : ''
+
+  useEffect(() => {
+    if (node.nodeType !== 'prompt' || node.meta.collapsed) setIsPromptEditing(false)
+  }, [node.nodeType, node.meta.collapsed])
 
   return (
     <article
@@ -2367,7 +2372,7 @@ function CanvasFlowNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
             <div className="node-author-chip">{String(node.meta.author || 'User')}</div>
           ) : null}
           {renderFlowPorts(node)}
-          {!node.meta.collapsed ? renderInlineNodeEditor(node, data.updateNodeMeta, data.onRunAiImage, data.onPreviewImage) : null}
+          {!node.meta.collapsed ? renderInlineNodeEditor(node, data.updateNodeMeta, data.onRunAiImage, data.onPreviewImage, isPromptEditing, setIsPromptEditing) : null}
           {node.nodeType === 'gen_img' && imageSrc ? (
             <button type="button" className="node-generated-image nodrag" onClick={() => data.onPreviewImage(imageSrc, String(node.meta.title ?? 'AI Image'))}>
               <img src={imageSrc} alt={String(node.meta.title ?? 'AI Image')} loading="lazy" decoding="async" draggable={false} />
@@ -3786,28 +3791,52 @@ function StableNodeTextarea({
   className,
   value,
   placeholder,
+  autoFocus = false,
   onCommit,
+  onBlur,
+  onEscape,
 }: {
   className: string
   value: string
   placeholder?: string
+  autoFocus?: boolean
   onCommit: (value: string) => void
+  onBlur?: () => void
+  onEscape?: () => void
 }) {
   const [draft, setDraft] = useState(value)
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const composingRef = useRef(false)
 
   useEffect(() => {
     if (!composingRef.current) setDraft(value)
   }, [value])
 
+  useEffect(() => {
+    if (!autoFocus) return
+    const textarea = textareaRef.current
+    if (!textarea) return
+    textarea.focus()
+    const end = textarea.value.length
+    textarea.setSelectionRange(end, end)
+  }, [autoFocus])
+
   return (
     <textarea
+      ref={textareaRef}
       className={className}
       value={draft}
       placeholder={placeholder}
       onPointerDown={(event) => event.stopPropagation()}
       onMouseDown={(event) => event.stopPropagation()}
-      onKeyDown={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
+        event.stopPropagation()
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          onEscape?.()
+        }
+      }}
+      onBlur={onBlur}
       onCompositionStart={() => {
         composingRef.current = true
       }}
@@ -3831,14 +3860,34 @@ function renderInlineNodeEditor(
   updateMeta: (sourceRef: string, patch: Record<string, unknown>) => void,
   onRunAiImage?: (sourceRef: string) => void,
   _onPreviewImage?: (src: string, title: string) => void,
+  isPromptEditing = false,
+  setPromptEditing?: (editing: boolean) => void,
 ) {
   if (node.nodeType === 'prompt') {
+    const promptValue = String(node.meta.prompt ?? '')
+    if (!isPromptEditing) {
+      return (
+        <div
+          className={`node-prompt-preview ${promptValue ? '' : 'is-empty'}`}
+          onDoubleClick={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            setPromptEditing?.(true)
+          }}
+        >
+          {promptValue || 'Prompt text...'}
+        </div>
+      )
+    }
     return (
       <StableNodeTextarea
         className="node-inline-textarea prompt nodrag"
-        value={String(node.meta.prompt ?? '')}
+        value={promptValue}
         placeholder="Prompt text..."
+        autoFocus
         onCommit={(value) => updateMeta(node.sourceRef, { prompt: value })}
+        onBlur={() => setPromptEditing?.(false)}
+        onEscape={() => setPromptEditing?.(false)}
       />
     )
   }

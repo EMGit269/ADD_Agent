@@ -57,6 +57,7 @@ Use this skill whenever the layout mode is `混合模式`.
 - Outputs from the script should be few, meaningful, and easy to inspect.
 - Keep script responsibilities local so the surrounding GH graph still reads cleanly.
 - The script's local control surface should stay visually local: group the C# Script with its dedicated sliders and immediate helper components, but keep unrelated native GH logic in its own group.
+- To dissolve an existing Grasshopper Group without deleting its member components, use `manage_gh_groups` with `action="ungroup"` and the target `group_id` or group ids in `ids`.
 
 ## Plan-Mode Expectation
 
