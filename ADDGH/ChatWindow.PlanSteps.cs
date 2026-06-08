@@ -232,7 +232,7 @@ namespace ADDGH
                 rootPanel.Children.Add(new TextBlock
                 {
                     Text = "实施步骤",
-                    Foreground = new SolidColorBrush(Color.FromRgb(222, 222, 222)),
+                    Foreground = ThemeBrush(Color.FromRgb(28, 32, 38), Color.FromRgb(222, 222, 222)),
                     FontSize = 11.5,
                     FontWeight = FontWeights.SemiBold,
                     Margin = new Thickness(0, 0, 0, 8)
@@ -246,7 +246,7 @@ namespace ADDGH
                 rootPanel.Children.Add(new TextBlock
                 {
                     Text = "点击后会切换到 Create 模式，并按以上步骤连续执行。",
-                    Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 150)),
+                    Foreground = ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(150, 150, 150)),
                     FontSize = 10.5,
                     Margin = new Thickness(0, 2, 0, 0),
                     TextWrapping = TextWrapping.Wrap
@@ -259,9 +259,9 @@ namespace ADDGH
                     MinWidth = 98,
                     Margin = new Thickness(0, 10, 0, 0),
                     Padding = new Thickness(12, 6, 12, 6),
-                    Background = new SolidColorBrush(Color.FromRgb(238, 238, 238)),
-                    Foreground = new SolidColorBrush(Color.FromRgb(22, 22, 22)),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(210, 210, 210)),
+                    Background = ThemeBrush(Color.FromRgb(24, 36, 54), Color.FromRgb(238, 238, 238)),
+                    Foreground = ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(22, 22, 22)),
+                    BorderBrush = ThemeBrush(Color.FromRgb(24, 36, 54), Color.FromRgb(210, 210, 210)),
                     BorderThickness = new Thickness(1),
                     Cursor = Cursors.Hand,
                     FontSize = 11,
@@ -272,8 +272,8 @@ namespace ADDGH
 
                 return new Border
                 {
-                    Background = new SolidColorBrush(Color.FromRgb(24, 24, 24)),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(56, 56, 56)),
+                    Background = ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(24, 24, 24)),
+                    BorderBrush = ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(56, 56, 56)),
                     BorderThickness = new Thickness(1),
                     CornerRadius = new CornerRadius(8),
                     Padding = new Thickness(12),
@@ -289,7 +289,7 @@ namespace ADDGH
                 body.Children.Add(new TextBlock
                 {
                     Text = index + ". " + (step.Title ?? "").Trim(),
-                    Foreground = new SolidColorBrush(Color.FromRgb(236, 236, 236)),
+                    Foreground = ThemeBrush(Color.FromRgb(28, 32, 38), Color.FromRgb(236, 236, 236)),
                     FontSize = 12,
                     FontWeight = FontWeights.SemiBold,
                     TextWrapping = TextWrapping.Wrap
@@ -300,7 +300,7 @@ namespace ADDGH
                     body.Children.Add(new TextBlock
                     {
                         Text = step.StepId.Trim(),
-                        Foreground = new SolidColorBrush(Color.FromRgb(112, 112, 112)),
+                        Foreground = ThemeBrush(Color.FromRgb(122, 128, 140), Color.FromRgb(112, 112, 112)),
                         FontSize = 9.5,
                         Margin = new Thickness(0, 2, 0, 0),
                         TextWrapping = TextWrapping.Wrap
@@ -310,7 +310,7 @@ namespace ADDGH
                 body.Children.Add(new TextBlock
                 {
                     Text = (step.Detail ?? "").Trim(),
-                    Foreground = new SolidColorBrush(Color.FromRgb(168, 168, 168)),
+                    Foreground = ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(168, 168, 168)),
                     FontSize = 11,
                     Margin = new Thickness(0, 4, 0, 0),
                     TextWrapping = TextWrapping.Wrap
@@ -320,8 +320,8 @@ namespace ADDGH
                 {
                     Margin = new Thickness(0, 0, 0, 8),
                     Padding = new Thickness(10, 8, 10, 8),
-                    Background = new SolidColorBrush(Color.FromRgb(32, 32, 32)),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
+                    Background = ThemeBrush(Color.FromRgb(248, 249, 251), Color.FromRgb(32, 32, 32)),
+                    BorderBrush = ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(70, 70, 70)),
                     BorderThickness = new Thickness(1),
                     CornerRadius = new CornerRadius(6),
                     Child = body

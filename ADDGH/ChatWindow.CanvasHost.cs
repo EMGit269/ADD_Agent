@@ -111,14 +111,14 @@ namespace ADDGH
         {
             if (button == null) return;
             button.Background = isSelected
-                ? new SolidColorBrush(Color.FromRgb(43, 49, 58))
+                ? ThemeBrush(Color.FromRgb(238, 242, 247), Color.FromRgb(43, 49, 58))
                 : Brushes.Transparent;
-            button.BorderBrush = new SolidColorBrush(isSelected
-                ? Color.FromRgb(58, 64, 74)
-                : Color.FromRgb(50, 56, 67));
+            button.BorderBrush = isSelected
+                ? ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(58, 64, 74))
+                : ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(50, 56, 67));
             button.Foreground = isSelected
-                ? new SolidColorBrush(Color.FromRgb(229, 231, 235))
-                : new SolidColorBrush(Color.FromRgb(174, 180, 189));
+                ? ThemeBrush(Color.FromRgb(28, 32, 38), Color.FromRgb(229, 231, 235))
+                : ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(174, 180, 189));
         }
 
         private static void SetCanvasStatus(string text, bool isError = false)

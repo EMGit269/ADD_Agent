@@ -390,7 +390,7 @@ namespace ADDGH
                 Height = size,
                 Margin = new Thickness(0, 0, 8, 8),
                 CornerRadius = new CornerRadius(14),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(38, 255, 255, 255)),
+                BorderBrush = ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromArgb(38, 255, 255, 255)),
                 BorderThickness = new Thickness(1),
                 Background = ThemeBrush(Color.FromRgb(248, 249, 251), Color.FromRgb(22, 22, 22)),
                 ClipToBounds = true,

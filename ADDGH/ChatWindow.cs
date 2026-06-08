@@ -714,6 +714,34 @@ namespace ADDGH
                 _historySidebar.Background = (Brush)_window.Resources["ThemeSurfaceBrush"];
                 _historySidebar.BorderBrush = (Brush)_window.Resources["ThemeBorderBrush"];
             }
+            if (_libraryPanel != null)
+            {
+                if (_libraryPanel is Border libraryBorder)
+                {
+                    libraryBorder.Background = (Brush)_window.Resources["ThemeSurfaceBrush"];
+                    libraryBorder.BorderBrush = (Brush)_window.Resources["ThemeBorderBrush"];
+                }
+                else if (_libraryPanel is Control libraryControl)
+                {
+                    libraryControl.Background = (Brush)_window.Resources["ThemeSurfaceBrush"];
+                    libraryControl.BorderBrush = (Brush)_window.Resources["ThemeBorderBrush"];
+                }
+            }
+            if (_codeViewBorder != null)
+            {
+                _codeViewBorder.Background = ThemeBrush(Color.FromRgb(250, 251, 253), Color.FromRgb(20, 20, 20));
+                _codeViewBorder.BorderBrush = (Brush)_window.Resources["ThemeBorderBrush"];
+            }
+            if (_codeCanvasIssuesHost != null)
+            {
+                _codeCanvasIssuesHost.Background = (Brush)_window.Resources["ThemeSurfaceBrush"];
+                _codeCanvasIssuesHost.BorderBrush = (Brush)_window.Resources["ThemeBorderBrush"];
+            }
+            if (_warningBar != null)
+            {
+                _warningBar.Background = ThemeBrush(Color.FromRgb(255, 248, 235), Color.FromRgb(42, 42, 42));
+                _warningBar.BorderBrush = ThemeBrush(Color.FromRgb(241, 214, 163), Color.FromRgb(58, 58, 58));
+            }
             if (_inputAreaBorder != null) _inputAreaBorder.Background = Brushes.Transparent;
             if (_inputChromeBorder != null)
             {
@@ -775,6 +803,34 @@ namespace ADDGH
                     button.BorderBrush = (Brush)_window.Resources["ThemeBorderBrush"];
                 }
             }
+            foreach (var border in FindVisualChildren<Border>(_settingsPanel))
+            {
+                if (border == _settingsPanel || HasVisualAncestor<Button>(border) || HasVisualAncestor<ComboBox>(border))
+                    continue;
+                bool wrapsInput = FindVisualChildren<TextBox>(border).Any();
+                if (wrapsInput)
+                {
+                    border.Background = (Brush)_window.Resources["ThemeInputBrush"];
+                    border.BorderBrush = (Brush)_window.Resources["ThemeBorderBrush"];
+                    border.BorderThickness = new Thickness(1);
+                }
+                else
+                {
+                    border.Background = Brushes.Transparent;
+                    border.BorderThickness = new Thickness(0);
+                }
+            }
+        }
+
+        private static bool HasVisualAncestor<T>(DependencyObject child) where T : DependencyObject
+        {
+            DependencyObject current = VisualTreeHelper.GetParent(child);
+            while (current != null)
+            {
+                if (current is T) return true;
+                current = VisualTreeHelper.GetParent(current);
+            }
+            return false;
         }
 
         private static void RefreshThemeAwareViews()
@@ -3170,10 +3226,10 @@ namespace ADDGH
                     var expander = new Expander
                     {
                         Header = $"{group.Key}  ({group.Count()})",
-                        Foreground = new SolidColorBrush(Color.FromRgb(160, 160, 160)),
+                        Foreground = ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(160, 160, 160)),
                         Background = Brushes.Transparent,
                         BorderThickness = new Thickness(0, 0, 0, 1),
-                        BorderBrush = new SolidColorBrush(Color.FromRgb(40, 40, 40)),
+                        BorderBrush = ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(40, 40, 40)),
                         Margin = new Thickness(0, 2, 0, 0),
                         IsExpanded = false
                     };
@@ -3183,12 +3239,12 @@ namespace ADDGH
                     {
                         var card = new Border
                         {
-                            Background = new SolidColorBrush(Color.FromRgb(28, 28, 28)),
+                            Background = ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(28, 28, 28)),
                             CornerRadius = new CornerRadius(6),
                             Width = 120,
                             Height = 58,
                             Margin = new Thickness(3),
-                            BorderBrush = new SolidColorBrush(Color.FromRgb(50, 50, 50)),
+                            BorderBrush = ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(50, 50, 50)),
                             BorderThickness = new Thickness(1),
                             Cursor = Cursors.Hand,
                             ToolTip = p.Desc.Description
@@ -3205,7 +3261,7 @@ namespace ADDGH
                         sp.Children.Add(new TextBlock
                         {
                             Text = p.Desc.NickName,
-                            Foreground = new SolidColorBrush(Color.FromRgb(140, 140, 140)),
+                            Foreground = ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(140, 140, 140)),
                             FontSize = 10
                         });
                         card.Child = sp;
@@ -4144,7 +4200,7 @@ namespace ADDGH
                     Text = "\uE74D",
                     FontFamily = new FontFamily("Segoe MDL2 Assets"),
                     FontSize = 13,
-                    Foreground = Brushes.White,
+                    Foreground = ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(255, 255, 255)),
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center
                 };
@@ -4156,9 +4212,9 @@ namespace ADDGH
             var button = new Button
             {
                 Content = content,
-                Foreground = new SolidColorBrush(danger ? Color.FromRgb(255, 255, 255) : Color.FromRgb(208, 208, 208)),
-                Background = new SolidColorBrush(Color.FromRgb(28, 28, 28)),
-                BorderBrush = new SolidColorBrush(danger ? Color.FromRgb(52, 52, 52) : Color.FromRgb(44, 44, 44)),
+                Foreground = danger ? ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(255, 255, 255)) : ThemeBrush(Color.FromRgb(58, 64, 74), Color.FromRgb(208, 208, 208)),
+                Background = danger ? ThemeBrush(Color.FromRgb(184, 56, 56), Color.FromRgb(60, 28, 28)) : ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(28, 28, 28)),
+                BorderBrush = danger ? ThemeBrush(Color.FromRgb(184, 56, 56), Color.FromRgb(52, 52, 52)) : ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(44, 44, 44)),
                 BorderThickness = new Thickness(1),
                 Padding = padding,
                 Margin = new Thickness(0, 0, 0, 0),
@@ -4190,7 +4246,7 @@ namespace ADDGH
                 _historyListPanel.Children.Add(new TextBlock
                 {
                     Text = "暂无本地对话",
-                    Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)),
+                    Foreground = ThemeBrush(Color.FromRgb(122, 128, 140), Color.FromRgb(110, 110, 110)),
                     FontSize = 12,
                     Margin = new Thickness(2, 10, 2, 0)
                 });
@@ -4203,8 +4259,8 @@ namespace ADDGH
                 var card = new Border
                 {
                     Tag = conv.Id,
-                    Background = new SolidColorBrush(Color.FromRgb(23, 23, 23)),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(40, 40, 40)),
+                    Background = ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(23, 23, 23)),
+                    BorderBrush = ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(40, 40, 40)),
                     BorderThickness = new Thickness(1),
                     CornerRadius = new CornerRadius(12),
                     Padding = new Thickness(11),
@@ -4222,7 +4278,7 @@ namespace ADDGH
                 info.Children.Add(new TextBlock
                 {
                     Text = string.IsNullOrWhiteSpace(conv.Title) ? "新对话" : conv.Title,
-                    Foreground = new SolidColorBrush(Color.FromRgb(224, 224, 224)),
+                    Foreground = ThemeBrush(Color.FromRgb(28, 32, 38), Color.FromRgb(224, 224, 224)),
                     FontSize = 13,
                     FontWeight = FontWeights.Medium,
                     TextWrapping = TextWrapping.Wrap
@@ -5013,13 +5069,13 @@ namespace ADDGH
             };
 
             var border = new Border {
-                Background = new SolidColorBrush(Color.FromRgb(40, 40, 40)),
+                Background = ThemeBrush(Color.FromRgb(24, 36, 54), Color.FromRgb(40, 40, 40)),
                 CornerRadius = new CornerRadius(25),
                 BorderThickness = new Thickness(0),
                 Child = new TextBlock {
                 Text = "✨",
                 FontSize = 24,
-                    Foreground = Brushes.White,
+                    Foreground = ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(255, 255, 255)),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
                 }
@@ -5067,12 +5123,12 @@ namespace ADDGH
                     }
 
                     var card = new Border {
-                        Background = new SolidColorBrush(Color.FromRgb(28, 28, 28)),
+                        Background = ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(28, 28, 28)),
                         CornerRadius = new CornerRadius(6),
                         Width = 160,
                         Height = 70,
                         Margin = new Thickness(3),
-                        BorderBrush = new SolidColorBrush(Color.FromRgb(50, 50, 50)),
+                        BorderBrush = ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(50, 50, 50)),
                         BorderThickness = new Thickness(1),
                         Cursor = Cursors.Hand,
                         ToolTip = desc
@@ -5080,7 +5136,7 @@ namespace ADDGH
 
                     var sp = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(7) };
                     sp.Children.Add(new TextBlock { Text = name, Foreground = new SolidColorBrush(Color.FromRgb(76, 175, 80)), FontSize = 12, FontWeight = FontWeights.Bold, TextTrimming = TextTrimming.CharacterEllipsis });
-                    sp.Children.Add(new TextBlock { Text = desc, Foreground = new SolidColorBrush(Color.FromRgb(140, 140, 140)), FontSize = 10, TextTrimming = TextTrimming.CharacterEllipsis, MaxHeight = 30, TextWrapping = TextWrapping.Wrap });
+                    sp.Children.Add(new TextBlock { Text = desc, Foreground = ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(140, 140, 140)), FontSize = 10, TextTrimming = TextTrimming.CharacterEllipsis, MaxHeight = 30, TextWrapping = TextWrapping.Wrap });
                     card.Child = sp;
 
                     card.MouseLeftButtonDown += (s, e) => {

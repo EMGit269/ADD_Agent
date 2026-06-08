@@ -449,8 +449,8 @@ namespace ADDGH
             for (int c = 0; c < cols; c++)
                 table.Columns.Add(new TableColumn { Width = new GridLength(1, GridUnitType.Star) });
 
-            var borderBrush = new SolidColorBrush(Color.FromRgb(60, 60, 60));
-            var headerBg = new SolidColorBrush(Color.FromRgb(40, 40, 40));
+            var borderBrush = ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(60, 60, 60));
+            var headerBg = ThemeBrush(Color.FromRgb(238, 242, 247), Color.FromRgb(40, 40, 40));
 
             var rowGroup = new TableRowGroup();
             for (int r = 0; r < rows.Count; r++) {
@@ -460,7 +460,7 @@ namespace ADDGH
                     Margin = new Thickness(0),
                     FontSize = ChatBodyFontSize,
                     LineHeight = ChatBodyLineHeight,
-                    Foreground = new SolidColorBrush(Color.FromRgb(235, 235, 235)),
+                    Foreground = ThemeBrush(Color.FromRgb(28, 32, 38), Color.FromRgb(235, 235, 235)),
                     FontWeight = r == 0 ? FontWeights.SemiBold : FontWeights.Normal
                 };
                     AppendMarkdownInlines(paragraph.Inlines, rows[r][c]);
@@ -1144,14 +1144,14 @@ namespace ADDGH
                 titlePanel.Children.Add(new TextBlock
                 {
                     Text = "我的参考",
-                    Foreground = Brushes.White,
+                    Foreground = ThemeBrush(Color.FromRgb(28, 32, 38), Color.FromRgb(255, 255, 255)),
                     FontSize = 18,
                     FontWeight = FontWeights.SemiBold
                 });
                 titlePanel.Children.Add(new TextBlock
                 {
                     Text = "从 reference_index.md 管理已保存的画布参考",
-                    Foreground = new SolidColorBrush(Color.FromRgb(145, 145, 145)),
+                    Foreground = ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(145, 145, 145)),
                     FontSize = 11,
                     Margin = new Thickness(0, 4, 0, 0)
                 });
@@ -1179,15 +1179,15 @@ namespace ADDGH
                 {
                     content.Children.Add(new Border
                     {
-                        Background = new SolidColorBrush(Color.FromRgb(24, 24, 24)),
-                        BorderBrush = new SolidColorBrush(Color.FromRgb(44, 44, 44)),
+                        Background = ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(24, 24, 24)),
+                        BorderBrush = ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(44, 44, 44)),
                         BorderThickness = new Thickness(1),
                         CornerRadius = new CornerRadius(12),
                         Padding = new Thickness(18),
                         Child = new TextBlock
                         {
                             Text = "还没有保存的参考。点击“创建参考”后，这里会显示对应 JSON 和描述。",
-                            Foreground = new SolidColorBrush(Color.FromRgb(170, 170, 170)),
+                            Foreground = ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(170, 170, 170)),
                             FontSize = 13,
                             TextWrapping = TextWrapping.Wrap
                         }
@@ -1219,7 +1219,7 @@ namespace ADDGH
                     MinWidth = 460,
                     MinHeight = 360,
                     WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                    Background = new SolidColorBrush(Color.FromRgb(16, 16, 16)),
+                    Background = ThemeBrush(Color.FromRgb(245, 247, 250), Color.FromRgb(16, 16, 16)),
                     Content = root,
                     Owner = _window
                 };
@@ -1233,9 +1233,9 @@ namespace ADDGH
             var button = new Button
             {
                 Content = text,
-                Background = new SolidColorBrush(danger ? Color.FromRgb(60, 28, 28) : Color.FromRgb(34, 34, 34)),
-                Foreground = new SolidColorBrush(danger ? Color.FromRgb(255, 170, 170) : Color.FromRgb(230, 230, 230)),
-                BorderBrush = new SolidColorBrush(danger ? Color.FromRgb(95, 42, 42) : Color.FromRgb(56, 56, 56)),
+                Background = danger ? ThemeBrush(Color.FromRgb(255, 237, 237), Color.FromRgb(60, 28, 28)) : ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(34, 34, 34)),
+                Foreground = danger ? ThemeBrush(Color.FromRgb(184, 56, 56), Color.FromRgb(255, 170, 170)) : ThemeBrush(Color.FromRgb(28, 32, 38), Color.FromRgb(230, 230, 230)),
+                BorderBrush = danger ? ThemeBrush(Color.FromRgb(241, 190, 190), Color.FromRgb(95, 42, 42)) : ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(56, 56, 56)),
                 BorderThickness = new Thickness(1),
                 Padding = new Thickness(12, 6, 12, 6),
                 Cursor = Cursors.Hand,
@@ -1256,8 +1256,8 @@ namespace ADDGH
         {
             var card = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(24, 24, 24)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(46, 46, 46)),
+                Background = ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(24, 24, 24)),
+                BorderBrush = ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(46, 46, 46)),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(12),
                 Padding = new Thickness(14),
@@ -1272,7 +1272,7 @@ namespace ADDGH
             info.Children.Add(new TextBlock
             {
                 Text = entry.Description,
-                Foreground = Brushes.White,
+                Foreground = ThemeBrush(Color.FromRgb(28, 32, 38), Color.FromRgb(255, 255, 255)),
                 FontSize = 14,
                 FontWeight = FontWeights.SemiBold,
                 TextWrapping = TextWrapping.Wrap
@@ -1280,7 +1280,7 @@ namespace ADDGH
             info.Children.Add(new TextBlock
             {
                 Text = $"reference/{entry.FileName}",
-                Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 150)),
+                Foreground = ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(150, 150, 150)),
                 FontSize = 11,
                 Margin = new Thickness(0, 6, 0, 0),
                 TextTrimming = TextTrimming.CharacterEllipsis
@@ -1290,7 +1290,7 @@ namespace ADDGH
                 info.Children.Add(new TextBlock
                 {
                     Text = "JSON 文件缺失，删除会清理索引条目",
-                    Foreground = new SolidColorBrush(Color.FromRgb(255, 180, 90)),
+                    Foreground = ThemeBrush(Color.FromRgb(147, 91, 0), Color.FromRgb(255, 180, 90)),
                     FontSize = 11,
                     Margin = new Thickness(0, 5, 0, 0)
                 });

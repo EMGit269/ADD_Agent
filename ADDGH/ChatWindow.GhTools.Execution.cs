@@ -1480,9 +1480,9 @@ namespace ADDGH
 
                 string err = GetCanvasErrors(doc)?.Trim();
                 if (string.IsNullOrEmpty(err))
-                    _txtCanvasIssues.Foreground = new SolidColorBrush(Color.FromRgb(140, 140, 140));
+                    _txtCanvasIssues.Foreground = ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(140, 140, 140));
                 else
-                    _txtCanvasIssues.Foreground = new SolidColorBrush(Color.FromRgb(200, 200, 200));
+                    _txtCanvasIssues.Foreground = ThemeBrush(Color.FromRgb(28, 32, 38), Color.FromRgb(200, 200, 200));
                 _txtCanvasIssues.Text = string.IsNullOrEmpty(err)
                     ? "画布暂无组件级 Error / Warning 运行时提示。"
                     : err;
@@ -5274,6 +5274,118 @@ namespace ADDGH
                 try { doc.ScheduleSolution(150); }
                 catch (Exception ex) { AddGhLog.Warn("ExecuteManageGhGroups Schedule failed: " + ex.Message); }
             }));
+            return result;
+        }
+
+        private static string ExecuteManageGhGroupsUnified(string action, List<string> ids, string groupId, string name)
+        {
+            string result = "";
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
+                var doc = Grasshopper.Instances.ActiveCanvas?.Document;
+                if (doc == null) { result = "Error: No active Grasshopper canvas."; return; }
+
+                string op = (action ?? "").Trim().ToLowerInvariant();
+                bool changed = false;
+
+                if (op == "create" || op == "group" || op == "create_group") {
+                    var group = new Grasshopper.Kernel.Special.GH_Group();
+                    group.NickName = string.IsNullOrWhiteSpace(name) ? "Group" : name.Trim();
+                    group.Colour = System.Drawing.Color.FromArgb(80, 250, 150, 100);
+
+                    int added = 0;
+                    foreach (var guid in ReadExistingDocumentObjectGuids(doc, ids, includeGroups: false)) {
+                        group.AddObject(guid);
+                        added++;
+                    }
+
+                    doc.AddObject(group, false);
+                    group.ExpireSolution(true);
+                    changed = true;
+                    result = "Created group '" + group.NickName + "' (ID: " + GetPublicId(doc, group) + ", members: " + added.ToString() + ").";
+                } else if (op == "ungroup" || op == "delete_group" || op == "remove_group") {
+                    var targetGroupIds = new List<string>();
+                    if (!string.IsNullOrWhiteSpace(groupId)) targetGroupIds.Add(groupId);
+                    if (ids != null) targetGroupIds.AddRange(ids.Where(v => !string.IsNullOrWhiteSpace(v)));
+
+                    var groups = ResolveGhGroups(doc, targetGroupIds);
+                    if (groups.Count == 0) {
+                        result = "Error: No matching group found to ungroup.";
+                        return;
+                    }
+
+                    var names = new List<string>();
+                    foreach (var group in groups) {
+                        names.Add(string.IsNullOrWhiteSpace(group.NickName) ? GetPublicId(doc, group) : group.NickName);
+                        doc.RemoveObject(group, false);
+                    }
+                    changed = true;
+                    result = "Ungrouped " + groups.Count.ToString() + " group(s): " + string.Join(", ", names) + ". Members were left on the canvas.";
+                } else if (op == "add_to_group" || op == "add" || op == "remove_from_group" || op == "remove") {
+                    var group = ResolveSingleGhGroup(doc, groupId);
+                    if (group == null) {
+                        result = "Error: Target group not found.";
+                        return;
+                    }
+
+                    int touched = 0;
+                    foreach (var guid in ReadExistingDocumentObjectGuids(doc, ids, includeGroups: false)) {
+                        if (op == "add_to_group" || op == "add")
+                            group.AddObject(guid);
+                        else
+                            group.RemoveObject(guid);
+                        touched++;
+                    }
+
+                    group.ExpireSolution(true);
+                    changed = true;
+                    result = "Updated group '" + group.NickName + "' (ID: " + GetPublicId(doc, group) + ", affected members: " + touched.ToString() + ").";
+                } else {
+                    result = "Error: Unsupported group action. Use create, add_to_group, remove_from_group, or ungroup.";
+                    return;
+                }
+
+                if (changed) {
+                    RefreshPublicIdMap(doc);
+                    _canvasChanged = true;
+                    try { doc.ScheduleSolution(150); }
+                    catch (Exception ex) { AddGhLog.Warn("ExecuteManageGhGroupsUnified Schedule failed: " + ex.Message); }
+                }
+            }));
+            return result;
+        }
+
+        private static List<Guid> ReadExistingDocumentObjectGuids(Grasshopper.Kernel.GH_Document doc, IEnumerable<string> ids, bool includeGroups)
+        {
+            var result = new List<Guid>();
+            if (doc == null || ids == null) return result;
+
+            foreach (var id in ids) {
+                if (!Guid.TryParse(id, out Guid guid)) continue;
+                var obj = doc.FindObject(guid, true);
+                if (obj == null) continue;
+                if (!includeGroups && obj is Grasshopper.Kernel.Special.GH_Group) continue;
+                if (!result.Contains(guid)) result.Add(guid);
+            }
+            return result;
+        }
+
+        private static Grasshopper.Kernel.Special.GH_Group ResolveSingleGhGroup(Grasshopper.Kernel.GH_Document doc, string groupId)
+        {
+            if (doc == null || string.IsNullOrWhiteSpace(groupId)) return null;
+            if (!Guid.TryParse(groupId, out Guid guid)) return null;
+            return doc.FindObject(guid, true) as Grasshopper.Kernel.Special.GH_Group;
+        }
+
+        private static List<Grasshopper.Kernel.Special.GH_Group> ResolveGhGroups(Grasshopper.Kernel.GH_Document doc, IEnumerable<string> groupIds)
+        {
+            var result = new List<Grasshopper.Kernel.Special.GH_Group>();
+            if (doc == null || groupIds == null) return result;
+
+            foreach (var id in groupIds) {
+                var group = ResolveSingleGhGroup(doc, id);
+                if (group != null && !result.Any(g => g.InstanceGuid == group.InstanceGuid))
+                    result.Add(group);
+            }
             return result;
         }
 
