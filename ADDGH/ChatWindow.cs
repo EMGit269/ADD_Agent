@@ -703,6 +703,7 @@ namespace ADDGH
                 : new SolidColorBrush(Color.FromArgb(165, 0, 0, 0));
 
             _window.Background = (Brush)_window.Resources["ThemeWindowBackgroundBrush"];
+            ApplySystemTitleBarTheme();
             if (_settingsOverlay != null) _settingsOverlay.Background = (Brush)_window.Resources["ThemeOverlayBrush"];
             if (_settingsPanel != null)
             {
@@ -713,6 +714,15 @@ namespace ADDGH
             {
                 _historySidebar.Background = (Brush)_window.Resources["ThemeSurfaceBrush"];
                 _historySidebar.BorderBrush = (Brush)_window.Resources["ThemeBorderBrush"];
+                if (_historySidebar.Effect is DropShadowEffect historyShadow)
+                    historyShadow.Opacity = light ? 0.10 : 0.35;
+                foreach (var text in FindVisualChildren<TextBlock>(_historySidebar))
+                {
+                    bool secondary = text.FontSize <= 11 || text == _historyCountText;
+                    text.Foreground = secondary
+                        ? (Brush)_window.Resources["ThemeSecondaryTextBrush"]
+                        : (Brush)_window.Resources["ThemePrimaryTextBrush"];
+                }
             }
             if (_libraryPanel != null)
             {
@@ -1270,7 +1280,7 @@ namespace ADDGH
         [DllImport("dwmapi.dll")]
         private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int attributeValue, int attributeSize);
 
-        private static void ApplyDarkSystemTitleBar()
+        private static void ApplySystemTitleBarTheme()
         {
             if (_window == null) return;
 
@@ -1279,7 +1289,7 @@ namespace ADDGH
                 IntPtr hwnd = new WindowInteropHelper(_window).Handle;
                 if (hwnd == IntPtr.Zero) return;
 
-                int enabled = 1;
+                int enabled = IsLightTheme() ? 0 : 1;
                 int size = Marshal.SizeOf(typeof(int));
                 int result = DwmSetWindowAttribute(hwnd, 20, ref enabled, size);
                 if (result != 0)
@@ -1738,11 +1748,20 @@ namespace ADDGH
         Title="""" Height=""760"" Width=""410""
         MinHeight=""520"" MinWidth=""410""
         ResizeMode=""CanResize""
-        WindowStyle=""SingleBorderWindow"" Background=""#141414""
+        WindowStyle=""SingleBorderWindow"" Background=""{DynamicResource ThemeWindowBackgroundBrush}""
         Topmost=""True"" WindowStartupLocation=""CenterScreen"" x:Name=""MaipoWindow"">
     <Window.Resources>
         <sys:Double x:Key=""ToolbarButtonSize"" xmlns:sys=""clr-namespace:System;assembly=mscorlib"">42</sys:Double>
         <sys:Double x:Key=""ToolbarIconSize"" xmlns:sys=""clr-namespace:System;assembly=mscorlib"">21</sys:Double>
+        <SolidColorBrush x:Key=""ThemeWindowBackgroundBrush"" Color=""#F5F7FA""/>
+        <SolidColorBrush x:Key=""ThemeToolbarTextBrush"" Color=""#222831""/>
+        <SolidColorBrush x:Key=""ThemePrimaryTextBrush"" Color=""#1C2026""/>
+        <SolidColorBrush x:Key=""ThemeSecondaryTextBrush"" Color=""#5C626E""/>
+        <SolidColorBrush x:Key=""ThemeBorderBrush"" Color=""#D6DAE1""/>
+        <SolidColorBrush x:Key=""ThemePanelBrush"" Color=""#FFFFFF""/>
+        <SolidColorBrush x:Key=""ThemeSurfaceBrush"" Color=""#F8F9FB""/>
+        <SolidColorBrush x:Key=""ThemeInputBrush"" Color=""#FFFFFF""/>
+        <SolidColorBrush x:Key=""ThemeOverlayBrush"" Color=""#B4F5F7FA""/>
         <Style TargetType=""ScrollBar"">
             <Setter Property=""Background"" Value=""Transparent""/>
             <Setter Property=""MinWidth"" Value=""0""/>
@@ -1930,16 +1949,16 @@ namespace ADDGH
                                         <ControlTemplate TargetType=""ToggleButton"">
                                             <Border Background=""Transparent"" Padding=""5"">
                                                 <StackPanel Orientation=""Horizontal"">
-                                                    <TextBlock x:Name=""Icon"" Text=""▶"" FontSize=""10"" Foreground=""#888"" Width=""15"" VerticalAlignment=""Center""/>
+                                                    <Path x:Name=""Icon"" Data=""M6,4 L10,8 L6,12"" Stroke=""{DynamicResource ThemeSecondaryTextBrush}"" StrokeThickness=""1.6"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" StrokeLineJoin=""Round"" Fill=""Transparent"" Width=""15"" Height=""16"" Stretch=""None"" VerticalAlignment=""Center""/>
                                                     <ContentPresenter VerticalAlignment=""Center"" TextElement.Foreground=""#EEE""/>
                                                 </StackPanel>
                                             </Border>
                                             <ControlTemplate.Triggers>
                                                 <Trigger Property=""IsChecked"" Value=""True"">
-                                                    <Setter TargetName=""Icon"" Property=""Text"" Value=""▼""/>
+                                                    <Setter TargetName=""Icon"" Property=""Data"" Value=""M4,6 L8,10 L12,6""/>
                                                 </Trigger>
                                                 <Trigger Property=""IsMouseOver"" Value=""True"">
-                                                    <Setter TargetName=""Icon"" Property=""Foreground"" Value=""#FFF""/>
+                                                    <Setter TargetName=""Icon"" Property=""Stroke"" Value=""{DynamicResource ThemePrimaryTextBrush}""/>
                                                 </Trigger>
                                             </ControlTemplate.Triggers>
                                         </ControlTemplate>
@@ -1960,7 +1979,7 @@ namespace ADDGH
     </Window.Resources>
 
 
-    <Border Background=""#141414"" CornerRadius=""0"" Margin=""0"">
+    <Border Background=""{DynamicResource ThemeWindowBackgroundBrush}"" CornerRadius=""0"" Margin=""0"">
         <Grid> <!-- Root Wrapper -->
             <Grid x:Name=""MainLayout"">
                 <Grid.ColumnDefinitions>
@@ -2017,9 +2036,9 @@ namespace ADDGH
                         </Button>
                     </StackPanel>
                 </Grid>
-                <Border Grid.Row=""0"" Grid.Column=""0"" Grid.ColumnSpan=""4"" x:Name=""ToolbarDivider"" Panel.ZIndex=""11"" Height=""1"" VerticalAlignment=""Bottom"" Background=""#1FFFFFFF"" Visibility=""Collapsed""/>
+                <Border Grid.Row=""0"" Grid.Column=""0"" Grid.ColumnSpan=""4"" x:Name=""ToolbarDivider"" Panel.ZIndex=""11"" Height=""1"" VerticalAlignment=""Bottom"" Background=""{DynamicResource ThemeBorderBrush}"" Visibility=""Collapsed""/>
 
-                <Border x:Name=""HistorySidebar"" Grid.Row=""1"" Grid.Column=""0"" Grid.RowSpan=""3"" Panel.ZIndex=""9"" HorizontalAlignment=""Stretch"" VerticalAlignment=""Stretch"" Visibility=""Collapsed"" Margin=""0"" Background=""#171717"" BorderBrush=""#2A2A2A"" BorderThickness=""0,0,1,1"" CornerRadius=""0"" ClipToBounds=""True"">
+                <Border x:Name=""HistorySidebar"" Grid.Row=""1"" Grid.Column=""0"" Grid.RowSpan=""3"" Panel.ZIndex=""9"" HorizontalAlignment=""Stretch"" VerticalAlignment=""Stretch"" Visibility=""Collapsed"" Margin=""0"" Background=""{DynamicResource ThemeSurfaceBrush}"" BorderBrush=""{DynamicResource ThemeBorderBrush}"" BorderThickness=""0,0,1,1"" CornerRadius=""0"" ClipToBounds=""True"">
                     <Border.Effect>
                         <DropShadowEffect BlurRadius=""24"" ShadowDepth=""4"" Opacity=""0.35"" Color=""Black""/>
                     </Border.Effect>
@@ -2053,10 +2072,10 @@ namespace ADDGH
                 <StackPanel>
                     <TextBlock x:Name=""EmptyChatPrompt"" Text=""要用Maipo创造什么？"" Foreground=""#F3F3F3"" FontSize=""24"" FontWeight=""SemiBold"" TextAlignment=""Center"" HorizontalAlignment=""Center"" Margin=""0,0,0,24""/>
                     <!-- Warning Bar -->
-                    <Border x:Name=""WarningBar"" Visibility=""Collapsed"" Background=""#2A2A2A"" BorderBrush=""Transparent"" BorderThickness=""0"" CornerRadius=""8"" Padding=""12,8"" Margin=""0,0,0,10"">
+                    <Border x:Name=""WarningBar"" Visibility=""Collapsed"" Background=""#FFF8EB"" BorderBrush=""#F1D6A3"" BorderThickness=""1"" CornerRadius=""8"" Padding=""12,8"" Margin=""0,0,0,10"">
                     <Grid>
                         <StackPanel Orientation=""Horizontal"">
-                            <TextBlock Text=""⚠️"" Foreground=""#A8A8A8"" Margin=""0,0,8,0"" VerticalAlignment=""Center""/>
+                            <Path Data=""M8,2 L15,14 L1,14 Z M8,5.7 L8,9.2 M8,11.5 L8,11.6"" Stroke=""{DynamicResource ThemeSecondaryTextBrush}"" StrokeThickness=""1.45"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" StrokeLineJoin=""Round"" Fill=""Transparent"" Width=""16"" Height=""16"" Stretch=""Uniform"" Margin=""0,0,8,0"" VerticalAlignment=""Center""/>
                             <TextBlock x:Name=""TxtWarning"" Text=""正在执行复杂任务，已连续操作..."" Foreground=""#C8C8C8"" FontSize=""11"" VerticalAlignment=""Center""/>
                         </StackPanel>
                         <Button x:Name=""BtnCloseWarning"" Content=""✕"" HorizontalAlignment=""Right"" Background=""Transparent"" BorderThickness=""0"" Foreground=""#AAA"" Cursor=""Hand""/>
@@ -2187,7 +2206,7 @@ namespace ADDGH
                 </Border>
 
             <!-- 电池库扩展区 -->
-                <Border Grid.Row=""3"" Grid.Column=""1"" Background=""#111111"" BorderBrush=""#333333"" BorderThickness=""0,1,0,0"" x:Name=""LibraryPanel"" CornerRadius=""0"" HorizontalAlignment=""Center"">
+                <Border Grid.Row=""3"" Grid.Column=""1"" Background=""{DynamicResource ThemeSurfaceBrush}"" BorderBrush=""{DynamicResource ThemeBorderBrush}"" BorderThickness=""0,1,0,0"" x:Name=""LibraryPanel"" CornerRadius=""0"" HorizontalAlignment=""Center"">
                     <Grid Margin=""15"">
                         <Grid.RowDefinitions>
                             <RowDefinition Height=""Auto""/>
@@ -2208,10 +2227,10 @@ namespace ADDGH
                     </Grid>
                 </Border>
 
-                <Border Grid.Row=""1"" Grid.Column=""3"" Grid.RowSpan=""2"" x:Name=""CodeViewBorder"" Background=""#141414"" CornerRadius=""0"" BorderBrush=""#2A2A2A"" BorderThickness=""1,0,0,0"">
+                <Border Grid.Row=""1"" Grid.Column=""3"" Grid.RowSpan=""2"" x:Name=""CodeViewBorder"" Background=""{DynamicResource ThemeWindowBackgroundBrush}"" CornerRadius=""0"" BorderBrush=""{DynamicResource ThemeBorderBrush}"" BorderThickness=""1,0,0,0"">
                     <Grid ClipToBounds=""True"">
                         <Grid>
-                            <Grid x:Name=""CanvasPane"" Background=""#141414"">
+                            <Grid x:Name=""CanvasPane"" Background=""{DynamicResource ThemeWindowBackgroundBrush}"">
                                 <Border Margin=""0"" Background=""#12161C"" BorderBrush=""Transparent"" BorderThickness=""0"" CornerRadius=""0"">
                                     <Grid x:Name=""CanvasSurfaceHost"">
                                         <Border x:Name=""CanvasStatusHost"" Background=""Transparent"" Padding=""22"">
@@ -2224,13 +2243,13 @@ namespace ADDGH
                                 </Border>
                             </Grid>
 
-                            <Grid x:Name=""InspectorPane"" Background=""#141414"" Visibility=""Collapsed"">
+                            <Grid x:Name=""InspectorPane"" Background=""{DynamicResource ThemeWindowBackgroundBrush}"" Visibility=""Collapsed"">
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height=""*""/>
                                     <RowDefinition Height=""Auto""/>
                                 </Grid.RowDefinitions>
                                 <Border Grid.Row=""0"" Margin=""0"" Background=""Transparent""><RichTextBox x:Name=""RichCodeView"" Background=""Transparent"" Foreground=""#B8B8B8"" BorderThickness=""0"" FontSize=""12"" FontFamily=""Consolas, Monaco, Courier New"" IsReadOnly=""True"" IsDocumentEnabled=""True"" VerticalScrollBarVisibility=""Auto"" HorizontalScrollBarVisibility=""Disabled"" CaretBrush=""#888"" Padding=""16,42,16,12""/></Border>
-                                <Border Grid.Row=""1"" x:Name=""CodeCanvasIssuesHost"" Background=""#1E1E1E"" CornerRadius=""0"" BorderBrush=""#2A2A2A"" BorderThickness=""0,1,0,0"" MinHeight=""120""><DockPanel Margin=""15,10,15,12"" LastChildFill=""True""><TextBlock DockPanel.Dock=""Top"" Text=""画布诊断"" Foreground=""#888"" FontSize=""11"" FontWeight=""SemiBold"" Margin=""0,0,0,8""/><ScrollViewer VerticalScrollBarVisibility=""Auto"" HorizontalScrollBarVisibility=""Disabled""><TextBox x:Name=""TxtCanvasIssues"" IsReadOnly=""True"" TextWrapping=""Wrap"" AcceptsReturn=""True"" Background=""Transparent"" Foreground=""#C8C8C8"" BorderThickness=""0"" FontSize=""12"" Padding=""0"" CaretBrush=""#888""/></ScrollViewer></DockPanel></Border>
+                                <Border Grid.Row=""1"" x:Name=""CodeCanvasIssuesHost"" Background=""{DynamicResource ThemeSurfaceBrush}"" CornerRadius=""0"" BorderBrush=""{DynamicResource ThemeBorderBrush}"" BorderThickness=""0,1,0,0"" MinHeight=""120""><DockPanel Margin=""15,10,15,12"" LastChildFill=""True""><TextBlock DockPanel.Dock=""Top"" Text=""画布诊断"" Foreground=""{DynamicResource ThemeSecondaryTextBrush}"" FontSize=""11"" FontWeight=""SemiBold"" Margin=""0,0,0,8""/><ScrollViewer VerticalScrollBarVisibility=""Auto"" HorizontalScrollBarVisibility=""Disabled""><TextBox x:Name=""TxtCanvasIssues"" IsReadOnly=""True"" TextWrapping=""Wrap"" AcceptsReturn=""True"" Background=""Transparent"" Foreground=""{DynamicResource ThemePrimaryTextBrush}"" BorderThickness=""0"" FontSize=""12"" Padding=""0"" CaretBrush=""{DynamicResource ThemePrimaryTextBrush}""/></ScrollViewer></DockPanel></Border>
                             </Grid>
                         </Grid>
                         <Button x:Name=""BtnCanvasPaneView"" Content=""Code"" HorizontalAlignment=""Left"" VerticalAlignment=""Top"" Margin=""14,12,0,0"" Padding=""10,5"" Foreground=""#E5E7EB"" Background=""#AA1B2027"" BorderBrush=""#3A404A"" BorderThickness=""1"" Cursor=""Hand"" Panel.ZIndex=""20"">
@@ -2248,8 +2267,8 @@ namespace ADDGH
         </Grid> <!-- End MainLayout Grid -->
 
     <!-- 配置悬浮层 -->
-            <Grid x:Name=""SettingsOverlay"" Grid.ColumnSpan=""4"" Panel.ZIndex=""999"" Margin=""0"" Background=""Transparent"" Visibility=""Collapsed"">
-            <Border x:Name=""SettingsPanel"" Background=""#1E1E1E"" CornerRadius=""14"" MaxWidth=""450"" MaxHeight=""680"" HorizontalAlignment=""Right"" VerticalAlignment=""Top"" Margin=""12,68,18,12"" Padding=""18"">
+            <Grid x:Name=""SettingsOverlay"" Grid.ColumnSpan=""4"" Panel.ZIndex=""999"" Margin=""0"" Background=""{DynamicResource ThemeOverlayBrush}"" Visibility=""Collapsed"">
+            <Border x:Name=""SettingsPanel"" Background=""{DynamicResource ThemePanelBrush}"" BorderBrush=""{DynamicResource ThemeBorderBrush}"" BorderThickness=""1"" CornerRadius=""14"" MaxWidth=""450"" MaxHeight=""680"" HorizontalAlignment=""Right"" VerticalAlignment=""Top"" Margin=""12,68,18,12"" Padding=""18"">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height=""Auto""/>
@@ -2530,7 +2549,7 @@ namespace ADDGH
                 ShutdownPlugin();
                 _window = null;
             };
-            _window.SourceInitialized += (s, e) => ApplyDarkSystemTitleBar();
+            _window.SourceInitialized += (s, e) => ApplySystemTitleBarTheme();
             _window.SizeChanged += (s, e) => UpdateSettingsPanelBounds();
             InitializeFloatingScrollbars();
 
@@ -4181,8 +4200,12 @@ namespace ADDGH
                 string id = child.Tag as string;
                 bool active = !string.IsNullOrWhiteSpace(id)
                     && string.Equals(id, _activeHistoryId, StringComparison.OrdinalIgnoreCase);
-                child.BorderBrush = new SolidColorBrush(active ? Color.FromRgb(58, 58, 58) : Color.FromRgb(40, 40, 40));
-                child.Background = new SolidColorBrush(active ? Color.FromRgb(26, 26, 26) : Color.FromRgb(23, 23, 23));
+                child.BorderBrush = active
+                    ? ThemeBrush(Color.FromRgb(24, 36, 54), Color.FromRgb(245, 247, 250))
+                    : ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(40, 40, 40));
+                child.Background = active
+                    ? ThemeBrush(Color.FromRgb(238, 242, 247), Color.FromRgb(26, 26, 26))
+                    : ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(23, 23, 23));
             }
         }
 

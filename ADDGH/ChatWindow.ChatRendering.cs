@@ -1131,7 +1131,7 @@ namespace ADDGH
                     _referenceLibraryWindow = null;
                 }
 
-                var root = new Grid { Background = new SolidColorBrush(Color.FromRgb(16, 16, 16)), Margin = new Thickness(0) };
+                var root = new Grid { Background = ThemeBrush(Color.FromRgb(245, 247, 250), Color.FromRgb(16, 16, 16)), Margin = new Thickness(0) };
                 root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
                 root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
