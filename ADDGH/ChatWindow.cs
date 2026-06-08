@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Effects;
 using System.Windows.Input;
 using System.Net;
 using System.Net.Http;
@@ -20,6 +21,7 @@ using System.Xml.Linq;
 using System.Text.RegularExpressions;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using Microsoft.Win32;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System.Windows.Markup;
@@ -86,6 +88,7 @@ namespace ADDGH
         private static Border _codeCanvasIssuesHost;
         private static TextBox _txtCanvasIssues;
         private static Border _inputAreaBorder;
+        private static Border _inputChromeBorder;
         private static TextBlock _emptyChatPrompt;
         private static Border _stickyUserMessageHost;
         private static Grid _stickyUserMessageStack;
@@ -132,6 +135,9 @@ namespace ADDGH
         private static Button _btnModeMixed;
         private static Button _btnDisplayNormal;
         private static Button _btnDisplayLarge;
+        private static Button _btnThemeDark;
+        private static Button _btnThemeLight;
+        private static Button _btnThemeSystem;
         private static MenuItem _menuAgentModeCreate;
         private static MenuItem _menuAgentModePlan;
         private static MenuItem _menuModeBattery;
@@ -166,12 +172,21 @@ namespace ADDGH
             Large
         }
 
+        private enum ThemeMode
+        {
+            Dark,
+            Light,
+            System
+        }
+
         private const string LayoutModeSettingKey = "ADDGH_LayoutMode";
         private const string AgentModeSettingKey = "ADDGH_AgentMode";
         private const string DisplayModeSettingKey = "ADDGH_DisplayMode";
+        private const string ThemeModeSettingKey = "ADDGH_ThemeMode";
         private static LayoutMode _layoutMode = LayoutMode.Mixed;
         private static AgentMode _agentMode = AgentMode.Create;
         private static DisplayMode _displayMode = DisplayMode.Normal;
+        private static ThemeMode _themeMode = ThemeMode.Light;
 
         private const string SYSTEM_PROMPT = @"你是 GH 参数化专家。
 
@@ -456,6 +471,20 @@ namespace ADDGH
             return DisplayMode.Normal;
         }
 
+        private static ThemeMode ReadThemeModeSetting()
+        {
+            try
+            {
+                string raw = Grasshopper.Instances.Settings.GetValue(ThemeModeSettingKey, ThemeMode.Light.ToString());
+                if (Enum.TryParse(raw, true, out ThemeMode mode)) return mode;
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("Read theme mode failed: " + ex.Message);
+            }
+            return ThemeMode.Light;
+        }
+
         private static void SaveLayoutModeSetting()
         {
             try { Grasshopper.Instances.Settings.SetValue(LayoutModeSettingKey, _layoutMode.ToString()); }
@@ -472,6 +501,12 @@ namespace ADDGH
         {
             try { Grasshopper.Instances.Settings.SetValue(DisplayModeSettingKey, _displayMode.ToString()); }
             catch (Exception ex) { AddGhLog.Warn("Save display mode failed: " + ex.Message); }
+        }
+
+        private static void SaveThemeModeSetting()
+        {
+            try { Grasshopper.Instances.Settings.SetValue(ThemeModeSettingKey, _themeMode.ToString()); }
+            catch (Exception ex) { AddGhLog.Warn("Save theme mode failed: " + ex.Message); }
         }
 
         private static void ReplaceCurrentSystemPrompt()
@@ -510,6 +545,246 @@ namespace ADDGH
             RefreshUI();
         }
 
+        private static void SetThemeMode(ThemeMode mode)
+        {
+            _themeMode = mode;
+            SaveThemeModeSetting();
+            ApplyThemeMode();
+            RefreshThemeAwareViews();
+        }
+
+        private static ThemeMode GetEffectiveThemeMode()
+        {
+            if (_themeMode != ThemeMode.System) return _themeMode;
+            return IsSystemLightTheme() ? ThemeMode.Light : ThemeMode.Dark;
+        }
+
+        private static bool IsLightTheme()
+        {
+            return GetEffectiveThemeMode() == ThemeMode.Light;
+        }
+
+        private static bool IsSystemLightTheme()
+        {
+            try
+            {
+                using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
+                {
+                    object value = key?.GetValue("AppsUseLightTheme");
+                    if (value is int intValue) return intValue != 0;
+                    if (value is byte byteValue) return byteValue != 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Debug("Read system theme failed: " + ex.Message);
+            }
+            return false;
+        }
+
+        private static Color ThemeColor(Color light, Color dark)
+        {
+            return IsLightTheme() ? light : dark;
+        }
+
+        private static SolidColorBrush ThemeBrush(Color light, Color dark)
+        {
+            return new SolidColorBrush(ThemeColor(light, dark));
+        }
+
+        private static FrameworkElement CreateChevronDownGlyph(Brush stroke = null)
+        {
+            return new WpfPath
+            {
+                Data = Geometry.Parse("M4,7 L8,11 L12,7"),
+                Stroke = stroke ?? ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(160, 160, 160)),
+                StrokeThickness = 1.8,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                StrokeLineJoin = PenLineJoin.Round,
+                Fill = Brushes.Transparent,
+                Width = 16,
+                Height = 16,
+                Stretch = Stretch.None,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+        }
+
+        private static FrameworkElement CreateCloseGlyph(Brush stroke = null)
+        {
+            return new WpfPath
+            {
+                Data = Geometry.Parse("M5,5 L13,13 M13,5 L5,13"),
+                Stroke = stroke ?? ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(160, 160, 160)),
+                StrokeThickness = 1.8,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                Width = 18,
+                Height = 18,
+                Stretch = Stretch.None,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+        }
+
+        private static FrameworkElement CreateSendGlyph()
+        {
+            return new WpfPath
+            {
+                Data = Geometry.Parse("M4,4 L14,9 L4,14 L6.5,9 Z"),
+                Fill = Brushes.Black,
+                Width = 14,
+                Height = 14,
+                Stretch = Stretch.Uniform,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+        }
+
+        private static object CreateDropdownContent(string label)
+        {
+            var panel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            panel.Children.Add(new TextBlock
+            {
+                Text = label ?? "",
+                Foreground = ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(160, 160, 160)),
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            panel.Children.Add(CreateChevronDownGlyph());
+            return panel;
+        }
+
+        private static void ApplySegmentedButtonState(Button button, bool selected)
+        {
+            if (button == null) return;
+            Color bg = ThemeColor(
+                selected ? Color.FromRgb(24, 36, 54) : Color.FromRgb(255, 255, 255),
+                selected ? Color.FromRgb(245, 247, 250) : Color.FromRgb(34, 34, 34));
+            Color fg = ThemeColor(
+                selected ? Color.FromRgb(255, 255, 255) : Color.FromRgb(58, 64, 74),
+                selected ? Color.FromRgb(18, 18, 18) : Color.FromRgb(205, 209, 216));
+            Color border = ThemeColor(
+                selected ? Color.FromRgb(24, 36, 54) : Color.FromRgb(214, 218, 225),
+                selected ? Color.FromRgb(245, 247, 250) : Color.FromRgb(70, 70, 70));
+
+            var fgBrush = new SolidColorBrush(fg);
+            button.Background = new SolidColorBrush(bg);
+            button.Foreground = fgBrush;
+            button.SetValue(TextElement.ForegroundProperty, fgBrush);
+            button.BorderBrush = new SolidColorBrush(border);
+            button.FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal;
+        }
+
+        private static void UpdateThemeButtons()
+        {
+            if (_btnThemeDark != null) _btnThemeDark.IsEnabled = !_isGenerating;
+            if (_btnThemeLight != null) _btnThemeLight.IsEnabled = !_isGenerating;
+            if (_btnThemeSystem != null) _btnThemeSystem.IsEnabled = !_isGenerating;
+            ApplySegmentedButtonState(_btnThemeDark, _themeMode == ThemeMode.Dark);
+            ApplySegmentedButtonState(_btnThemeLight, _themeMode == ThemeMode.Light);
+            ApplySegmentedButtonState(_btnThemeSystem, _themeMode == ThemeMode.System);
+        }
+
+        private static void ApplyThemeMode()
+        {
+            if (_window == null) return;
+            bool light = IsLightTheme();
+
+            _window.Resources["ThemeWindowBackgroundBrush"] = ThemeBrush(Color.FromRgb(245, 247, 250), Color.FromRgb(20, 20, 20));
+            _window.Resources["ThemeToolbarTextBrush"] = ThemeBrush(Color.FromRgb(34, 40, 49), Color.FromRgb(221, 225, 231));
+            _window.Resources["ThemePrimaryTextBrush"] = ThemeBrush(Color.FromRgb(28, 32, 38), Color.FromRgb(243, 243, 243));
+            _window.Resources["ThemeSecondaryTextBrush"] = ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(160, 160, 160));
+            _window.Resources["ThemeBorderBrush"] = ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(58, 58, 58));
+            _window.Resources["ThemePanelBrush"] = ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(30, 30, 30));
+            _window.Resources["ThemeSurfaceBrush"] = ThemeBrush(Color.FromRgb(248, 249, 251), Color.FromRgb(36, 36, 36));
+            _window.Resources["ThemeInputBrush"] = ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(42, 42, 42));
+            _window.Resources["ThemeOverlayBrush"] = light
+                ? new SolidColorBrush(Color.FromArgb(180, 245, 247, 250))
+                : new SolidColorBrush(Color.FromArgb(165, 0, 0, 0));
+
+            _window.Background = (Brush)_window.Resources["ThemeWindowBackgroundBrush"];
+            if (_settingsOverlay != null) _settingsOverlay.Background = (Brush)_window.Resources["ThemeOverlayBrush"];
+            if (_settingsPanel != null)
+            {
+                _settingsPanel.Background = (Brush)_window.Resources["ThemePanelBrush"];
+                _settingsPanel.BorderBrush = (Brush)_window.Resources["ThemeBorderBrush"];
+            }
+            if (_historySidebar != null)
+            {
+                _historySidebar.Background = (Brush)_window.Resources["ThemeSurfaceBrush"];
+                _historySidebar.BorderBrush = (Brush)_window.Resources["ThemeBorderBrush"];
+            }
+            if (_inputAreaBorder != null) _inputAreaBorder.Background = Brushes.Transparent;
+            if (_inputChromeBorder != null)
+            {
+                _inputChromeBorder.Background = (Brush)_window.Resources["ThemeInputBrush"];
+                _inputChromeBorder.BorderBrush = (Brush)_window.Resources["ThemeBorderBrush"];
+                if (_inputChromeBorder.Effect is DropShadowEffect shadow)
+                    shadow.Opacity = light ? 0 : 0.38;
+            }
+            if (_txtInput != null)
+            {
+                _txtInput.Foreground = (Brush)_window.Resources["ThemePrimaryTextBrush"];
+                _txtInput.CaretBrush = (Brush)_window.Resources["ThemePrimaryTextBrush"];
+            }
+            if (_emptyChatPrompt != null) _emptyChatPrompt.Foreground = (Brush)_window.Resources["ThemePrimaryTextBrush"];
+            if (_txtWarning != null) _txtWarning.Foreground = (Brush)_window.Resources["ThemeSecondaryTextBrush"];
+            ApplyThemeToSettingsPanelVisuals();
+            UpdateLayoutModeButtons();
+            UpdateDisplayModeButtons();
+            UpdateThemeButtons();
+        }
+
+        private static void ApplyThemeToSettingsPanelVisuals()
+        {
+            if (_settingsPanel == null || _window == null) return;
+            foreach (var text in FindVisualChildren<TextBlock>(_settingsPanel))
+            {
+                bool secondary = text.FontSize <= 12 && text.FontWeight != FontWeights.SemiBold && text.FontWeight != FontWeights.Bold;
+                text.Foreground = secondary
+                    ? (Brush)_window.Resources["ThemeSecondaryTextBrush"]
+                    : (Brush)_window.Resources["ThemePrimaryTextBrush"];
+            }
+            foreach (var textBox in FindVisualChildren<TextBox>(_settingsPanel))
+            {
+                textBox.Foreground = (Brush)_window.Resources["ThemePrimaryTextBrush"];
+                textBox.CaretBrush = (Brush)_window.Resources["ThemePrimaryTextBrush"];
+                textBox.Background = Brushes.Transparent;
+            }
+            foreach (var combo in FindVisualChildren<ComboBox>(_settingsPanel))
+            {
+                combo.Foreground = (Brush)_window.Resources["ThemePrimaryTextBrush"];
+                combo.Background = (Brush)_window.Resources["ThemeInputBrush"];
+                combo.BorderBrush = (Brush)_window.Resources["ThemeBorderBrush"];
+            }
+            foreach (var expander in FindVisualChildren<Expander>(_settingsPanel))
+            {
+                expander.Foreground = (Brush)_window.Resources["ThemePrimaryTextBrush"];
+                expander.Background = Brushes.Transparent;
+            }
+            foreach (var button in FindVisualChildren<Button>(_settingsPanel))
+            {
+                if (button == _btnThemeDark || button == _btnThemeLight || button == _btnThemeSystem ||
+                    button == _btnDisplayNormal || button == _btnDisplayLarge ||
+                    button == _btnModeBattery || button == _btnModeMixed || button == _btnModeCSharp)
+                    continue;
+                button.Foreground = (Brush)_window.Resources["ThemePrimaryTextBrush"];
+                if (button.Background is SolidColorBrush bg && bg.Color.A != 0)
+                {
+                    button.Background = (Brush)_window.Resources["ThemeSurfaceBrush"];
+                    button.BorderBrush = (Brush)_window.Resources["ThemeBorderBrush"];
+                }
+            }
+        }
+
+        private static void RefreshThemeAwareViews()
+        {
+            RefreshUI();
+            if (_isHistorySidebarVisible) RefreshHistorySidebar();
+            if (_isLibraryVisible) UpdateLibraryUI();
+            if (_isSkillVisible) UpdateSkillLibraryUI();
+        }
+
         private static double ChatBodyFontSize => _displayMode == DisplayMode.Large ? 18 : 14;
         private static double ChatBodyLineHeight => _displayMode == DisplayMode.Large ? 28 : 22;
 
@@ -544,18 +819,14 @@ namespace ADDGH
                 _contextMeterHost.Height = 21;
             }
 
-            void PaintDisplay(Button button, bool selected)
-            {
-                if (button == null) return;
-                button.Background = new SolidColorBrush(selected ? Color.FromRgb(238, 238, 238) : Color.FromRgb(30, 30, 30));
-                button.Foreground = new SolidColorBrush(selected ? Color.FromRgb(18, 18, 18) : Color.FromRgb(160, 160, 160));
-                button.BorderBrush = new SolidColorBrush(selected ? Color.FromRgb(238, 238, 238) : Color.FromRgb(58, 58, 58));
-                button.FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal;
-            }
-
-            PaintDisplay(_btnDisplayNormal, _displayMode == DisplayMode.Normal);
-            PaintDisplay(_btnDisplayLarge, _displayMode == DisplayMode.Large);
+            UpdateDisplayModeButtons();
             UpdateChatBottomInset();
+        }
+
+        private static void UpdateDisplayModeButtons()
+        {
+            ApplySegmentedButtonState(_btnDisplayNormal, _displayMode == DisplayMode.Normal);
+            ApplySegmentedButtonState(_btnDisplayLarge, _displayMode == DisplayMode.Large);
         }
 
         private static void ResetTransientConversationState()
@@ -590,27 +861,20 @@ namespace ADDGH
             if (_btnModeDropdown != null)
             {
                 _btnModeDropdown.IsEnabled = !_isGenerating;
-                _btnModeDropdown.Content = ModeLabel(_layoutMode) + " ▾";
-                _btnModeDropdown.Foreground = new SolidColorBrush(Color.FromRgb(160, 160, 160));
+                _btnModeDropdown.Content = CreateDropdownContent(ModeLabel(_layoutMode));
+                _btnModeDropdown.Foreground = ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(160, 160, 160));
             }
 
             if (_menuModeBattery != null) _menuModeBattery.Header = (_layoutMode == LayoutMode.Battery ? "✓ " : "   ") + "电池模式";
             if (_menuModeMixed != null) _menuModeMixed.Header = (_layoutMode == LayoutMode.Mixed ? "✓ " : "   ") + "混合模式";
             if (_menuModeCSharp != null) _menuModeCSharp.Header = (_layoutMode == LayoutMode.CSharpFirst ? "✓ " : "   ") + "C# 优先";
 
-            void Paint(Button button, bool selected)
-            {
-                if (button == null) return;
-                button.IsEnabled = !_isGenerating;
-                button.Background = new SolidColorBrush(selected ? Color.FromRgb(238, 238, 238) : Color.FromRgb(30, 30, 30));
-                button.Foreground = new SolidColorBrush(selected ? Color.FromRgb(18, 18, 18) : Color.FromRgb(160, 160, 160));
-                button.BorderBrush = new SolidColorBrush(selected ? Color.FromRgb(238, 238, 238) : Color.FromRgb(58, 58, 58));
-                button.FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal;
-            }
-
-            Paint(_btnModeBattery, _layoutMode == LayoutMode.Battery);
-            Paint(_btnModeMixed, _layoutMode == LayoutMode.Mixed);
-            Paint(_btnModeCSharp, _layoutMode == LayoutMode.CSharpFirst);
+            if (_btnModeBattery != null) _btnModeBattery.IsEnabled = !_isGenerating;
+            if (_btnModeMixed != null) _btnModeMixed.IsEnabled = !_isGenerating;
+            if (_btnModeCSharp != null) _btnModeCSharp.IsEnabled = !_isGenerating;
+            ApplySegmentedButtonState(_btnModeBattery, _layoutMode == LayoutMode.Battery);
+            ApplySegmentedButtonState(_btnModeMixed, _layoutMode == LayoutMode.Mixed);
+            ApplySegmentedButtonState(_btnModeCSharp, _layoutMode == LayoutMode.CSharpFirst);
         }
 
         private static void UpdateAgentModeButtons()
@@ -620,8 +884,8 @@ namespace ADDGH
             if (_btnAgentModeDropdown != null)
             {
                 _btnAgentModeDropdown.IsEnabled = !_isGenerating;
-                _btnAgentModeDropdown.Content = label + " ▾";
-                _btnAgentModeDropdown.Foreground = new SolidColorBrush(Color.FromRgb(160, 160, 160));
+                _btnAgentModeDropdown.Content = CreateDropdownContent(label);
+                _btnAgentModeDropdown.Foreground = ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(160, 160, 160));
             }
 
             if (_menuAgentModeCreate != null)
@@ -786,7 +1050,7 @@ namespace ADDGH
 
                 var text = new TextBlock {
                     Text = status,
-                    Foreground = new SolidColorBrush(Color.FromRgb(125, 125, 125)),
+                    Foreground = ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(125, 125, 125)),
                     FontSize = 12,
                     Margin = new Thickness(5, 0, 0, 18),
                     VerticalAlignment = VerticalAlignment.Center,
@@ -1262,8 +1526,8 @@ namespace ADDGH
             {
                 Padding = new Thickness(14, 8, 14, 8),
                 HorizontalAlignment = HorizontalAlignment.Stretch,
-                Background = new SolidColorBrush(Color.FromRgb(30, 30, 30)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(52, 52, 52)),
+                Background = ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(30, 30, 30)),
+                BorderBrush = ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(52, 52, 52)),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(9),
                 ClipToBounds = true,
@@ -1743,9 +2007,9 @@ namespace ADDGH
                     </Grid>
                 </Border>
 
-                        <Border Background=""#2B2B2B"" BorderBrush=""#32FFFFFF"" BorderThickness=""1"" CornerRadius=""24"" Padding=""18,14,18,14"" MinHeight=""118"" ClipToBounds=""True"">
+                        <Border x:Name=""InputChromeBorder"" Background=""{DynamicResource ThemeInputBrush}"" BorderBrush=""{DynamicResource ThemeBorderBrush}"" BorderThickness=""1"" CornerRadius=""24"" Padding=""18,14,18,14"" MinHeight=""118"" ClipToBounds=""True"">
                             <Border.Effect>
-                                <DropShadowEffect BlurRadius=""28"" ShadowDepth=""0"" Opacity=""0.38"" Color=""Black""/>
+                                <DropShadowEffect BlurRadius=""28"" ShadowDepth=""0"" Opacity=""0"" Color=""Black""/>
                             </Border.Effect>
                             <Grid>
                                 <Grid.RowDefinitions>
@@ -1755,7 +2019,7 @@ namespace ADDGH
                                 </Grid.RowDefinitions>
                         <WrapPanel Grid.Row=""0"" x:Name=""AttachmentPreviewPanel"" Margin=""0,0,0,8"" Visibility=""Collapsed""/>
                         <Border Grid.Row=""1"" Background=""Transparent"" BorderThickness=""0"" Padding=""0"" Margin=""0"">
-                            <TextBox x:Name=""TxtInput"" Background=""Transparent"" Foreground=""#F3F3F3"" BorderThickness=""0"" Padding=""0,0,0,8"" FontSize=""14"" AcceptsReturn=""True"" VerticalScrollBarVisibility=""Auto"" TextWrapping=""Wrap"" MinHeight=""44"" MaxHeight=""128"" CaretBrush=""White"" ToolTip=""可在此处输入；Ctrl+V 粘贴文件或截图即可加入附件""/>
+                            <TextBox x:Name=""TxtInput"" Background=""Transparent"" Foreground=""{DynamicResource ThemePrimaryTextBrush}"" BorderThickness=""0"" Padding=""0,0,0,8"" FontSize=""14"" AcceptsReturn=""True"" VerticalScrollBarVisibility=""Auto"" TextWrapping=""Wrap"" MinHeight=""44"" MaxHeight=""128"" CaretBrush=""{DynamicResource ThemePrimaryTextBrush}"" ToolTip=""可在此处输入；Ctrl+V 粘贴文件或截图即可加入附件""/>
                         </Border>
                         <Grid Grid.Row=""2"" Margin=""0,8,0,0"">
                             <Grid.ColumnDefinitions>
@@ -1850,7 +2114,7 @@ namespace ADDGH
                                 <Path x:Name=""ContextRingProgress"" Stroke=""#D8D8D8"" StrokeThickness=""1.3"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" Fill=""Transparent""/>
                             </Grid>
 
-                            <Button x:Name=""BtnSend"" Grid.Column=""6"" Content=""➤"" Foreground=""Black"" FontSize=""11"" Margin=""0"" Width=""22"" Height=""22"" Cursor=""Hand"" VerticalAlignment=""Center"">
+                            <Button x:Name=""BtnSend"" Grid.Column=""6"" Foreground=""Black"" FontSize=""11"" Margin=""0"" Width=""22"" Height=""22"" Cursor=""Hand"" VerticalAlignment=""Center"">
                                 <Button.Template>
                                     <ControlTemplate TargetType=""Button"">
                                         <Border x:Name=""bg"" Background=""White"" CornerRadius=""11"">
@@ -2105,13 +2369,13 @@ namespace ADDGH
                                             <ColumnDefinition Width=""*""/>
                                         </Grid.ColumnDefinitions>
                                         <Button x:Name=""BtnModeBattery"" Grid.Column=""0"" Content=""电池模式"" Background=""#1E1E1E"" Foreground=""#A0A0A0"" BorderBrush=""#3A3A3A"" BorderThickness=""1"" Height=""34"" FontSize=""12"" Cursor=""Hand"">
-                                            <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""9,0,0,9""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
+                                            <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""9,0,0,9""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center"" TextElement.Foreground=""{TemplateBinding Foreground}""/></Border></ControlTemplate></Button.Template>
                                         </Button>
                                         <Button x:Name=""BtnModeMixed"" Grid.Column=""1"" Content=""混合模式"" Background=""#1E1E1E"" Foreground=""#A0A0A0"" BorderBrush=""#3A3A3A"" BorderThickness=""0,1,0,1"" Height=""34"" FontSize=""12"" Cursor=""Hand"">
-                                            <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
+                                            <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center"" TextElement.Foreground=""{TemplateBinding Foreground}""/></Border></ControlTemplate></Button.Template>
                                         </Button>
                                         <Button x:Name=""BtnModeCSharp"" Grid.Column=""2"" Content=""C# 优先"" Background=""#1E1E1E"" Foreground=""#A0A0A0"" BorderBrush=""#3A3A3A"" BorderThickness=""1"" Height=""34"" FontSize=""12"" Cursor=""Hand"">
-                                            <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""0,9,9,0""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
+                                            <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""0,9,9,0""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center"" TextElement.Foreground=""{TemplateBinding Foreground}""/></Border></ControlTemplate></Button.Template>
                                         </Button>
                                     </Grid>
                                 </Border>
@@ -2120,6 +2384,23 @@ namespace ADDGH
                             <Expander Header=""界面显示"" IsExpanded=""True"" Foreground=""#ECECEC"" Background=""#242424"" Margin=""0,0,0,4"">
                                 <Border Background=""#242424"" CornerRadius=""10"" Padding=""12"" BorderBrush=""#343434"" BorderThickness=""1"">
                                     <StackPanel>
+                                        <TextBlock Text=""外观主题"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,8""/>
+                                        <Grid Background=""Transparent"" Margin=""0,0,0,12"">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width=""*""/>
+                                                <ColumnDefinition Width=""*""/>
+                                                <ColumnDefinition Width=""*""/>
+                                            </Grid.ColumnDefinitions>
+                                            <Button x:Name=""BtnThemeDark"" Grid.Column=""0"" Content=""暗色"" Background=""#1E1E1E"" Foreground=""#A0A0A0"" BorderBrush=""#3A3A3A"" BorderThickness=""1"" Height=""34"" FontSize=""12"" Cursor=""Hand"">
+                                                <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""9,0,0,9""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center"" TextElement.Foreground=""{TemplateBinding Foreground}""/></Border></ControlTemplate></Button.Template>
+                                            </Button>
+                                            <Button x:Name=""BtnThemeLight"" Grid.Column=""1"" Content=""明色"" Background=""#1E1E1E"" Foreground=""#A0A0A0"" BorderBrush=""#3A3A3A"" BorderThickness=""0,1,0,1"" Height=""34"" FontSize=""12"" Cursor=""Hand"">
+                                                <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center"" TextElement.Foreground=""{TemplateBinding Foreground}""/></Border></ControlTemplate></Button.Template>
+                                            </Button>
+                                            <Button x:Name=""BtnThemeSystem"" Grid.Column=""2"" Content=""系统跟随"" Background=""#1E1E1E"" Foreground=""#A0A0A0"" BorderBrush=""#3A3A3A"" BorderThickness=""1"" Height=""34"" FontSize=""12"" Cursor=""Hand"">
+                                                <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""0,9,9,0""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center"" TextElement.Foreground=""{TemplateBinding Foreground}""/></Border></ControlTemplate></Button.Template>
+                                            </Button>
+                                        </Grid>
                                         <TextBlock Text=""对话输入与输出字号"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,8""/>
                                         <Grid Background=""#1E1E1E"">
                                             <Grid.ColumnDefinitions>
@@ -2127,10 +2408,10 @@ namespace ADDGH
                                                 <ColumnDefinition Width=""*""/>
                                             </Grid.ColumnDefinitions>
                                             <Button x:Name=""BtnDisplayNormal"" Grid.Column=""0"" Content=""正常显示"" Background=""#1E1E1E"" Foreground=""#A0A0A0"" BorderBrush=""#3A3A3A"" BorderThickness=""1"" Height=""34"" FontSize=""12"" Cursor=""Hand"">
-                                                <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""9,0,0,9""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
+                                                <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""9,0,0,9""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center"" TextElement.Foreground=""{TemplateBinding Foreground}""/></Border></ControlTemplate></Button.Template>
                                             </Button>
                                             <Button x:Name=""BtnDisplayLarge"" Grid.Column=""1"" Content=""放大显示"" Background=""#1E1E1E"" Foreground=""#A0A0A0"" BorderBrush=""#3A3A3A"" BorderThickness=""1"" Height=""34"" FontSize=""12"" Cursor=""Hand"">
-                                                <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""0,9,9,0""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center""/></Border></ControlTemplate></Button.Template>
+                                                <Button.Template><ControlTemplate TargetType=""Button""><Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""0,9,9,0""><ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center"" TextElement.Foreground=""{TemplateBinding Foreground}""/></Border></ControlTemplate></Button.Template>
                                             </Button>
                                         </Grid>
                                     </StackPanel>
@@ -2210,7 +2491,9 @@ namespace ADDGH
             _stickyUserMessageHost = (Border)_window.FindName("StickyUserMessageHost");
             _stickyUserMessageStack = (Grid)_window.FindName("StickyUserMessageStack");
             _txtInput = (TextBox)_window.FindName("TxtInput");
+            _inputChromeBorder = (Border)_window.FindName("InputChromeBorder");
             _btnSend = (Button)_window.FindName("BtnSend");
+            if (_btnSend != null) _btnSend.Content = CreateSendGlyph();
             _btnAgentModeDropdown = (Button)_window.FindName("BtnAgentModeDropdown");
             _btnModeDropdown = (Button)_window.FindName("BtnModeDropdown");
             _btnModeBattery = (Button)_window.FindName("BtnModeBattery");
@@ -2218,6 +2501,9 @@ namespace ADDGH
             _btnModeMixed = (Button)_window.FindName("BtnModeMixed");
             _btnDisplayNormal = (Button)_window.FindName("BtnDisplayNormal");
             _btnDisplayLarge = (Button)_window.FindName("BtnDisplayLarge");
+            _btnThemeDark = (Button)_window.FindName("BtnThemeDark");
+            _btnThemeLight = (Button)_window.FindName("BtnThemeLight");
+            _btnThemeSystem = (Button)_window.FindName("BtnThemeSystem");
             _menuAgentModeCreate = (MenuItem)_window.FindName("MenuAgentModeCreate");
             _menuAgentModePlan = (MenuItem)_window.FindName("MenuAgentModePlan");
             _menuModeBattery = (MenuItem)_window.FindName("MenuModeBattery");
@@ -2226,6 +2512,7 @@ namespace ADDGH
             _layoutMode = ReadLayoutModeSetting();
             _agentMode = ReadAgentModeSetting();
             _displayMode = ReadDisplayModeSetting();
+            _themeMode = ReadThemeModeSetting();
             if (_btnAgentModeDropdown != null) {
                 _btnAgentModeDropdown.Click += (s, e) => {
                     if (_btnAgentModeDropdown.ContextMenu != null) {
@@ -2251,12 +2538,16 @@ namespace ADDGH
             if (_btnModeCSharp != null) _btnModeCSharp.Click += (s, e) => SetLayoutMode(LayoutMode.CSharpFirst);
             if (_btnDisplayNormal != null) _btnDisplayNormal.Click += (s, e) => SetDisplayMode(DisplayMode.Normal);
             if (_btnDisplayLarge != null) _btnDisplayLarge.Click += (s, e) => SetDisplayMode(DisplayMode.Large);
+            if (_btnThemeDark != null) _btnThemeDark.Click += (s, e) => SetThemeMode(ThemeMode.Dark);
+            if (_btnThemeLight != null) _btnThemeLight.Click += (s, e) => SetThemeMode(ThemeMode.Light);
+            if (_btnThemeSystem != null) _btnThemeSystem.Click += (s, e) => SetThemeMode(ThemeMode.System);
             if (_menuModeBattery != null) _menuModeBattery.Click += (s, e) => SetLayoutMode(LayoutMode.Battery);
             if (_menuModeMixed != null) _menuModeMixed.Click += (s, e) => SetLayoutMode(LayoutMode.Mixed);
             if (_menuModeCSharp != null) _menuModeCSharp.Click += (s, e) => SetLayoutMode(LayoutMode.CSharpFirst);
             UpdateAgentModeButtons();
             UpdateLayoutModeButtons();
             ApplyDisplayMode();
+            ApplyThemeMode();
             _historySidebar = (Border)_window.FindName("HistorySidebar");
             _historyListPanel = (StackPanel)_window.FindName("HistoryListPanel");
             _historyCountText = (TextBlock)_window.FindName("TxtHistoryCount");
@@ -2286,6 +2577,7 @@ namespace ADDGH
             _contextRingProgress = (WpfPath)_window.FindName("ContextRingProgress");
 
             var btnCloseHistory = (Button)_window.FindName("BtnCloseHistory");
+            if (btnCloseHistory != null) btnCloseHistory.Content = CreateCloseGlyph();
             if (_btnToggleHistory != null) _btnToggleHistory.Click += (s, e) => ToggleHistorySidebar();
             if (btnCloseHistory != null) btnCloseHistory.Click += (s, e) => SetHistorySidebarVisible(false);
             LoadChatHistoryStore();
@@ -2404,6 +2696,7 @@ namespace ADDGH
             var btnSettings = (Button)_window.FindName("BtnSettings");
             _settingsOverlay = (Grid)_window.FindName("SettingsOverlay");
             _settingsPanel = (Border)_window.FindName("SettingsPanel");
+            ApplyThemeMode();
             _txtApiKey = (TextBox)_window.FindName("TxtApiKey");
             _comboProvider = (ComboBox)_window.FindName("ComboProvider");
             _comboVisionProvider = (ComboBox)_window.FindName("ComboVisionProvider");
@@ -2599,6 +2892,7 @@ namespace ADDGH
             _warningBar = (Border)_window.FindName("WarningBar");
             _txtWarning = (TextBlock)_window.FindName("TxtWarning");
             _btnCloseWarning = (Button)_window.FindName("BtnCloseWarning");
+            if (_btnCloseWarning != null) _btnCloseWarning.Content = CreateCloseGlyph();
 
             if (_btnCloseWarning != null)
                 _btnCloseWarning.Click += (s, e) => _warningBar.Visibility = Visibility.Collapsed;
@@ -3218,7 +3512,7 @@ namespace ADDGH
             UpdateAgentModeButtons();
             UpdateLayoutModeButtons();
             if (_btnSend == null) return;
-            _btnSend.Content = "➤";
+            _btnSend.Content = CreateSendGlyph();
             var bg = _btnSend.Template.FindName("bg", _btnSend) as Border;
             if (bg != null) bg.CornerRadius = new CornerRadius(11);
             var cp = _btnSend.Template.FindName("cp", _btnSend) as ContentPresenter;
@@ -3481,7 +3775,10 @@ namespace ADDGH
         private static void SetSettingsOverlayVisible(bool visible)
         {
             if (visible)
+            {
                 UpdateSettingsPanelBounds();
+                ApplyThemeMode();
+            }
 
             if (_settingsOverlay != null)
             {
@@ -4351,8 +4648,8 @@ namespace ADDGH
                 if (string.IsNullOrWhiteSpace(primary)) continue;
 
                 var row = new Border {
-                    Background = new SolidColorBrush(Color.FromRgb(22, 22, 22)),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(48, 48, 48)),
+                    Background = ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(22, 22, 22)),
+                    BorderBrush = ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(48, 48, 48)),
                     BorderThickness = new Thickness(0.5),
                     CornerRadius = new CornerRadius(6),
                     Padding = new Thickness(8, 5, 8, 5),
@@ -4368,7 +4665,7 @@ namespace ADDGH
 
                 var primaryTb = new TextBlock {
                     Text = primary,
-                    Foreground = new SolidColorBrush(Color.FromRgb(148, 148, 148)),
+                    Foreground = ThemeBrush(Color.FromRgb(58, 64, 74), Color.FromRgb(148, 148, 148)),
                     FontSize = 11,
                     FontWeight = FontWeights.Normal,
                     TextWrapping = TextWrapping.NoWrap,
@@ -4380,7 +4677,7 @@ namespace ADDGH
 
                 var secondaryTb = new TextBlock {
                     Text = secondary,
-                    Foreground = new SolidColorBrush(Color.FromRgb(105, 105, 105)),
+                    Foreground = ThemeBrush(Color.FromRgb(122, 128, 140), Color.FromRgb(105, 105, 105)),
                     FontSize = 9.5,
                     FontWeight = FontWeights.Normal,
                     TextWrapping = TextWrapping.NoWrap,

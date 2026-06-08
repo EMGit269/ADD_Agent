@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
@@ -284,8 +284,8 @@ namespace ADDGH
         {
             var border = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(28, 28, 28)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(50, 50, 50)),
+                Background = ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(28, 28, 28)),
+                BorderBrush = ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(50, 50, 50)),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(10),
                 Padding = new Thickness(8),
@@ -317,11 +317,11 @@ namespace ADDGH
                     Width = 44,
                     Height = 44,
                     CornerRadius = new CornerRadius(8),
-                    Background = new SolidColorBrush(Color.FromRgb(42, 42, 42)),
+                    Background = ThemeBrush(Color.FromRgb(238, 242, 247), Color.FromRgb(42, 42, 42)),
                     Child = new TextBlock
                     {
                         Text = GetAttachmentBadge(attachment),
-                        Foreground = new SolidColorBrush(Color.FromRgb(230, 230, 230)),
+                        Foreground = ThemeBrush(Color.FromRgb(58, 64, 74), Color.FromRgb(230, 230, 230)),
                         FontSize = 10,
                         FontWeight = FontWeights.Bold,
                         HorizontalAlignment = HorizontalAlignment.Center,
@@ -336,7 +336,7 @@ namespace ADDGH
             info.Children.Add(new TextBlock
             {
                 Text = attachment.FileName,
-                Foreground = new SolidColorBrush(Color.FromRgb(238, 238, 238)),
+                Foreground = ThemeBrush(Color.FromRgb(28, 32, 38), Color.FromRgb(238, 238, 238)),
                 FontSize = 12,
                 FontWeight = FontWeights.SemiBold,
                 TextTrimming = TextTrimming.CharacterEllipsis,
@@ -345,7 +345,7 @@ namespace ADDGH
             info.Children.Add(new TextBlock
             {
                 Text = string.IsNullOrEmpty(attachment.Error) ? FormatFileSize(attachment.SizeBytes) : attachment.Error,
-                Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 150)),
+                Foreground = ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(150, 150, 150)),
                 FontSize = 10,
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 MaxWidth = 125
@@ -357,8 +357,8 @@ namespace ADDGH
             {
                 var remove = new Button
                 {
-                    Content = "×",
-                    Foreground = new SolidColorBrush(Color.FromRgb(190, 190, 190)),
+                    Content = CreateCloseGlyph(ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(190, 190, 190))),
+                    Foreground = ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(190, 190, 190)),
                     Background = Brushes.Transparent,
                     BorderThickness = new Thickness(0),
                     Cursor = Cursors.Hand,
@@ -392,7 +392,7 @@ namespace ADDGH
                 CornerRadius = new CornerRadius(14),
                 BorderBrush = new SolidColorBrush(Color.FromArgb(38, 255, 255, 255)),
                 BorderThickness = new Thickness(1),
-                Background = new SolidColorBrush(Color.FromRgb(22, 22, 22)),
+                Background = ThemeBrush(Color.FromRgb(248, 249, 251), Color.FromRgb(22, 22, 22)),
                 ClipToBounds = true,
                 Cursor = Cursors.Hand
             };

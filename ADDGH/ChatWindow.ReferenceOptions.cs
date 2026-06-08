@@ -250,12 +250,12 @@ namespace ADDGH
                 }));
             }
 
-            private static readonly SolidColorBrush Bg = new SolidColorBrush(Color.FromRgb(28, 28, 28));
-            private static readonly SolidColorBrush Bd = new SolidColorBrush(Color.FromRgb(56, 56, 56));
-            private static readonly SolidColorBrush Row = new SolidColorBrush(Color.FromRgb(34, 34, 34));
-            private static readonly SolidColorBrush RowHi = new SolidColorBrush(Color.FromRgb(42, 42, 42));
-            private static readonly SolidColorBrush Sub = new SolidColorBrush(Color.FromRgb(150, 150, 150));
-            private static readonly SolidColorBrush Txt = new SolidColorBrush(Color.FromRgb(224, 224, 224));
+            private static SolidColorBrush Bg => ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(28, 28, 28));
+            private static SolidColorBrush Bd => ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(56, 56, 56));
+            private static SolidColorBrush Row => ThemeBrush(Color.FromRgb(248, 249, 251), Color.FromRgb(34, 34, 34));
+            private static SolidColorBrush RowHi => ThemeBrush(Color.FromRgb(238, 242, 247), Color.FromRgb(42, 42, 42));
+            private static SolidColorBrush Sub => ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(150, 150, 150));
+            private static SolidColorBrush Txt => ThemeBrush(Color.FromRgb(28, 32, 38), Color.FromRgb(224, 224, 224));
 
             private static Border BuildPickerShell(IReadOnlyList<string> options)
             {
@@ -299,18 +299,18 @@ namespace ADDGH
                     MinHeight = 36,
                     MaxLength = 400,
                     Margin = new Thickness(0, 10, 0, 6),
-                    Background = new SolidColorBrush(Color.FromRgb(22, 22, 22)),
+                    Background = ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(22, 22, 22)),
                     Foreground = Txt,
                     BorderBrush = Bd,
                     BorderThickness = new Thickness(1),
                     Padding = new Thickness(8, 6, 8, 6),
-                    CaretBrush = Brushes.White,
+                    CaretBrush = ThemeBrush(Color.FromRgb(28, 32, 38), Color.FromRgb(255, 255, 255)),
                     FontSize = 12
                 };
 
                 var ok = new Border
                 {
-                    Background = new SolidColorBrush(Color.FromRgb(58, 58, 58)),
+                    Background = ThemeBrush(Color.FromRgb(238, 242, 247), Color.FromRgb(58, 58, 58)),
                     BorderBrush = Bd,
                     BorderThickness = new Thickness(1),
                     CornerRadius = new CornerRadius(4),

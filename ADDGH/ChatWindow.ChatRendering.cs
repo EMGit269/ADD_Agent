@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -49,9 +49,9 @@ namespace ADDGH
                         if (ChatMessageHelpers.ShouldDisplayReasoningBubble(reasoning, content, toolCalls))
                         {
                             string title = m["_display_reasoning_title"]?.ToString();
-                            if (string.IsNullOrWhiteSpace(title)) title = "已思考";
+                            if (string.IsNullOrWhiteSpace(title)) title = "\u5df2\u601d\u8003";
                             string icon = m["_display_reasoning_icon"]?.ToString();
-                            if (string.IsNullOrWhiteSpace(icon)) icon = "💭";
+                            if (string.IsNullOrWhiteSpace(icon)) icon = "";
                             AppendCollapsibleBubble(reasoning, title, icon);
                         }
                         if (!string.IsNullOrEmpty(content))
@@ -98,8 +98,8 @@ namespace ADDGH
                 var bubble = new Border {
                     Padding = isUser ? new Thickness(14, 8, 14, 8) : new Thickness(0, 5, 0, 10),
                     HorizontalAlignment = isUser ? HorizontalAlignment.Stretch : HorizontalAlignment.Left,
-                    Background = isUser ? new SolidColorBrush(Color.FromRgb(30, 30, 30)) : Brushes.Transparent,
-                    BorderBrush = isUser ? new SolidColorBrush(Color.FromRgb(52, 52, 52)) : Brushes.Transparent,
+                    Background = isUser ? ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(30, 30, 30)) : Brushes.Transparent,
+                    BorderBrush = isUser ? ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(52, 52, 52)) : Brushes.Transparent,
                     BorderThickness = isUser ? new Thickness(1) : new Thickness(0),
                     CornerRadius = isUser ? new CornerRadius(9) : new CornerRadius(0)
                 };
@@ -135,8 +135,8 @@ namespace ADDGH
                     var bubble = new Border {
                         Padding = new Thickness(14, 8, 14, 8),
                         HorizontalAlignment = HorizontalAlignment.Stretch,
-                        Background = new SolidColorBrush(Color.FromRgb(30, 30, 30)),
-                        BorderBrush = new SolidColorBrush(Color.FromRgb(52, 52, 52)),
+                        Background = ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(30, 30, 30)),
+                        BorderBrush = ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(52, 52, 52)),
                         BorderThickness = new Thickness(1),
                         CornerRadius = new CornerRadius(9)
                     };
@@ -271,14 +271,40 @@ namespace ADDGH
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
                 var groupPanel = new StackPanel { Margin = new Thickness(0, 0, 0, 15), HorizontalAlignment = HorizontalAlignment.Left };
 
-                var headerGrid = new Grid { Cursor = Cursors.Hand, Background = Brushes.Transparent, Margin = new Thickness(0,0,0,5) };
+                var headerGrid = new Grid { Cursor = Cursors.Hand, Background = Brushes.Transparent, Margin = new Thickness(0, 0, 0, 5) };
                 headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                 headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                 headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-                var statusIcon = new TextBlock { Text = icon, Foreground = Brushes.Gray, FontSize = 12, Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
-                var headerText = new TextBlock { Text = title, Foreground = Brushes.Gray, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
-                var toggleIcon = new TextBlock { Text = "▼", Foreground = Brushes.DimGray, FontSize = 9, Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+                var statusIcon = new WpfPath {
+                    Data = Geometry.Parse("M5,9 A4,4 0 1 1 13,9 A4,4 0 1 1 5,9"),
+                    Fill = ThemeBrush(Color.FromRgb(122, 128, 140), Color.FromRgb(125, 125, 125)),
+                    Width = 18,
+                    Height = 18,
+                    Stretch = Stretch.None,
+                    Margin = new Thickness(0, 0, 6, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                var headerText = new TextBlock {
+                    Text = string.IsNullOrWhiteSpace(title) ? "\u5df2\u601d\u8003" : title,
+                    Foreground = ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(125, 125, 125)),
+                    FontSize = 12,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                var toggleIcon = new WpfPath {
+                    Data = Geometry.Parse("M4,6 L8,10 L12,6"),
+                    Stroke = ThemeBrush(Color.FromRgb(122, 128, 140), Color.FromRgb(105, 105, 105)),
+                    StrokeThickness = 1.6,
+                    StrokeStartLineCap = PenLineCap.Round,
+                    StrokeEndLineCap = PenLineCap.Round,
+                    StrokeLineJoin = PenLineJoin.Round,
+                    Fill = Brushes.Transparent,
+                    Width = 16,
+                    Height = 16,
+                    Stretch = Stretch.None,
+                    Margin = new Thickness(8, 0, 0, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
 
                 Grid.SetColumn(statusIcon, 0);
                 Grid.SetColumn(headerText, 1);
@@ -290,8 +316,8 @@ namespace ADDGH
                 var logPanel = new StackPanel { Margin = new Thickness(22, 4, 0, 0), Visibility = Visibility.Collapsed };
 
                 var contentBorder = new Border {
-                    Background = new SolidColorBrush(Color.FromRgb(22, 22, 22)),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(38, 38, 38)),
+                    Background = ThemeBrush(Color.FromRgb(248, 249, 251), Color.FromRgb(22, 22, 22)),
+                    BorderBrush = ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(38, 38, 38)),
                     BorderThickness = new Thickness(1),
                     CornerRadius = new CornerRadius(8),
                     Padding = new Thickness(10)
@@ -305,10 +331,10 @@ namespace ADDGH
                 headerGrid.MouseLeftButtonDown += (s, e) => {
                     if (logPanel.Visibility == Visibility.Visible) {
                         logPanel.Visibility = Visibility.Collapsed;
-                        toggleIcon.Text = "▼";
+                        toggleIcon.Data = Geometry.Parse("M4,6 L8,10 L12,6");
                     } else {
                         logPanel.Visibility = Visibility.Visible;
-                        toggleIcon.Text = "▲";
+                        toggleIcon.Data = Geometry.Parse("M6,4 L10,8 L6,12");
                     }
                 };
 
@@ -322,7 +348,6 @@ namespace ADDGH
                 _chatScroll.ScrollToEnd();
             }));
         }
-
         private static void AppendMarkdownInlines(InlineCollection inlines, string text)
         {
             string[] parts = Regex.Split(text ?? "", @"(<kbd\b[^>]*>.*?</kbd>|\*\*.*?\*\*|`.*?`|\*.*?\*)", RegexOptions.IgnoreCase);
@@ -339,8 +364,8 @@ namespace ADDGH
                     inlines.Add(new Run(part.Substring(1, part.Length - 2)) {
                         FontFamily = new FontFamily("Consolas, Courier New"),
                         FontSize = 12,
-                        Foreground = new SolidColorBrush(Color.FromRgb(255, 200, 100)),
-                        Background = new SolidColorBrush(Color.FromRgb(60, 60, 60))
+                        Foreground = ThemeBrush(Color.FromRgb(147, 91, 0), Color.FromRgb(255, 200, 100)),
+                        Background = ThemeBrush(Color.FromRgb(238, 241, 245), Color.FromRgb(60, 60, 60))
                     });
                 } else {
                     inlines.Add(new Run(part));
@@ -352,8 +377,8 @@ namespace ADDGH
         {
             var key = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(42, 42, 42)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(88, 88, 88)),
+                Background = ThemeBrush(Color.FromRgb(238, 241, 245), Color.FromRgb(42, 42, 42)),
+                BorderBrush = ThemeBrush(Color.FromRgb(190, 197, 208), Color.FromRgb(88, 88, 88)),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(4),
                 Padding = new Thickness(5, 1, 5, 1),
@@ -361,7 +386,7 @@ namespace ADDGH
                 Child = new TextBlock
                 {
                     Text = text ?? "",
-                    Foreground = new SolidColorBrush(Color.FromRgb(235, 235, 235)),
+                    Foreground = ThemeBrush(Color.FromRgb(28, 32, 38), Color.FromRgb(235, 235, 235)),
                     FontFamily = new FontFamily("Consolas, Courier New"),
                     FontSize = 11,
                     FontWeight = FontWeights.SemiBold,
@@ -494,10 +519,14 @@ namespace ADDGH
 
         private static RichTextBox BuildMarkdownPanel(string text, bool alignRight = false, bool subdued = false)
         {
-            Color bodyColor = subdued ? Color.FromRgb(205, 205, 205) : Color.FromRgb(235, 235, 235);
-            Color codeBodyColor = subdued ? Color.FromRgb(220, 220, 220) : Color.FromRgb(230, 230, 230);
-            Color codeHeaderColor = subdued ? Color.FromRgb(190, 190, 190) : Color.FromRgb(224, 224, 224);
-            Color codeGutterColor = subdued ? Color.FromRgb(88, 88, 88) : Color.FromRgb(100, 100, 100);
+            Color bodyColor = subdued
+                ? ThemeColor(Color.FromRgb(92, 98, 110), Color.FromRgb(205, 205, 205))
+                : ThemeColor(Color.FromRgb(28, 32, 38), Color.FromRgb(235, 235, 235));
+            Color codeBodyColor = subdued
+                ? ThemeColor(Color.FromRgb(62, 68, 78), Color.FromRgb(220, 220, 220))
+                : ThemeColor(Color.FromRgb(28, 32, 38), Color.FromRgb(230, 230, 230));
+            Color codeHeaderColor = ThemeColor(Color.FromRgb(92, 98, 110), subdued ? Color.FromRgb(190, 190, 190) : Color.FromRgb(224, 224, 224));
+            Color codeGutterColor = ThemeColor(Color.FromRgb(150, 156, 168), subdued ? Color.FromRgb(88, 88, 88) : Color.FromRgb(100, 100, 100));
             double bodyFontSize = subdued ? 12 : ChatBodyFontSize;
             double bodyLineHeight = subdued ? 19 : ChatBodyLineHeight;
 
@@ -588,8 +617,8 @@ namespace ADDGH
                 inner.Children.Add(codeRow);
 
                 doc.Blocks.Add(new BlockUIContainer(new Border {
-                    Background = new SolidColorBrush(Color.FromRgb(30, 30, 30)),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(42, 42, 42)),
+                    Background = ThemeBrush(Color.FromRgb(248, 249, 251), Color.FromRgb(30, 30, 30)),
+                    BorderBrush = ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(42, 42, 42)),
                     BorderThickness = new Thickness(1),
                     CornerRadius = new CornerRadius(8),
                     Padding = new Thickness(18, 16, 20, 18),
@@ -621,7 +650,7 @@ namespace ADDGH
                 if (IsMarkdownHorizontalRule(trimmed)) {
                     doc.Blocks.Add(new BlockUIContainer(new Border {
                         Height = 1,
-                        Background = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
+                        Background = ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(80, 80, 80)),
                         Margin = new Thickness(0, 10, 0, 10)
                     }));
                     continue;
@@ -649,20 +678,20 @@ namespace ADDGH
                 if (trimmed.StartsWith("### ")) {
                     paragraph.FontSize = subdued ? 15 : bodyFontSize + 1;
                     paragraph.FontWeight = FontWeights.SemiBold;
-                    paragraph.Foreground = new SolidColorBrush(subdued ? Color.FromRgb(205, 205, 205) : Color.FromRgb(255, 220, 150));
+                    paragraph.Foreground = ThemeBrush(subdued ? Color.FromRgb(92, 98, 110) : Color.FromRgb(73, 62, 28), subdued ? Color.FromRgb(205, 205, 205) : Color.FromRgb(255, 220, 150));
                     paragraph.TextAlignment = alignRight ? TextAlignment.Right : TextAlignment.Left;
                     AppendMarkdownInlines(paragraph.Inlines, trimmed.Substring(4));
                 } else if (trimmed.StartsWith("## ")) {
                     paragraph.FontSize = subdued ? 13 : bodyFontSize + 2;
                     paragraph.FontWeight = FontWeights.SemiBold;
-                    paragraph.Foreground = new SolidColorBrush(subdued ? Color.FromRgb(205, 205, 205) : Color.FromRgb(255, 220, 150));
+                    paragraph.Foreground = ThemeBrush(subdued ? Color.FromRgb(92, 98, 110) : Color.FromRgb(73, 62, 28), subdued ? Color.FromRgb(205, 205, 205) : Color.FromRgb(255, 220, 150));
                     paragraph.Margin = new Thickness(0, 8, 0, 4);
                     paragraph.TextAlignment = alignRight ? TextAlignment.Right : TextAlignment.Left;
                     AppendMarkdownInlines(paragraph.Inlines, trimmed.Substring(3));
                 } else if (trimmed.StartsWith("# ")) {
                     paragraph.FontSize = subdued ? 14 : bodyFontSize + 3;
                     paragraph.FontWeight = FontWeights.Bold;
-                    paragraph.Foreground = new SolidColorBrush(subdued ? Color.FromRgb(205, 205, 205) : Color.FromRgb(255, 220, 150));
+                    paragraph.Foreground = ThemeBrush(subdued ? Color.FromRgb(92, 98, 110) : Color.FromRgb(73, 62, 28), subdued ? Color.FromRgb(205, 205, 205) : Color.FromRgb(255, 220, 150));
                     paragraph.Margin = new Thickness(0, 8, 0, 4);
                     paragraph.TextAlignment = alignRight ? TextAlignment.Right : TextAlignment.Left;
                     AppendMarkdownInlines(paragraph.Inlines, trimmed.Substring(2));
@@ -670,7 +699,7 @@ namespace ADDGH
                     paragraph.Inlines.Add(new Run("• ") { Foreground = new SolidColorBrush(subdued ? Color.FromRgb(170, 170, 170) : Color.FromRgb(255, 200, 100)) });
                     AppendMarkdownInlines(paragraph.Inlines, trimmed.Substring(2));
                 } else if (trimmed.StartsWith("> ")) {
-                    paragraph.Foreground = new SolidColorBrush(subdued ? Color.FromRgb(175, 175, 175) : Color.FromRgb(190, 190, 190));
+                    paragraph.Foreground = ThemeBrush(Color.FromRgb(92, 98, 110), subdued ? Color.FromRgb(175, 175, 175) : Color.FromRgb(190, 190, 190));
                     paragraph.Margin = new Thickness(10, 4, 0, 4);
                     paragraph.Inlines.Add(new Run("│ ") { Foreground = new SolidColorBrush(subdued ? Color.FromRgb(75, 75, 75) : Color.FromRgb(70, 70, 70)) });
                     AppendMarkdownInlines(paragraph.Inlines, trimmed.Substring(2));
@@ -1405,12 +1434,12 @@ namespace ADDGH
         {
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
                 var card = new Border {
-                    Background = new SolidColorBrush(Color.FromRgb(35, 35, 35)),
+                    Background = ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(35, 35, 35)),
                     CornerRadius = new CornerRadius(8),
                     Padding = new Thickness(12, 10, 12, 10),
                     Margin = new Thickness(0, 0, 0, 15),
                     HorizontalAlignment = HorizontalAlignment.Stretch,
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(50, 50, 50)),
+                    BorderBrush = ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(50, 50, 50)),
                     BorderThickness = new Thickness(1)
                 };
 
@@ -1422,7 +1451,7 @@ namespace ADDGH
                 var titleStack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
                 titleStack.Children.Add(new TextBlock {
                     Text = "操作统计",
-                    Foreground = new SolidColorBrush(Color.FromRgb(180, 180, 180)),
+                    Foreground = ThemeBrush(Color.FromRgb(58, 64, 74), Color.FromRgb(180, 180, 180)),
                     FontSize = 12,
                     FontWeight = FontWeights.SemiBold,
                     VerticalAlignment = VerticalAlignment.Center
@@ -1467,7 +1496,7 @@ namespace ADDGH
                 Margin = new Thickness(6, 0, 0, 0)
             };
             var sp = new StackPanel { Orientation = Orientation.Horizontal };
-            sp.Children.Add(new TextBlock { Text = label, Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 150)), FontSize = 11, Margin = new Thickness(0, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center });
+            sp.Children.Add(new TextBlock { Text = label, Foreground = ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(150, 150, 150)), FontSize = 11, Margin = new Thickness(0, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center });
             sp.Children.Add(new TextBlock { Text = value, Foreground = new SolidColorBrush(color), FontSize = 12, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center });
             badge.Child = sp;
             return badge;
@@ -1520,7 +1549,7 @@ namespace ADDGH
                 stack.Children.Add(new TextBlock
                 {
                     Text = cat,
-                    Foreground = new SolidColorBrush(Color.FromRgb(82, 82, 82)),
+                    Foreground = ThemeBrush(Color.FromRgb(122, 128, 140), Color.FromRgb(82, 82, 82)),
                     FontSize = 10,
                     FontWeight = FontWeights.Normal,
                     Margin = new Thickness(2, 0, 0, 4)
@@ -1528,8 +1557,8 @@ namespace ADDGH
 
                 var card = new Border
                 {
-                    Background = new SolidColorBrush(Color.FromRgb(26, 26, 26)),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(42, 42, 42)),
+                    Background = ThemeBrush(Color.FromRgb(248, 249, 251), Color.FromRgb(26, 26, 26)),
+                    BorderBrush = ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(42, 42, 42)),
                     BorderThickness = new Thickness(1),
                     CornerRadius = new CornerRadius(8),
                     Padding = new Thickness(10, 8, 10, 8)
@@ -1537,7 +1566,7 @@ namespace ADDGH
 
                 card.Child = CreateSelectableTextBox(
                     string.IsNullOrEmpty(body) ? "（无详情）" : body,
-                    new SolidColorBrush(Color.FromRgb(130, 130, 130)),
+                    ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(130, 130, 130)),
                     11,
                     new Thickness(0));
 
