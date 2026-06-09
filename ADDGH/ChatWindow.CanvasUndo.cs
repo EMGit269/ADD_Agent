@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Windows;
@@ -403,6 +404,10 @@ namespace ADDGH
                         return;
                     }
 
+                    var activeCanvas = Grasshopper.Instances.ActiveCanvas;
+                    var current = activeCanvas?.Document;
+                    var preservedUserReferenceData = CaptureCanvasUndoUserReferenceData(current);
+
                     var io = new GH_DocumentIO();
                     if (!io.Open(materializedPath))
                     {
@@ -417,9 +422,10 @@ namespace ADDGH
                         return;
                     }
 
+                    RestoreCanvasUndoDocumentFileIdentity(restored, current);
+                    ApplyCanvasUndoUserReferenceData(restored, preservedUserReferenceData);
+
                     var server = Grasshopper.Instances.DocumentServer;
-                    var activeCanvas = Grasshopper.Instances.ActiveCanvas;
-                    var current = activeCanvas?.Document;
                     if (server != null && current != null)
                     {
                         try { server.RemoveDocument(current); } catch { }
@@ -622,6 +628,178 @@ namespace ADDGH
                     }
                 }
             }
+        }
+
+        private static void RestoreCanvasUndoDocumentFileIdentity(Grasshopper.Kernel.GH_Document restored, Grasshopper.Kernel.GH_Document previous)
+        {
+            if (restored == null)
+                return;
+
+            try
+            {
+                string previousPath = null;
+                bool hasPreviousPath = previous != null && previous.IsFilePathDefined && !string.IsNullOrWhiteSpace(previous.FilePath);
+                if (hasPreviousPath)
+                    previousPath = previous.FilePath;
+
+                PropertyInfo filePathProp = restored.GetType().GetProperty("FilePath", BindingFlags.Instance | BindingFlags.Public);
+                if (filePathProp != null && filePathProp.CanWrite)
+                    filePathProp.SetValue(restored, previousPath, null);
+
+                restored.IsModified = true;
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("Restore canvas undo document file path failed: " + ex.Message);
+            }
+        }
+
+        private sealed class CanvasUndoParamDataPatch
+        {
+            public Guid ParamId { get; set; }
+            public object PersistentData { get; set; }
+            public string ParamTypeName { get; set; }
+        }
+
+        private static List<CanvasUndoParamDataPatch> CaptureCanvasUndoUserReferenceData(Grasshopper.Kernel.GH_Document doc)
+        {
+            var result = new List<CanvasUndoParamDataPatch>();
+            if (doc == null) return result;
+
+            foreach (var param in doc.Objects.OfType<Grasshopper.Kernel.IGH_Param>())
+            {
+                try
+                {
+                    if (!ShouldPreserveCanvasUndoParamData(param))
+                        continue;
+
+                    object data = TryDuplicatePersistentData(param);
+                    if (data == null)
+                        continue;
+
+                    result.Add(new CanvasUndoParamDataPatch
+                    {
+                        ParamId = param.InstanceGuid,
+                        PersistentData = data,
+                        ParamTypeName = param.GetType().FullName ?? ""
+                    });
+                }
+                catch (Exception ex)
+                {
+                    AddGhLog.Debug("Capture undo param data skipped: " + ex.Message);
+                }
+            }
+
+            return result;
+        }
+
+        private static void ApplyCanvasUndoUserReferenceData(Grasshopper.Kernel.GH_Document restored, List<CanvasUndoParamDataPatch> patches)
+        {
+            if (restored == null || patches == null || patches.Count == 0)
+                return;
+
+            int applied = 0;
+            foreach (var patch in patches)
+            {
+                try
+                {
+                    var target = restored.FindObject(patch.ParamId, true) as Grasshopper.Kernel.IGH_Param;
+                    if (target == null || !ShouldPreserveCanvasUndoParamData(target))
+                        continue;
+
+                    if (!string.Equals(target.GetType().FullName ?? "", patch.ParamTypeName ?? "", StringComparison.Ordinal))
+                        continue;
+
+                    if (TrySetPersistentData(target, patch.PersistentData))
+                    {
+                        try { target.ExpireSolution(false); } catch { }
+                        applied++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AddGhLog.Debug("Apply undo param data skipped: " + ex.Message);
+                }
+            }
+
+            if (applied > 0)
+                AddGhLog.Debug("Preserved " + applied.ToString() + " user reference parameter(s) across canvas undo.");
+        }
+
+        private static bool ShouldPreserveCanvasUndoParamData(Grasshopper.Kernel.IGH_Param param)
+        {
+            if (param == null || param.SourceCount > 0)
+                return false;
+
+            int count = ReadPersistentDataCount(param);
+            if (count <= 0)
+                return false;
+
+            string typeName = param.GetType().Name ?? "";
+            switch (typeName)
+            {
+                case "Param_Point":
+                case "Param_Vector":
+                case "Param_Plane":
+                case "Param_Line":
+                case "Param_Circle":
+                case "Param_Arc":
+                case "Param_Rectangle":
+                case "Param_Box":
+                case "Param_Curve":
+                case "Param_Surface":
+                case "Param_Brep":
+                case "Param_Mesh":
+                case "Param_Geometry":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static int ReadPersistentDataCount(Grasshopper.Kernel.IGH_Param param)
+        {
+            try
+            {
+                PropertyInfo prop = param.GetType().GetProperty("PersistentDataCount", BindingFlags.Instance | BindingFlags.Public);
+                if (prop == null) return 0;
+                object value = prop.GetValue(param, null);
+                return value is int count ? count : 0;
+            }
+            catch { return 0; }
+        }
+
+        private static object TryDuplicatePersistentData(Grasshopper.Kernel.IGH_Param param)
+        {
+            PropertyInfo prop = param.GetType().GetProperty("PersistentData", BindingFlags.Instance | BindingFlags.Public);
+            object data = prop?.GetValue(param, null);
+            if (data == null)
+                return null;
+
+            MethodInfo duplicate = data.GetType().GetMethod("Duplicate", BindingFlags.Instance | BindingFlags.Public);
+            return duplicate != null ? duplicate.Invoke(data, null) : null;
+        }
+
+        private static bool TrySetPersistentData(Grasshopper.Kernel.IGH_Param param, object persistentData)
+        {
+            if (param == null || persistentData == null)
+                return false;
+
+            MethodInfo method = param.GetType()
+                .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                .FirstOrDefault(m =>
+                {
+                    if (!string.Equals(m.Name, "SetPersistentData", StringComparison.Ordinal))
+                        return false;
+                    var args = m.GetParameters();
+                    return args.Length == 1 && args[0].ParameterType.IsAssignableFrom(persistentData.GetType());
+                });
+
+            if (method == null)
+                return false;
+
+            method.Invoke(param, new[] { persistentData });
+            return true;
         }
 
         private static void TruncateConversationAfterCanvasUndo(string toolCallId, string summary, int affectedCount)
