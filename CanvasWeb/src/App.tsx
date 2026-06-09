@@ -41,6 +41,14 @@ type InspectorSnapshot = {
   generatedAtUtc?: string
 }
 
+type FlowNodeChange = {
+  id?: string
+  type: string
+  position?: { x: number; y: number }
+  selected?: boolean
+  dragging?: boolean
+}
+
 type Viewport = {
   x: number
   y: number
@@ -393,6 +401,8 @@ function CanvasWorkbench() {
   const connectionsRef = useRef(connections)
   const drawingItemsRef = useRef(drawingItems)
   const viewportRef = useRef(viewport)
+  const viewportFrameRef = useRef<number | null>(null)
+  const pendingViewportRef = useRef<Viewport | null>(null)
   const selectedSourceRefRef = useRef<string | null>(selectedSourceRef)
   const selectedSourceRefsRef = useRef<string[]>(selectedSourceRefs)
   const selectedDrawingItemIdRef = useRef<string | null>(selectedDrawingItemId)
@@ -425,6 +435,15 @@ function CanvasWorkbench() {
   useEffect(() => {
     viewportRef.current = viewport
   }, [viewport])
+
+  useEffect(() => {
+    return () => {
+      if (viewportFrameRef.current !== null) {
+        window.cancelAnimationFrame(viewportFrameRef.current)
+        viewportFrameRef.current = null
+      }
+    }
+  }, [])
 
   useEffect(() => {
     selectedSourceRefRef.current = selectedSourceRef
@@ -661,14 +680,10 @@ function CanvasWorkbench() {
     }
   }, [])
 
-  const selectedNode = useMemo(
-    () => nodes.find((node) => node.sourceRef === selectedSourceRef) ?? null,
-    [nodes, selectedSourceRef],
-  )
-  const detailNode = useMemo(
-    () => nodes.find((node) => node.sourceRef === detailSourceRef) ?? null,
-    [nodes, detailSourceRef],
-  )
+  const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes])
+  const nodeBySourceRef = useMemo(() => new Map(nodes.map((node) => [node.sourceRef, node])), [nodes])
+  const selectedNode = selectedSourceRef ? nodeBySourceRef.get(selectedSourceRef) ?? null : null
+  const detailNode = detailSourceRef ? nodeBySourceRef.get(detailSourceRef) ?? null : null
   const detailMeta = detailNode?.meta ?? null
   const flowNodes = useMemo<Node<FlowNodeData>[]>(() =>
     nodes.map((node) => ({
@@ -695,8 +710,8 @@ function CanvasWorkbench() {
   )
   const flowEdges = useMemo<Edge[]>(() =>
     connections.map((connection) => {
-      const sourceNode = nodes.find((node) => node.id === connection.fromNodeId)
-      const targetNode = nodes.find((node) => node.id === connection.toNodeId)
+      const sourceNode = nodeById.get(connection.fromNodeId)
+      const targetNode = nodeById.get(connection.toNodeId)
       const portType = sourceNode ? getPortDataType(sourceNode, connection.fromPortId, 'output') : 'any'
       const isRunningInput = Boolean(targetNode?.meta.isRunning)
       return {
@@ -710,7 +725,7 @@ function CanvasWorkbench() {
         style: { '--connection-color': `var(--port-${portType})` } as React.CSSProperties,
       }
     }),
-    [connections, nodes],
+    [connections, nodeById],
   )
 
   function createSnapshotState(
@@ -822,11 +837,31 @@ function CanvasWorkbench() {
   }
 
   function updateViewport(next: Viewport | ((current: Viewport) => Viewport), shouldSave = true) {
+    if (viewportFrameRef.current !== null) {
+      window.cancelAnimationFrame(viewportFrameRef.current)
+      viewportFrameRef.current = null
+      pendingViewportRef.current = null
+    }
     setViewport((current) => {
       const resolved = normalizeViewport(typeof next === 'function' ? next(current) : next)
       viewportRef.current = resolved
       if (shouldSave) scheduleSave()
       return resolved
+    })
+  }
+
+  function queueViewportRender(next: Viewport) {
+    const resolved = normalizeViewport(next)
+    viewportRef.current = resolved
+    pendingViewportRef.current = resolved
+    if (viewportFrameRef.current !== null) return
+
+    viewportFrameRef.current = window.requestAnimationFrame(() => {
+      viewportFrameRef.current = null
+      const pending = pendingViewportRef.current
+      pendingViewportRef.current = null
+      if (!pending) return
+      setViewport((current) => (isSameViewport(current, pending) ? current : pending))
     })
   }
 
@@ -915,32 +950,20 @@ function CanvasWorkbench() {
     )
   }
 
-  function onNodesChange(changes: Array<{ id?: string; type: string; position?: { x: number; y: number }; selected?: boolean }>) {
+  function onNodesChange(changes: FlowNodeChange[]) {
     setNodes((current) => {
       let next = current
-      let changedPosition = false
       let changedSelection = false
+      let shouldSavePosition = false
+      const positionChanges = new Map<string, { x: number; y: number }>()
       const selectedRefs = new Set(selectedSourceRefsRef.current)
       for (const change of changes) {
         if (change.type === 'position' && change.id && change.position) {
-          changedPosition = true
-          next = next.map((node) =>
-            node.id === change.id
-              ? {
-                  ...node,
-                  x: change.position!.x,
-                  y: change.position!.y,
-                  meta: {
-                    ...node.meta,
-                    x: change.position!.x,
-                    y: change.position!.y,
-                  },
-                }
-              : node,
-          )
+          positionChanges.set(change.id, change.position)
+          if (change.dragging !== true) shouldSavePosition = true
         }
         if (change.type === 'select' && change.id) {
-          const node = next.find((item) => item.id === change.id)
+          const node = nodeById.get(change.id) ?? current.find((item) => item.id === change.id)
           if (node) {
             changedSelection = true
             if (change.selected) {
@@ -951,6 +974,22 @@ function CanvasWorkbench() {
           }
         }
       }
+      if (positionChanges.size > 0) {
+        next = current.map((node) => {
+          const position = positionChanges.get(node.id)
+          if (!position) return node
+          return {
+            ...node,
+            x: position.x,
+            y: position.y,
+            meta: {
+              ...node.meta,
+              x: position.x,
+              y: position.y,
+            },
+          }
+        })
+      }
       if (changedSelection) {
         const orderedSelection = next.filter((node) => selectedRefs.has(node.sourceRef)).map((node) => node.sourceRef)
         selectedSourceRefsRef.current = orderedSelection
@@ -959,7 +998,7 @@ function CanvasWorkbench() {
         setSelectedSourceRef(orderedSelection[0] ?? null)
       }
       nodesRef.current = next
-      if (changedPosition) scheduleSave()
+      if (shouldSavePosition) scheduleSave()
       return next
     })
   }
@@ -1209,7 +1248,7 @@ function CanvasWorkbench() {
   }
 
   function onViewportChange(next: FlowViewport) {
-    updateViewport({ x: next.x, y: next.y, z: next.zoom }, false)
+    queueViewportRender({ x: next.x, y: next.y, z: next.zoom })
   }
 
   function deleteConnectionBetween(from: PendingConnection, to: PendingConnection) {
@@ -1996,6 +2035,7 @@ function CanvasWorkbench() {
           minZoom={0.25}
           maxZoom={2.8}
           fitView={false}
+          onlyRenderVisibleElements
           panOnDrag
           selectionOnDrag
           nodeOrigin={[0, 0]}
@@ -4362,6 +4402,12 @@ function normalizeViewport(value: any): Viewport {
     y: numberOr(value?.y, undefined, 90),
     z: clamp(numberOr(value?.z, undefined, 1), 0.25, 2.8),
   }
+}
+
+function isSameViewport(a: Viewport, b: Viewport) {
+  return Math.abs(a.x - b.x) < 0.01
+    && Math.abs(a.y - b.y) < 0.01
+    && Math.abs(a.z - b.z) < 0.0001
 }
 
 function dedupeNodes(nodes: CanvasNode[]) {

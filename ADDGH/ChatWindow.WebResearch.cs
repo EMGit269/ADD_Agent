@@ -136,11 +136,6 @@ namespace ADDGH
             {
                 new
                 {
-                    Provider = "duckduckgo",
-                    Url = "https://duckduckgo.com/html/?q=" + Uri.EscapeDataString(effectiveQuery)
-                },
-                new
-                {
                     Provider = "bing",
                     Url = "https://www.bing.com/search?q=" + Uri.EscapeDataString(effectiveQuery)
                 }
@@ -154,9 +149,7 @@ namespace ADDGH
                 try
                 {
                     string html = await DownloadTextAsync(attempt.Url, ct).ConfigureAwait(false);
-                    results = string.Equals(attempt.Provider, "bing", StringComparison.OrdinalIgnoreCase)
-                        ? ParseBingResults(html, allowedDomains, maxResults)
-                        : ParseDuckDuckGoResults(html, allowedDomains, maxResults);
+                    results = ParseBingResults(html, allowedDomains, maxResults);
                     usedProvider = attempt.Provider;
                     searchUrl = attempt.Url;
                     if (results.Count > 0)
@@ -566,45 +559,6 @@ namespace ADDGH
             }
         }
 
-        private static List<JObject> ParseDuckDuckGoResults(string html, List<string> allowedDomains, int maxResults)
-        {
-            var results = new List<JObject>();
-            if (string.IsNullOrWhiteSpace(html))
-                return results;
-
-            var matches = Regex.Matches(
-                html,
-                "<a[^>]+class=\"[^\"]*result__a[^\"]*\"[^>]+href=\"(?<href>[^\"]+)\"[^>]*>(?<title>.*?)</a>",
-                RegexOptions.IgnoreCase | RegexOptions.Singleline);
-
-            foreach (Match match in matches)
-            {
-                string href = WebUtility.HtmlDecode(match.Groups["href"].Value ?? "").Trim();
-                string title = CleanText(match.Groups["title"].Value);
-                string decodedUrl = DecodeDuckDuckGoUrl(href);
-                if (!IsAllowedWebUrl(decodedUrl, allowedDomains, out Uri uri, out _))
-                    continue;
-
-                string snippet = "";
-                int start = match.Index + match.Length;
-                int nextStart = start < html.Length ? html.IndexOf("result__a", start, StringComparison.OrdinalIgnoreCase) : -1;
-                string segment = nextStart > start ? html.Substring(start, nextStart - start) : html.Substring(start, Math.Min(1800, html.Length - start));
-                var snippetMatch = Regex.Match(segment, "<a[^>]*class=\"[^\"]*result__snippet[^\"]*\"[^>]*>(?<snippet>.*?)</a>|<div[^>]*class=\"[^\"]*result__snippet[^\"]*\"[^>]*>(?<snippet>.*?)</div>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
-                if (snippetMatch.Success)
-                    snippet = CleanText(snippetMatch.Groups["snippet"].Value);
-
-                results.Add(new JObject
-                {
-                    ["title"] = title,
-                    ["url"] = uri.AbsoluteUri,
-                    ["snippet"] = snippet
-                });
-                if (results.Count >= maxResults)
-                    break;
-            }
-            return results;
-        }
-
         private static List<JObject> ParseBingResults(string html, List<string> allowedDomains, int maxResults)
         {
             var results = new List<JObject>();
@@ -639,31 +593,6 @@ namespace ADDGH
                     break;
             }
             return results;
-        }
-
-        private static string DecodeDuckDuckGoUrl(string href)
-        {
-            if (string.IsNullOrWhiteSpace(href))
-                return href;
-
-            if (href.StartsWith("//", StringComparison.Ordinal))
-                href = "https:" + href;
-
-            if (Uri.TryCreate(href, UriKind.Absolute, out Uri uri)
-                && uri.Host.IndexOf("duckduckgo.com", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                string query = uri.Query.TrimStart('?');
-                foreach (string part in query.Split('&'))
-                {
-                    int eq = part.IndexOf('=');
-                    if (eq <= 0) continue;
-                    string key = Uri.UnescapeDataString(part.Substring(0, eq));
-                    if (!string.Equals(key, "uddg", StringComparison.OrdinalIgnoreCase)) continue;
-                    return Uri.UnescapeDataString(part.Substring(eq + 1));
-                }
-            }
-
-            return href;
         }
 
         private static string ExtractTitle(string html)

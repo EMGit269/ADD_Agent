@@ -57,7 +57,11 @@ namespace ADDGH
             if (_btnInspectorPaneView != null)
                 _btnInspectorPaneView.Click += (s, e) => SetWorkbenchPane(WorkbenchPane.Canvas);
             if (_btnCanvasSync != null)
-                _btnCanvasSync.Click += (s, e) => NotifyCanvasConversationChanged(true);
+                _btnCanvasSync.Click += (s, e) =>
+                {
+                    ForceReloadCanvasWorkbench();
+                    NotifyCanvasConversationChanged(true);
+                };
 
             RefreshCanvasWorkbenchViewState();
         }
@@ -213,18 +217,34 @@ namespace ADDGH
             }
         }
 
-        private static void ReloadCanvasWorkbenchIfOutdated(string entryPath)
+        private static void ForceReloadCanvasWorkbench()
+        {
+            try
+            {
+                string entryPath = ResolveCanvasEntrypointPath();
+                if (string.IsNullOrWhiteSpace(entryPath) || !File.Exists(entryPath))
+                    return;
+
+                ReloadCanvasWorkbenchIfOutdated(entryPath, true);
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Debug("ForceReloadCanvasWorkbench failed: " + ex.Message);
+            }
+        }
+
+        private static void ReloadCanvasWorkbenchIfOutdated(string entryPath, bool forceReload = false)
         {
             try
             {
                 if (_canvasWebView?.CoreWebView2 == null || string.IsNullOrWhiteSpace(entryPath) || !File.Exists(entryPath))
                     return;
 
-                Uri navigationUri = ConfigureCanvasContentMapping(_canvasWebView.CoreWebView2, entryPath)
+                Uri navigationUri = ConfigureCanvasContentMapping(_canvasWebView.CoreWebView2, entryPath, forceReload)
                     ?? new Uri(entryPath, UriKind.Absolute);
                 string current = _canvasWebView.Source?.ToString() ?? "";
                 string target = navigationUri.ToString();
-                if (string.Equals(current, target, StringComparison.OrdinalIgnoreCase))
+                if (!forceReload && string.Equals(current, target, StringComparison.OrdinalIgnoreCase))
                     return;
 
                 _canvasRuntimeReady = false;
@@ -898,7 +918,7 @@ namespace ADDGH
             return dir;
         }
 
-        private static Uri ConfigureCanvasContentMapping(CoreWebView2 core, string entryPath)
+        private static Uri ConfigureCanvasContentMapping(CoreWebView2 core, string entryPath, bool forceReload = false)
         {
             if (core == null || string.IsNullOrWhiteSpace(entryPath) || !Path.IsPathRooted(entryPath))
                 return null;
@@ -921,6 +941,8 @@ namespace ADDGH
                     CoreWebView2HostResourceAccessKind.Allow);
 
                 string cacheKey = File.GetLastWriteTimeUtc(entryPath).Ticks.ToString();
+                if (forceReload)
+                    cacheKey += "-" + DateTime.UtcNow.Ticks.ToString();
                 return new Uri("https://" + CanvasVirtualHostName + "/" + relativePath + "?v=" + cacheKey, UriKind.Absolute);
             }
             catch (Exception ex)

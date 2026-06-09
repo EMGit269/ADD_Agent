@@ -125,9 +125,6 @@ namespace ADDGH
         private static TextBlock _historyCountText;
         private static Button _btnToggleHistory;
 
-        private static Border _warningBar;
-        private static TextBlock _txtWarning;
-        private static Button _btnCloseWarning;
         private static Button _btnModeDropdown;
         private static Button _btnAgentModeDropdown;
         private static Button _btnModeBattery;
@@ -349,7 +346,8 @@ namespace ADDGH
 11. Non-script helper components in this mode are limited to Params and Display categories for input, output, preview, and debugging.
 12. When the user brings a new requirement or asks for an additive change, prefer adding one new C# Script component to extend the graph instead of rewriting an existing healthy C# Script component.
 13. If an existing C# Script component has no bug and already satisfies its current responsibility, leave it unchanged unless modifying it is clearly necessary for correctness, shared interface changes, or a simpler overall graph boundary.
-14. When creating a C# Script with its own sliders, panels, geometry params, value lists, preview, or debug helpers, put those helpers and the C# Script in one Grasshopper Group. Prefer create_csharp_script_component.components plus group_name; if helpers are added later, use manage_gh_groups to add them to the same group.";
+14. Starting with the second C# Script component in a solution, avoid dense inter-script wiring. If the new script has many ports, connect only the 1-2 ports that must receive upstream data and give all other ports safe defaults inside the script or via local helper inputs.
+15. When creating a C# Script with its own sliders, panels, geometry params, value lists, preview, or debug helpers, put those helpers and the C# Script in one Grasshopper Group. Prefer create_csharp_script_component.components plus group_name; if helpers are added later, use manage_gh_groups to add them to the same group.";
         }
 
         private static string BuildCSharpTypedInputPrompt()
@@ -381,7 +379,8 @@ namespace ADDGH
 9. Use Rhino C# Script menu type hint names for real port hints; list-like names such as curve[] or circle[] are ADD Agent conversion hints only, not native Rhino port hints.
 10. If port changes temporarily desync the script signature, recompute and then fix the method body. Do not rewrite the full source template to work around it.
 11. For each new user requirement, prefer extending the canvas with a new C# Script component that owns the new responsibility, instead of folding fresh logic into an existing healthy script.
-12. Treat an existing correct C# Script component as stable by default. Do not modify it unless required by bug fixing, shared interface changes, or a clearly better script boundary that reduces overall complexity.";
+12. Starting with the second C# Script component in a solution, avoid dense inter-script wiring. If a script has many ports, connect only the 1-2 upstream data ports that are necessary and set the rest with safe internal defaults or local helper inputs.
+13. Treat an existing correct C# Script component as stable by default. Do not modify it unless required by bug fixing, shared interface changes, or a clearly better script boundary that reduces overall complexity.";
             }
 
             if (mode == LayoutMode.Battery)
@@ -627,12 +626,12 @@ namespace ADDGH
             };
         }
 
-        private static FrameworkElement CreateSendGlyph()
+        private static FrameworkElement CreateSendGlyph(Brush fill = null)
         {
             return new WpfPath
             {
                 Data = Geometry.Parse("M4,4 L14,9 L4,14 L6.5,9 Z"),
-                Fill = Brushes.Black,
+                Fill = fill ?? ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(0, 0, 0)),
                 Width = 14,
                 Height = 14,
                 Stretch = Stretch.Uniform,
@@ -658,14 +657,14 @@ namespace ADDGH
         {
             if (button == null) return;
             Color bg = ThemeColor(
-                selected ? Color.FromRgb(24, 36, 54) : Color.FromRgb(255, 255, 255),
-                selected ? Color.FromRgb(245, 247, 250) : Color.FromRgb(34, 34, 34));
+                selected ? Color.FromRgb(232, 238, 247) : Color.FromRgb(255, 255, 255),
+                selected ? Color.FromRgb(43, 49, 58) : Color.FromRgb(34, 34, 34));
             Color fg = ThemeColor(
-                selected ? Color.FromRgb(255, 255, 255) : Color.FromRgb(58, 64, 74),
-                selected ? Color.FromRgb(18, 18, 18) : Color.FromRgb(205, 209, 216));
+                selected ? Color.FromRgb(24, 36, 54) : Color.FromRgb(58, 64, 74),
+                selected ? Color.FromRgb(229, 231, 235) : Color.FromRgb(205, 209, 216));
             Color border = ThemeColor(
-                selected ? Color.FromRgb(24, 36, 54) : Color.FromRgb(214, 218, 225),
-                selected ? Color.FromRgb(245, 247, 250) : Color.FromRgb(70, 70, 70));
+                selected ? Color.FromRgb(156, 170, 190) : Color.FromRgb(214, 218, 225),
+                selected ? Color.FromRgb(92, 98, 110) : Color.FromRgb(70, 70, 70));
 
             var fgBrush = new SolidColorBrush(fg);
             button.Background = new SolidColorBrush(bg);
@@ -701,6 +700,7 @@ namespace ADDGH
             _window.Resources["ThemeHoverBrush"] = ThemeBrush(Color.FromRgb(232, 236, 243), Color.FromRgb(26, 29, 34));
             _window.Resources["ThemePressedBrush"] = ThemeBrush(Color.FromRgb(220, 226, 235), Color.FromRgb(37, 42, 49));
             _window.Resources["ThemeSelectedSurfaceBrush"] = ThemeBrush(Color.FromRgb(238, 242, 247), Color.FromRgb(58, 58, 58));
+            _window.Resources["ThemeScrollbarThumbBrush"] = ThemeBrush(Color.FromArgb(190, 92, 98, 110), Color.FromArgb(180, 255, 255, 255));
             _window.Resources["ThemeOverlayBrush"] = light
                 ? new SolidColorBrush(Color.FromArgb(180, 245, 247, 250))
                 : new SolidColorBrush(Color.FromArgb(165, 0, 0, 0));
@@ -750,11 +750,6 @@ namespace ADDGH
                 _codeCanvasIssuesHost.Background = (Brush)_window.Resources["ThemeSurfaceBrush"];
                 _codeCanvasIssuesHost.BorderBrush = (Brush)_window.Resources["ThemeBorderBrush"];
             }
-            if (_warningBar != null)
-            {
-                _warningBar.Background = ThemeBrush(Color.FromRgb(255, 248, 235), Color.FromRgb(42, 42, 42));
-                _warningBar.BorderBrush = ThemeBrush(Color.FromRgb(241, 214, 163), Color.FromRgb(58, 58, 58));
-            }
             if (_inputAreaBorder != null) _inputAreaBorder.Background = Brushes.Transparent;
             if (_inputChromeBorder != null)
             {
@@ -769,11 +764,11 @@ namespace ADDGH
                 _txtInput.CaretBrush = (Brush)_window.Resources["ThemePrimaryTextBrush"];
             }
             if (_emptyChatPrompt != null) _emptyChatPrompt.Foreground = (Brush)_window.Resources["ThemePrimaryTextBrush"];
-            if (_txtWarning != null) _txtWarning.Foreground = (Brush)_window.Resources["ThemeSecondaryTextBrush"];
             ApplyThemeToSettingsPanelVisuals();
             UpdateLayoutModeButtons();
             UpdateDisplayModeButtons();
             UpdateThemeButtons();
+            ApplySendButtonChrome(_isGenerating);
         }
 
         private static void ApplyThemeToSettingsPanelVisuals()
@@ -1772,12 +1767,13 @@ namespace ADDGH
         <SolidColorBrush x:Key=""ThemeHoverBrush"" Color=""#E8ECF3""/>
         <SolidColorBrush x:Key=""ThemePressedBrush"" Color=""#DCE2EB""/>
         <SolidColorBrush x:Key=""ThemeSelectedSurfaceBrush"" Color=""#EEF2F7""/>
+        <SolidColorBrush x:Key=""ThemeScrollbarThumbBrush"" Color=""#BE5C626E""/>
         <SolidColorBrush x:Key=""ThemeOverlayBrush"" Color=""#B4F5F7FA""/>
         <Style TargetType=""ScrollBar"">
             <Setter Property=""Background"" Value=""Transparent""/>
             <Setter Property=""MinWidth"" Value=""0""/>
             <Setter Property=""MinHeight"" Value=""0""/>
-            <Setter Property=""Opacity"" Value=""0""/>
+            <Setter Property=""Opacity"" Value=""0.28""/>
             <Setter Property=""Template"">
                 <Setter.Value>
                     <ControlTemplate TargetType=""ScrollBar"">
@@ -1793,7 +1789,7 @@ namespace ADDGH
                                     <Thumb MinWidth=""0"" MinHeight=""0"" Background=""Transparent"">
                                         <Thumb.Template>
                                             <ControlTemplate TargetType=""Thumb"">
-                                                <Border Background=""#AAFFFFFF"" Width=""6"" HorizontalAlignment=""Right"" CornerRadius=""3"" Margin=""0,2""/>
+                                                <Border Background=""{DynamicResource ThemeScrollbarThumbBrush}"" Width=""6"" HorizontalAlignment=""Right"" CornerRadius=""3"" Margin=""0,2""/>
                                             </ControlTemplate>
                                         </Thumb.Template>
                                     </Thumb>
@@ -1811,10 +1807,10 @@ namespace ADDGH
                     <Setter Property=""Height"" Value=""12""/>
                 </Trigger>
                 <Trigger Property=""IsMouseOver"" Value=""True"">
-                    <Setter Property=""Opacity"" Value=""0.55""/>
+                    <Setter Property=""Opacity"" Value=""0.78""/>
                 </Trigger>
                 <Trigger Property=""IsMouseCaptureWithin"" Value=""True"">
-                    <Setter Property=""Opacity"" Value=""0.55""/>
+                    <Setter Property=""Opacity"" Value=""0.78""/>
                 </Trigger>
             </Style.Triggers>
         </Style>
@@ -2082,16 +2078,6 @@ namespace ADDGH
                 <Border Grid.Row=""1"" Grid.RowSpan=""2"" Grid.Column=""1"" Panel.ZIndex=""8"" Background=""{x:Null}"" CornerRadius=""0"" Padding=""18,12,18,24"" x:Name=""InputAreaBorder"" HorizontalAlignment=""Center"" VerticalAlignment=""Bottom"">
                 <StackPanel>
                     <TextBlock x:Name=""EmptyChatPrompt"" Text=""要用Maipo创造什么？"" Foreground=""#F3F3F3"" FontSize=""24"" FontWeight=""SemiBold"" TextAlignment=""Center"" HorizontalAlignment=""Center"" Margin=""0,0,0,24""/>
-                    <!-- Warning Bar -->
-                    <Border x:Name=""WarningBar"" Visibility=""Collapsed"" Background=""#FFF8EB"" BorderBrush=""#F1D6A3"" BorderThickness=""1"" CornerRadius=""8"" Padding=""12,8"" Margin=""0,0,0,10"">
-                    <Grid>
-                        <StackPanel Orientation=""Horizontal"">
-                            <Path Data=""M8,2 L15,14 L1,14 Z M8,5.7 L8,9.2 M8,11.5 L8,11.6"" Stroke=""{DynamicResource ThemeSecondaryTextBrush}"" StrokeThickness=""1.45"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" StrokeLineJoin=""Round"" Fill=""Transparent"" Width=""16"" Height=""16"" Stretch=""Uniform"" Margin=""0,0,8,0"" VerticalAlignment=""Center""/>
-                            <TextBlock x:Name=""TxtWarning"" Text=""正在执行复杂任务，已连续操作..."" Foreground=""#C8C8C8"" FontSize=""11"" VerticalAlignment=""Center""/>
-                        </StackPanel>
-                        <Button x:Name=""BtnCloseWarning"" Content=""✕"" HorizontalAlignment=""Right"" Background=""Transparent"" BorderThickness=""0"" Foreground=""#AAA"" Cursor=""Hand""/>
-                    </Grid>
-                </Border>
 
                         <Border x:Name=""InputChromeBorder"" Background=""{DynamicResource ThemeInputBrush}"" BorderBrush=""{DynamicResource ThemeBorderBrush}"" BorderThickness=""1"" CornerRadius=""24"" Padding=""18,14,18,14"" MinHeight=""118"" ClipToBounds=""True"">
                             <Border.Effect>
@@ -2200,10 +2186,10 @@ namespace ADDGH
                                 <Path x:Name=""ContextRingProgress"" Stroke=""#D8D8D8"" StrokeThickness=""1.3"" StrokeStartLineCap=""Round"" StrokeEndLineCap=""Round"" Fill=""Transparent""/>
                             </Grid>
 
-                            <Button x:Name=""BtnSend"" Grid.Column=""6"" Foreground=""Black"" FontSize=""11"" Margin=""0"" Width=""22"" Height=""22"" Cursor=""Hand"" VerticalAlignment=""Center"">
+                            <Button x:Name=""BtnSend"" Grid.Column=""6"" Foreground=""#222831"" Background=""#E8ECF3"" BorderBrush=""#D6DAE1"" BorderThickness=""1"" FontSize=""11"" Margin=""0"" Width=""22"" Height=""22"" Cursor=""Hand"" VerticalAlignment=""Center"">
                                 <Button.Template>
                                     <ControlTemplate TargetType=""Button"">
-                                        <Border x:Name=""bg"" Background=""White"" CornerRadius=""11"">
+                                        <Border x:Name=""bg"" Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""11"">
                                         <ContentPresenter x:Name=""cp"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"" Margin=""0""/>
                                         </Border>
 
@@ -2288,8 +2274,8 @@ namespace ADDGH
                     </Grid.RowDefinitions>
 
                     <StackPanel Grid.Row=""0"" Margin=""0,0,0,12"">
-                        <TextBlock Text=""设置"" Foreground=""White"" FontSize=""18"" FontWeight=""SemiBold""/>
-                        <TextBlock Text=""大模型接入设置、电池库与优先模式。"" Foreground=""#8D96A5"" FontSize=""11"" Margin=""0,6,0,0""/>
+                        <TextBlock Text=""设置"" Foreground=""{DynamicResource ThemePrimaryTextBrush}"" FontSize=""18"" FontWeight=""SemiBold""/>
+                        <TextBlock Text=""大模型接入设置、电池库与优先模式。"" Foreground=""{DynamicResource ThemeSecondaryTextBrush}"" FontSize=""11"" Margin=""0,6,0,0""/>
                     </StackPanel>
 
                     <ScrollViewer Grid.Row=""1"" VerticalScrollBarVisibility=""Auto"" HorizontalScrollBarVisibility=""Disabled"" Padding=""0,0,4,0"">
@@ -2448,7 +2434,7 @@ namespace ADDGH
 
                             <Expander Header=""优先模式"" IsExpanded=""True"" Foreground=""#ECECEC"" Background=""#242424"" Margin=""0,0,0,4"">
                                 <Border Background=""#242424"" CornerRadius=""10"" Padding=""12"" BorderBrush=""#343434"" BorderThickness=""1"">
-                                    <Grid Background=""#1E1E1E"">
+                                    <Grid Background=""Transparent"">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width=""*""/>
                                             <ColumnDefinition Width=""*""/>
@@ -2488,7 +2474,7 @@ namespace ADDGH
                                             </Button>
                                         </Grid>
                                         <TextBlock Text=""对话输入与输出字号"" Foreground=""#A0A0A0"" FontSize=""12"" Margin=""0,0,0,8""/>
-                                        <Grid Background=""#1E1E1E"">
+                                        <Grid Background=""Transparent"">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width=""*""/>
                                                 <ColumnDefinition Width=""*""/>
@@ -2579,7 +2565,7 @@ namespace ADDGH
             _txtInput = (TextBox)_window.FindName("TxtInput");
             _inputChromeBorder = (Border)_window.FindName("InputChromeBorder");
             _btnSend = (Button)_window.FindName("BtnSend");
-            if (_btnSend != null) _btnSend.Content = CreateSendGlyph();
+            ApplySendButtonChrome(_isGenerating);
             _btnAgentModeDropdown = (Button)_window.FindName("BtnAgentModeDropdown");
             _btnModeDropdown = (Button)_window.FindName("BtnModeDropdown");
             _btnModeBattery = (Button)_window.FindName("BtnModeBattery");
@@ -2973,15 +2959,6 @@ namespace ADDGH
                     SetSettingsOverlayVisible(false);
                 };
             }
-
-            // 初始化 UI 引用
-            _warningBar = (Border)_window.FindName("WarningBar");
-            _txtWarning = (TextBlock)_window.FindName("TxtWarning");
-            _btnCloseWarning = (Button)_window.FindName("BtnCloseWarning");
-            if (_btnCloseWarning != null) _btnCloseWarning.Content = CreateCloseGlyph();
-
-            if (_btnCloseWarning != null)
-                _btnCloseWarning.Click += (s, e) => _warningBar.Visibility = Visibility.Collapsed;
 
             // 电池库逻辑
             _libraryRow = (RowDefinition)_window.FindName("LibraryRow");
@@ -3566,13 +3543,13 @@ namespace ADDGH
             _txtInput.Height = Math.Min(116, Math.Max(36, desiredHeight));
         }
 
-        private static Border CreateStopSendGlyph()
+        private static Border CreateStopSendGlyph(Brush fill = null)
         {
             var square = new Border {
                 Width = 7,
                 Height = 7,
                 CornerRadius = new CornerRadius(1),
-                Background = Brushes.Black,
+                Background = fill ?? ThemeBrush(Color.FromRgb(197, 48, 48), Color.FromRgb(255, 107, 107)),
                 SnapsToDevicePixels = true,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
@@ -3581,16 +3558,43 @@ namespace ADDGH
             return square;
         }
 
+        private static void ApplySendButtonChrome(bool generating)
+        {
+            if (_btnSend == null) return;
+
+            Brush background = generating
+                ? ThemeBrush(Color.FromRgb(238, 241, 245), Color.FromRgb(54, 54, 54))
+                : ThemeBrush(Color.FromRgb(232, 236, 243), Color.FromRgb(62, 62, 62));
+            Brush border = generating
+                ? ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(76, 76, 76))
+                : ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(82, 82, 82));
+            Brush icon = generating
+                ? ThemeBrush(Color.FromRgb(197, 48, 48), Color.FromRgb(255, 107, 107))
+                : ThemeBrush(Color.FromRgb(34, 40, 49), Color.FromRgb(245, 245, 245));
+
+            _btnSend.Background = background;
+            _btnSend.BorderBrush = border;
+            _btnSend.BorderThickness = new Thickness(1);
+            _btnSend.Content = generating ? (object)CreateStopSendGlyph(icon) : CreateSendGlyph(icon);
+
+            var bg = _btnSend.Template.FindName("bg", _btnSend) as Border;
+            if (bg != null)
+            {
+                bg.Background = background;
+                bg.BorderBrush = border;
+                bg.BorderThickness = new Thickness(1);
+                bg.CornerRadius = new CornerRadius(11);
+            }
+            var cp = _btnSend.Template.FindName("cp", _btnSend) as ContentPresenter;
+            if (cp != null) cp.Margin = new Thickness(0);
+        }
+
         private static void ApplySendButtonGeneratingState()
         {
             UpdateAgentModeButtons();
             UpdateLayoutModeButtons();
             if (_btnSend == null) return;
-            _btnSend.Content = CreateStopSendGlyph();
-            var bg = _btnSend.Template.FindName("bg", _btnSend) as Border;
-            if (bg != null) bg.CornerRadius = new CornerRadius(11);
-            var cp = _btnSend.Template.FindName("cp", _btnSend) as ContentPresenter;
-            if (cp != null) cp.Margin = new Thickness(0);
+            ApplySendButtonChrome(true);
         }
 
         private static void ApplySendButtonIdleState()
@@ -3598,11 +3602,7 @@ namespace ADDGH
             UpdateAgentModeButtons();
             UpdateLayoutModeButtons();
             if (_btnSend == null) return;
-            _btnSend.Content = CreateSendGlyph();
-            var bg = _btnSend.Template.FindName("bg", _btnSend) as Border;
-            if (bg != null) bg.CornerRadius = new CornerRadius(11);
-            var cp = _btnSend.Template.FindName("cp", _btnSend) as ContentPresenter;
-            if (cp != null) cp.Margin = new Thickness(0);
+            ApplySendButtonChrome(false);
         }
 
         private static string BuildSimpleRollingSummaryBlock(IList<object> messages, int fromInclusive, int toExclusive, int maxChars)
@@ -3860,16 +3860,25 @@ namespace ADDGH
 
         private static void SetSettingsOverlayVisible(bool visible)
         {
-            if (visible)
-            {
-                UpdateSettingsPanelBounds();
-                ApplyThemeMode();
-            }
-
             if (_settingsOverlay != null)
             {
                 Panel.SetZIndex(_settingsOverlay, visible ? 999 : 20);
-                _settingsOverlay.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+                if (visible)
+                {
+                    _settingsOverlay.Visibility = Visibility.Hidden;
+                    UpdateSettingsPanelBounds();
+                    ApplyThemeMode();
+                    _settingsOverlay.ApplyTemplate();
+                    _settingsPanel?.ApplyTemplate();
+                    _settingsOverlay.UpdateLayout();
+                    ApplyThemeMode();
+                    _settingsOverlay.Visibility = Visibility.Visible;
+                    _window?.Dispatcher.BeginInvoke((Action)(ApplyThemeMode), System.Windows.Threading.DispatcherPriority.Loaded);
+                }
+                else
+                {
+                    _settingsOverlay.Visibility = Visibility.Collapsed;
+                }
             }
 
             if (_canvasWebView != null)
@@ -4211,9 +4220,8 @@ namespace ADDGH
                 string id = child.Tag as string;
                 bool active = !string.IsNullOrWhiteSpace(id)
                     && string.Equals(id, _activeHistoryId, StringComparison.OrdinalIgnoreCase);
-                child.BorderBrush = active
-                    ? ThemeBrush(Color.FromRgb(24, 36, 54), Color.FromRgb(245, 247, 250))
-                    : ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(40, 40, 40));
+                child.BorderBrush = Brushes.Transparent;
+                child.BorderThickness = new Thickness(0);
                 child.Background = active
                     ? ThemeBrush(Color.FromRgb(238, 242, 247), Color.FromRgb(26, 26, 26))
                     : ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(23, 23, 23));
@@ -4229,27 +4237,33 @@ namespace ADDGH
 
             if (danger)
             {
-                content = new TextBlock
+                content = new WpfPath
                 {
-                    Text = "\uE74D",
-                    FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                    FontSize = 13,
-                    Foreground = ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(255, 255, 255)),
+                    Data = Geometry.Parse("M6,7 L6.7,15.2 Q6.8,16.5 8.1,16.5 L11.9,16.5 Q13.2,16.5 13.3,15.2 L14,7 M5,7 L15,7 M8,7 L8.5,5 L11.5,5 L12,7 M9,9.2 L9,14 M11,9.2 L11,14"),
+                    Stroke = ThemeBrush(Color.FromRgb(28, 32, 38), Color.FromRgb(230, 230, 230)),
+                    StrokeThickness = 1.45,
+                    StrokeStartLineCap = PenLineCap.Round,
+                    StrokeEndLineCap = PenLineCap.Round,
+                    StrokeLineJoin = PenLineJoin.Round,
+                    Fill = Brushes.Transparent,
+                    Width = 18,
+                    Height = 18,
+                    Stretch = Stretch.None,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center
                 };
                 padding = new Thickness(0);
-                width = 34;
-                height = 30;
+                width = 28;
+                height = 28;
             }
 
             var button = new Button
             {
                 Content = content,
-                Foreground = danger ? ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(255, 255, 255)) : ThemeBrush(Color.FromRgb(58, 64, 74), Color.FromRgb(208, 208, 208)),
-                Background = danger ? ThemeBrush(Color.FromRgb(184, 56, 56), Color.FromRgb(60, 28, 28)) : ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(28, 28, 28)),
-                BorderBrush = danger ? ThemeBrush(Color.FromRgb(184, 56, 56), Color.FromRgb(52, 52, 52)) : ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(44, 44, 44)),
-                BorderThickness = new Thickness(1),
+                Foreground = danger ? ThemeBrush(Color.FromRgb(28, 32, 38), Color.FromRgb(230, 230, 230)) : ThemeBrush(Color.FromRgb(58, 64, 74), Color.FromRgb(208, 208, 208)),
+                Background = Brushes.Transparent,
+                BorderBrush = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
                 Padding = padding,
                 Margin = new Thickness(0, 0, 0, 0),
                 Cursor = Cursors.Hand,
@@ -4260,7 +4274,7 @@ namespace ADDGH
             };
             button.Template = (ControlTemplate)System.Windows.Markup.XamlReader.Parse(@"
                 <ControlTemplate TargetType=""Button"" xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation"">
-                    <Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""10"">
+                    <Border Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""6"">
                         <ContentPresenter HorizontalAlignment=""Center"" VerticalAlignment=""Center"" Margin=""{TemplateBinding Padding}""/>
                     </Border>
                 </ControlTemplate>");
@@ -4294,8 +4308,8 @@ namespace ADDGH
                 {
                     Tag = conv.Id,
                     Background = ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(23, 23, 23)),
-                    BorderBrush = ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(40, 40, 40)),
-                    BorderThickness = new Thickness(1),
+                    BorderBrush = Brushes.Transparent,
+                    BorderThickness = new Thickness(0),
                     CornerRadius = new CornerRadius(12),
                     Padding = new Thickness(11),
                     Margin = new Thickness(0, 0, 0, 10),
@@ -4347,7 +4361,12 @@ namespace ADDGH
                 };
 
                 var deleteBtn = CreateHistoryActionButton("删除", true);
-                deleteBtn.Click += (s, e) => DeleteHistoryConversation(conv.Id);
+                deleteBtn.Visibility = Visibility.Hidden;
+                deleteBtn.Click += (s, e) =>
+                {
+                    e.Handled = true;
+                    DeleteHistoryConversation(conv.Id);
+                };
 
                 actions.Children.Add(deleteBtn);
 
@@ -4355,6 +4374,20 @@ namespace ADDGH
                 cardGrid.Children.Add(actions);
 
                 card.Child = cardGrid;
+                card.MouseEnter += (s, e) =>
+                {
+                    card.Background = ThemeBrush(Color.FromRgb(238, 242, 247), Color.FromRgb(32, 32, 32));
+                    deleteBtn.Visibility = Visibility.Visible;
+                };
+                card.MouseLeave += (s, e) =>
+                {
+                    bool active = !string.IsNullOrWhiteSpace(conv.Id)
+                        && string.Equals(conv.Id, _activeHistoryId, StringComparison.OrdinalIgnoreCase);
+                    card.Background = active
+                        ? ThemeBrush(Color.FromRgb(238, 242, 247), Color.FromRgb(26, 26, 26))
+                        : ThemeBrush(Color.FromRgb(255, 255, 255), Color.FromRgb(23, 23, 23));
+                    deleteBtn.Visibility = Visibility.Hidden;
+                };
                 card.MouseLeftButtonUp += (s, e) =>
                 {
                     if (e.Handled) return;
@@ -4827,22 +4860,6 @@ namespace ADDGH
                 return new ApiResponse {
                     Content = "已达对话轮数安全上限 (50轮)。如需继续，请发送“继续”或选择步骤卡片继续。"
                 };
-            }
-
-            // 警告模式：当连续操作较多时弹出提醒
-            if (depth >= 30)
-            {
-                Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
-                    if (_txtWarning != null) _txtWarning.Text = $"长序列任务处理中 (第 {depth} 步)...";
-                    if (_warningBar != null) _warningBar.Visibility = Visibility.Visible;
-                }));
-            }
-            else if (depth == 0)
-            {
-                // 新请求开始，隐藏警告
-                Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
-                    if (_warningBar != null) _warningBar.Visibility = Visibility.Collapsed;
-                }));
             }
 
             var providerSettings = GetProviderRuntimeSettings();
