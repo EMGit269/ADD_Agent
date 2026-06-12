@@ -2140,9 +2140,9 @@ namespace ADDGH
                                     </ContextMenu>
                                 </Button.ContextMenu>
                             </Button>
-                            <Button x:Name=""BtnStop"" Grid.Column=""1"" Style=""{StaticResource IconButtonStyle}"" Visibility=""Collapsed"" Foreground=""#FF6B6B"" Background=""Transparent"" BorderThickness=""0"" Cursor=""Hand"" ToolTip=""停止按钮"" Margin=""0,0,10,0"" Width=""28"" Height=""28"" Padding=""0"">
+                            <Button x:Name=""BtnStop"" Grid.Column=""1"" Style=""{StaticResource IconButtonStyle}"" Visibility=""Collapsed"" Foreground=""{DynamicResource ThemePrimaryTextBrush}"" Background=""Transparent"" BorderThickness=""0"" Cursor=""Hand"" ToolTip=""停止按钮"" Margin=""0,0,10,0"" Width=""28"" Height=""28"" Padding=""0"">
                                 <Grid Width=""28"" Height=""28"">
-                                    <Border Width=""8"" Height=""8"" CornerRadius=""1"" Background=""#FF6B6B"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"" SnapsToDevicePixels=""True""/>
+                                    <Border Width=""11"" Height=""11"" CornerRadius=""1"" Background=""{DynamicResource ThemePrimaryTextBrush}"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"" SnapsToDevicePixels=""True""/>
                                 </Grid>
                             </Button>
                             <Button x:Name=""BtnAgentModeDropdown"" Grid.Column=""2"" Style=""{StaticResource IconButtonStyle}"" Content=""Create ▾"" Foreground=""#A0A0A0"" Background=""Transparent"" BorderThickness=""0"" FontSize=""13"" Cursor=""Hand"" ToolTip=""执行模式"" Margin=""0,0,2,0"">
@@ -3546,10 +3546,10 @@ namespace ADDGH
         private static Border CreateStopSendGlyph(Brush fill = null)
         {
             var square = new Border {
-                Width = 7,
-                Height = 7,
+                Width = 11,
+                Height = 11,
                 CornerRadius = new CornerRadius(1),
-                Background = fill ?? ThemeBrush(Color.FromRgb(197, 48, 48), Color.FromRgb(255, 107, 107)),
+                Background = fill ?? ThemeBrush(Color.FromRgb(0, 0, 0), Color.FromRgb(255, 255, 255)),
                 SnapsToDevicePixels = true,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
@@ -3569,7 +3569,7 @@ namespace ADDGH
                 ? ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(76, 76, 76))
                 : ThemeBrush(Color.FromRgb(214, 218, 225), Color.FromRgb(82, 82, 82));
             Brush icon = generating
-                ? ThemeBrush(Color.FromRgb(197, 48, 48), Color.FromRgb(255, 107, 107))
+                ? ThemeBrush(Color.FromRgb(0, 0, 0), Color.FromRgb(255, 255, 255))
                 : ThemeBrush(Color.FromRgb(34, 40, 49), Color.FromRgb(245, 245, 245));
 
             _btnSend.Background = background;
