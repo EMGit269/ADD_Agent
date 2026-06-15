@@ -415,22 +415,15 @@ namespace ADDGH
 
         private static List<object> BuildInitialSystemMessages()
         {
-            string basePrompt = BuildSystemPrompt()
-                + (IsExecutionAgentMode() ? BuildCSharpTypedInputPrompt() : "")
-                + BuildAgentContextPackPrompt()
-                + BuildAgentContextLedgerPrompt();
-            string skills = GetSkillsSummary();
-            var list = new List<object>();
-
-            if (string.IsNullOrWhiteSpace(skills) || DeploymentOptions.MergeSkillsIntoSameSystemPromptAsLibraryIndex)
+            return _contextPipeline.BuildInitialSystemMessages(new ADDGH.Agent.ContextPipelineRequest
             {
-                list.Add(new { role = "system", content = basePrompt + skills });
-                return list;
-            }
-
-            list.Add(new { role = "system", content = basePrompt });
-            list.Add(new { role = "system", content = skills.TrimStart() });
-            return list;
+                BasePromptProvider = BuildSystemPrompt,
+                TypedPromptProvider = () => IsExecutionAgentMode() ? BuildCSharpTypedInputPrompt() : "",
+                ContextPackProvider = BuildAgentContextPackPrompt,
+                ContextLedgerProvider = BuildAgentContextLedgerPrompt,
+                SkillSummaryProvider = GetSkillsSummary,
+                MergeSkillsIntoBaseSystem = DeploymentOptions.MergeSkillsIntoSameSystemPromptAsLibraryIndex
+            });
         }
 
         private static LayoutMode ReadLayoutModeSetting()

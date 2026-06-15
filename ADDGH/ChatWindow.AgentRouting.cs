@@ -12,6 +12,8 @@ namespace ADDGH
         private static readonly ContextLedger _contextLedger = new ContextLedger();
         private static readonly ContextCompactionPlanner _contextCompactionPlanner = new ContextCompactionPlanner();
         private static readonly ContextPackBuilder _contextPackBuilder = new ContextPackBuilder();
+        private static readonly ContextPipeline _contextPipeline = new ContextPipeline();
+        private static readonly ToolSurfaceBuilder _toolSurfaceBuilder = new ToolSurfaceBuilder();
         private static WorkflowRoute _currentWorkflowRoute = WorkflowRoute.Fallback();
         private static CanvasStateSummary _currentAgentCanvasState = null;
 
@@ -148,6 +150,29 @@ namespace ADDGH
             catch (Exception ex)
             {
                 AddGhLog.Warn("ApplyWorkflowToolSurfacePolicy failed: " + ex.Message);
+                return toolDefinitions;
+            }
+        }
+
+        private static object[] BuildAgentToolSurface(object[] toolDefinitions)
+        {
+            try
+            {
+                return _toolSurfaceBuilder.Build(new ToolSurfaceRequest
+                {
+                    ToolDefinitions = toolDefinitions,
+                    WorkflowFilter = ApplyWorkflowToolSurfacePolicy,
+                    UseWorkflowFilter = DeploymentOptions.UseToolSurfacePolicy,
+                    Route = _currentWorkflowRoute,
+                    LogDebug = msg => AddGhLog.Debug(msg)
+                }
+                .AddPreFilter(FilterToolsForLayoutMode)
+                .AddPreFilter(FilterToolsForAgentMode)
+                .AddPreFilter(FilterToolsForVisionContext));
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("BuildAgentToolSurface failed: " + ex.Message);
                 return toolDefinitions;
             }
         }

@@ -546,7 +546,7 @@ namespace ADDGH
                 ShowReferenceOptionsTool.GetApiToolDefinition(),
                 ShowPlanStepsTool.GetApiToolDefinition()
             };
-            return ApplyWorkflowToolSurfacePolicy(FilterToolsForVisionContext(FilterToolsForAgentMode(FilterToolsForLayoutMode(toolDefinitions))));
+            return BuildAgentToolSurface(toolDefinitions);
         }
 
         private static object GetCreateScriptComponentGraphToolDefinition()

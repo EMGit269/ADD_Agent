@@ -312,3 +312,14 @@ ADDGH\bin\Debug\net48\ADDGH.gha
 - `ToolSurfacePolicy` 默认仍关闭，尚未做真实用户场景回归。
 - `ContextPackBuilder` 目前只增量注入 route-specific packs，尚未替换全量 skill summary 注入策略。
 - 还没有独立测试项目覆盖 WorkflowRouter / ReferenceCatalog / ContextPackBuilder。
+
+## 10. 2026-06-15 追加落地：Phase 1 薄抽离
+
+本轮按 `docs/agent_layered_refactor_plan.md` 的 Phase 1 先做低风险薄抽离：
+
+- 新增 `ADDGH/Agent/ToolSurfaceBuilder.cs`：统一承接 tool surface 构建入口。当前仍复用旧的 layout / agent mode / vision / workflow filter，保持工具过滤行为不变。
+- 新增 `ADDGH/Agent/ContextPipeline.cs`：统一承接初始 system messages 构建入口。当前仍保持原有 prompt 顺序：base prompt、typed prompt、context pack、ledger、skill summary。
+- `ChatWindow.ToolDefinitions.cs` 不再直接串联多个过滤器，改为调用 `BuildAgentToolSurface(...)`。
+- `ChatWindow.cs` 的 `BuildInitialSystemMessages()` 不再直接拼装多个上下文来源，改为调用 `_contextPipeline.BuildInitialSystemMessages(...)`。
+
+这一步的目标不是改变行为，而是先把 tool surface 和 context assembly 两个策略出口从 `ChatWindow` 主体中收束出来，为后续迁移 `ToolSchemaFactory`、`ToolExecutor`、`ToolResultPipeline` 打基础。
