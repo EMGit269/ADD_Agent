@@ -1,25 +1,27 @@
+# IDE and local machine state
+.vs/
+*.suo
+*.user
+.addgh/
+.tools/
+.codex-tools/
+
+# .NET build output
 bin/
 obj/
-dist/
+ADDGH/bin/
+ADDGH/obj/
+ADDGH/obj_verify/
+
+# Frontend dependencies and generated runtime bundles.
 CanvasWeb/node_modules/
 CanvasWeb/.pnpm-store/
 CanvasWeb/runtime/
-.tools/
-.codex-tools/
-.addgh/
-*.suo
-*.user
-.vs/
+CanvasWeb/dist/assets/
 
-# Build / verification output
-ADDGH/obj_verify/
-ADDGH/bin/
-ADDGH/obj/
-
-# Packaged release artifacts should be uploaded to GitHub Releases instead of committed.
-release/ADD_Agent_Install_*/
-release/*.zip
-release/*.rar
+# Release packages are local artifacts. Keep source skills/ and reference/
+# in git; publish generated install zips through GitHub Releases when needed.
+release/
 *.zip
 *.rar
 *.7z
