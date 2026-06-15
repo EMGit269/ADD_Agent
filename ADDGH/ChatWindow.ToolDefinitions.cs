@@ -412,96 +412,68 @@ namespace ADDGH
 
         private static object GetCreateScriptComponentGraphToolDefinition()
         {
-            var portSchema = new
-            {
-                type = "object",
-                properties = new
+            var portSchema = ToolSchemaFactory.Object(
+                new
                 {
-                    name = new { type = "string", description = "C# input variable name. Must be a valid identifier and must not collide with reserved/output variables." },
-                    type_hint = new { type = "string", description = "Optional input type hint. Prefer Rhino C# Script menu names for real port hints: bool, int, string, double, Point3d, Point3dList, Vector3d, Plane, Interval, Line, Circle, Arc, Curve, Polyline, Rectangle3d, Mesh, Surface, Brep, GeometryBase, TextDot, TextEntity. ADD Agent also accepts conversion-only helper hints such as curve[], circle[], double[], int[]; these are not native Rhino port hints and only drive defensive alias injection." }
+                    name = ToolSchemaFactory.String("C# input variable name. Must be a valid identifier and must not collide with reserved/output variables."),
+                    type_hint = ToolSchemaFactory.String("Optional input type hint. Prefer Rhino C# Script menu names for real port hints: bool, int, string, double, Point3d, Point3dList, Vector3d, Plane, Interval, Line, Circle, Arc, Curve, Polyline, Rectangle3d, Mesh, Surface, Brep, GeometryBase, TextDot, TextEntity. ADD Agent also accepts conversion-only helper hints such as curve[], circle[], double[], int[]; these are not native Rhino port hints and only drive defensive alias injection.")
                 },
-                required = new[] { "name" }
-            };
+                new[] { "name" });
 
-            return new
-            {
-                type = "function",
-                function = new
+            var scriptSchema = ToolSchemaFactory.Object(
+                new
                 {
-                    name = "create_script_component_graph",
-                    description = "Legacy batch tool that creates script components, helper components, and connections together. Prefer create_csharp_script_component for new C# Script workflows unless this compatibility path is specifically needed.",
-                    parameters = new
-                    {
-                        type = "object",
-                        properties = new
-                        {
-                            mode = new { type = "string", description = "Creation mode for the legacy graph path." },
-                            scripts = new
-                            {
-                                type = "array",
-                                items = new
-                                {
-                                    type = "object",
-                                    properties = new
-                                    {
-                                        alias_id = new { type = "string", description = "Temporary unique script alias used by connections in this batch." },
-                                        label = new { type = "string", description = "Optional display nickname for the script component." },
-                                        x = new { type = "number", description = "Canvas X coordinate." },
-                                        y = new { type = "number", description = "Canvas Y coordinate." },
-                                        source = new { type = "string", description = "Script source/body." },
-                                        inputs = new { type = "array", items = portSchema },
-                                        output_count = new { type = "integer", description = "Number of output ports when explicit outputs are not supplied." },
-                                        outputs = new { type = "array", items = portSchema, description = "Explicit output port definitions." }
-                                    },
-                                    required = new[] { "alias_id", "x", "y", "source" }
-                                }
-                            },
-                            components = new
-                            {
-                                type = "array",
-                                items = new
-                                {
-                                    type = "object",
-                                    properties = new
-                                    {
-                                        alias_id = new { type = "string", description = "Temporary unique helper alias used by connections in this batch." },
-                                        name = new { type = "string", description = "Grasshopper helper component name or type." },
-                                        component_guid = new { type = "string", description = "Exact Grasshopper component GUID when known." },
-                                        label = new { type = "string", description = "Optional display nickname." },
-                                        x = new { type = "number", description = "Canvas X coordinate." },
-                                        y = new { type = "number", description = "Canvas Y coordinate." },
-                                        value = new { type = "string", description = "Optional initial helper value." },
-                                        min = new { type = "number", description = "Optional slider minimum." },
-                                        max = new { type = "number", description = "Optional slider maximum." },
-                                        decimals = new { type = "integer", description = "Optional numeric precision." }
-                                    },
-                                    required = new[] { "alias_id", "x", "y" }
-                                }
-                            },
-                            connections = new
-                            {
-                                type = "array",
-                                items = new
-                                {
-                                    type = "object",
-                                    properties = new
-                                    {
-                                        from_alias = new { type = "string", description = "Source alias_id from scripts or helper components in this batch." },
-                                        from_index = new { type = "integer", description = "Source output port index." },
-                                        to_alias = new { type = "string", description = "Target alias_id from scripts or helper components in this batch." },
-                                        to_index = new { type = "integer", description = "Target input port index." }
-                                    },
-                                    required = new[] { "from_alias", "from_index", "to_alias", "to_index" }
-                                }
-                            },
-                            group_name = new { type = "string", description = "Optional group name for created scripts and helpers." },
-                            summary = new { type = "string", description = ToolSummaryDescription },
-                            summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                        },
-                        required = new[] { "mode", "scripts", "connections", "summary" }
-                    }
-                }
-            };
+                    alias_id = ToolSchemaFactory.String("Temporary unique script alias used by connections in this batch."),
+                    label = ToolSchemaFactory.String("Optional display nickname for the script component."),
+                    x = ToolSchemaFactory.Number("Canvas X coordinate."),
+                    y = ToolSchemaFactory.Number("Canvas Y coordinate."),
+                    source = ToolSchemaFactory.String("Script source/body."),
+                    inputs = ToolSchemaFactory.Array(portSchema),
+                    output_count = ToolSchemaFactory.Integer("Number of output ports when explicit outputs are not supplied."),
+                    outputs = ToolSchemaFactory.Array(portSchema, "Explicit output port definitions.")
+                },
+                new[] { "alias_id", "x", "y", "source" });
+
+            var helperSchema = ToolSchemaFactory.Object(
+                new
+                {
+                    alias_id = ToolSchemaFactory.String("Temporary unique helper alias used by connections in this batch."),
+                    name = ToolSchemaFactory.String("Grasshopper helper component name or type."),
+                    component_guid = ToolSchemaFactory.String("Exact Grasshopper component GUID when known."),
+                    label = ToolSchemaFactory.String("Optional display nickname."),
+                    x = ToolSchemaFactory.Number("Canvas X coordinate."),
+                    y = ToolSchemaFactory.Number("Canvas Y coordinate."),
+                    value = ToolSchemaFactory.String("Optional initial helper value."),
+                    min = ToolSchemaFactory.Number("Optional slider minimum."),
+                    max = ToolSchemaFactory.Number("Optional slider maximum."),
+                    decimals = ToolSchemaFactory.Integer("Optional numeric precision.")
+                },
+                new[] { "alias_id", "x", "y" });
+
+            var connectionSchema = ToolSchemaFactory.Object(
+                new
+                {
+                    from_alias = ToolSchemaFactory.String("Source alias_id from scripts or helper components in this batch."),
+                    from_index = ToolSchemaFactory.Integer("Source output port index."),
+                    to_alias = ToolSchemaFactory.String("Target alias_id from scripts or helper components in this batch."),
+                    to_index = ToolSchemaFactory.Integer("Target input port index.")
+                },
+                new[] { "from_alias", "from_index", "to_alias", "to_index" });
+
+            return ToolSchemaFactory.Function(
+                "create_script_component_graph",
+                "Legacy batch tool that creates script components, helper components, and connections together. Prefer create_csharp_script_component for new C# Script workflows unless this compatibility path is specifically needed.",
+                new
+                {
+                    mode = ToolSchemaFactory.String("Creation mode for the legacy graph path."),
+                    scripts = ToolSchemaFactory.Array(scriptSchema),
+                    components = ToolSchemaFactory.Array(helperSchema),
+                    connections = ToolSchemaFactory.Array(connectionSchema),
+                    group_name = ToolSchemaFactory.String("Optional group name for created scripts and helpers."),
+                    summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                    summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                },
+                new[] { "mode", "scripts", "connections", "summary" });
         }
 
         private static object GetWebResearchToolDefinition()
@@ -638,116 +610,84 @@ namespace ADDGH
 
         private static object GetCreateCSharpScriptComponentToolDefinition()
         {
-            var inputPortSchema = new
-            {
-                type = "object",
-                properties = new
+            var inputPortSchema = ToolSchemaFactory.Object(
+                new
                 {
-                    name = new { type = "string", description = "C# input variable name. Must be a valid identifier." },
-                    type_hint = new { type = "string", description = "Optional C# Script input type hint, for example double, int, bool, Point3d, Curve, Brep, Mesh, or GeometryBase." }
+                    name = ToolSchemaFactory.String("C# input variable name. Must be a valid identifier."),
+                    type_hint = ToolSchemaFactory.String("Optional C# Script input type hint, for example double, int, bool, Point3d, Curve, Brep, Mesh, or GeometryBase.")
                 },
-                required = new[] { "name" }
-            };
+                new[] { "name" });
 
-            var outputPortSchema = new
-            {
-                type = "object",
-                properties = new
+            var outputPortSchema = ToolSchemaFactory.Object(
+                new
                 {
-                    label = new { type = "string", description = "Optional display label for the output port." },
-                    name = new { type = "string", description = "C# output variable name. Must be a valid identifier." },
-                    type_hint = new { type = "string", description = "Optional output type hint for documentation/aliasing." }
-                }
-            };
+                    label = ToolSchemaFactory.String("Optional display label for the output port."),
+                    name = ToolSchemaFactory.String("C# output variable name. Must be a valid identifier."),
+                    type_hint = ToolSchemaFactory.String("Optional output type hint for documentation/aliasing.")
+                });
 
-            var helperComponentSchema = new
-            {
-                type = "object",
-                properties = new
+            var helperComponentSchema = ToolSchemaFactory.Object(
+                new
                 {
-                    alias_id = new { type = "string", description = "Temporary unique helper alias used by local connections." },
-                    name = new { type = "string", description = "Grasshopper helper component name or type." },
-                    component_guid = new { type = "string", description = "Exact helper component GUID when known." },
-                    label = new { type = "string", description = "Optional helper nickname." },
-                    x = new { type = "number", description = "Canvas X coordinate." },
-                    y = new { type = "number", description = "Canvas Y coordinate." },
-                    value = new { type = "string", description = "Optional initial helper value." },
-                    min = new { type = "number", description = "Optional slider minimum." },
-                    max = new { type = "number", description = "Optional slider maximum." },
-                    decimals = new { type = "integer", description = "Optional numeric precision." }
+                    alias_id = ToolSchemaFactory.String("Temporary unique helper alias used by local connections."),
+                    name = ToolSchemaFactory.String("Grasshopper helper component name or type."),
+                    component_guid = ToolSchemaFactory.String("Exact helper component GUID when known."),
+                    label = ToolSchemaFactory.String("Optional helper nickname."),
+                    x = ToolSchemaFactory.Number("Canvas X coordinate."),
+                    y = ToolSchemaFactory.Number("Canvas Y coordinate."),
+                    value = ToolSchemaFactory.String("Optional initial helper value."),
+                    min = ToolSchemaFactory.Number("Optional slider minimum."),
+                    max = ToolSchemaFactory.Number("Optional slider maximum."),
+                    decimals = ToolSchemaFactory.Integer("Optional numeric precision.")
                 },
-                required = new[] { "alias_id", "x", "y" }
-            };
+                new[] { "alias_id", "x", "y" });
 
-            var connectionSchema = new
-            {
-                type = "object",
-                properties = new
+            var connectionSchema = ToolSchemaFactory.Object(
+                new
                 {
-                    from_alias = new { type = "string", description = "Source alias_id from script or helper components." },
-                    from_index = new { type = "integer", description = "Source output port index." },
-                    to_alias = new { type = "string", description = "Target alias_id from script or helper components." },
-                    to_index = new { type = "integer", description = "Target input port index." }
+                    from_alias = ToolSchemaFactory.String("Source alias_id from script or helper components."),
+                    from_index = ToolSchemaFactory.Integer("Source output port index."),
+                    to_alias = ToolSchemaFactory.String("Target alias_id from script or helper components."),
+                    to_index = ToolSchemaFactory.Integer("Target input port index.")
                 },
-                required = new[] { "from_alias", "from_index", "to_alias", "to_index" }
-            };
+                new[] { "from_alias", "from_index", "to_alias", "to_index" });
 
-            return new
-            {
-                type = "function",
-                function = new
+            return ToolSchemaFactory.Function(
+                "create_csharp_script_component",
+                "Create a new C# Script component with ports, body, optional helper components, and optional connections. Use this as the primary tool for C#-first modeling.",
+                new
                 {
-                    name = "create_csharp_script_component",
-                    description = "Create a new C# Script component with ports, body, optional helper components, and optional connections. Use this as the primary tool for C#-first modeling.",
-                    parameters = new
-                    {
-                        type = "object",
-                        properties = new
-                        {
-                            alias_id = new { type = "string", description = "Optional temporary alias for connecting helpers in this tool call." },
-                            name = new { type = "string", description = "Script component name/nickname." },
-                            label = new { type = "string", description = "Optional display label; name is preferred when both are present." },
-                            x = new { type = "number", description = "Canvas X coordinate." },
-                            y = new { type = "number", description = "Canvas Y coordinate." },
-                            inputs = new { type = "array", items = inputPortSchema },
-                            outputs = new { type = "array", items = outputPortSchema, description = "Output port definitions exposed by the script." },
-                            body = new { type = "string", description = "C# script body. Include only the code that belongs in the component body, not markdown." },
-                            components = new { type = "array", items = helperComponentSchema },
-                            connections = new { type = "array", items = connectionSchema, description = "Optional local connections among the new script and helper components." },
-                            group_name = new { type = "string", description = "Optional group name for created script/helpers." },
-                            summary = new { type = "string", description = ToolSummaryDescription },
-                            summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                        },
-                        required = new[] { "x", "y", "body", "summary" }
-                    }
-                }
-            };
+                    alias_id = ToolSchemaFactory.String("Optional temporary alias for connecting helpers in this tool call."),
+                    name = ToolSchemaFactory.String("Script component name/nickname."),
+                    label = ToolSchemaFactory.String("Optional display label; name is preferred when both are present."),
+                    x = ToolSchemaFactory.Number("Canvas X coordinate."),
+                    y = ToolSchemaFactory.Number("Canvas Y coordinate."),
+                    inputs = ToolSchemaFactory.Array(inputPortSchema),
+                    outputs = ToolSchemaFactory.Array(outputPortSchema, "Output port definitions exposed by the script."),
+                    body = ToolSchemaFactory.String("C# script body. Include only the code that belongs in the component body, not markdown."),
+                    components = ToolSchemaFactory.Array(helperComponentSchema),
+                    connections = ToolSchemaFactory.Array(connectionSchema, "Optional local connections among the new script and helper components."),
+                    group_name = ToolSchemaFactory.String("Optional group name for created script/helpers."),
+                    summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                    summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                },
+                new[] { "x", "y", "body", "summary" });
         }
 
         private static object GetEditCSharpScriptComponentToolDefinition()
         {
-            return new
-            {
-                type = "function",
-                function = new
+            return ToolSchemaFactory.Function(
+                "edit_csharp_script_component",
+                "Edit an existing C# Script component body. Use after read_component_script or get_component_context when repairing or improving an existing script.",
+                new
                 {
-                    name = "edit_csharp_script_component",
-                    description = "Edit an existing C# Script component body. Use after read_component_script or get_component_context when repairing or improving an existing script.",
-                    parameters = new
-                    {
-                        type = "object",
-                        properties = new
-                        {
-                            id = new { type = "string", description = "Target C# Script component public id or GUID." },
-                            mode = new { type = "string", description = "Edit mode, normally set_body when replacing the script body." },
-                            body = new { type = "string", description = "Replacement C# script body when mode writes code." },
-                            summary = new { type = "string", description = ToolSummaryDescription },
-                            summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                        },
-                        required = new[] { "id", "mode", "summary" }
-                    }
-                }
-            };
+                    id = ToolSchemaFactory.String("Target C# Script component public id or GUID."),
+                    mode = ToolSchemaFactory.String("Edit mode, normally set_body when replacing the script body."),
+                    body = ToolSchemaFactory.String("Replacement C# script body when mode writes code."),
+                    summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                    summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                },
+                new[] { "id", "mode", "summary" });
         }
 
         private static string GetToolDefinitionName(object toolDefinition)

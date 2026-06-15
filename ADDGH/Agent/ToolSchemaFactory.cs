@@ -42,6 +42,28 @@ namespace ADDGH.Agent
             return new { type = "boolean", description = description ?? "" };
         }
 
+        public static object Object(object properties, string[] required = null, string description = null)
+        {
+            return new
+            {
+                type = "object",
+                description = description ?? "",
+                properties,
+                required = required ?? new string[0],
+                additionalProperties = false
+            };
+        }
+
+        public static object Array(object items, string description = null)
+        {
+            return new
+            {
+                type = "array",
+                items,
+                description = description ?? ""
+            };
+        }
+
         public static object StringArray(string description)
         {
             return new
