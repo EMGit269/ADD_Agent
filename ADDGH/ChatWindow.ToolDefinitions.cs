@@ -454,46 +454,10 @@ namespace ADDGH
                         }
                     }
                 },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "create_gh_skill",
-                        description = "Create a new reusable skill markdown file. Use only in explicit skill-authoring or self-training workflows after behavior is validated.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                file_name = new { type = "string", description = "Markdown file name under skills/. Must be a safe file name; .md is optional." },
-                                name = new { type = "string", description = "Skill name for YAML frontmatter." },
-                                description = new { type = "string", description = "Short trigger description explaining when the skill should be used." },
-                                content = new { type = "string", description = "Skill markdown body with concrete procedure, constraints, and verification guidance." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "file_name", "name", "description", "content", "summary" }
-                        }
-                    }
-                },
+                GetCreateGhSkillToolDefinition(),
                 GetReadSkillFileToolDefinition(),
                 GetReadReferenceJsonToolDefinition(),
-                new {
-                    type = "function",
-                    function = new {
-                        name = "import_reference_gh",
-                        description = "Import a saved .gh or .ghx reference file into the active Grasshopper canvas. Use only when the user wants to reuse/reference an existing saved canvas.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                file_name = new { type = "string", description = "Reference .gh or .ghx file name under reference/." },
-                                offset_x = new { type = "number", description = "Optional X offset applied to imported objects." },
-                                offset_y = new { type = "number", description = "Optional Y offset applied to imported objects." },
-                                group_name = new { type = "string", description = "Optional group name for imported objects." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "file_name", "summary" }
-                        }
-                    }
-                },
+                GetImportReferenceGhToolDefinition(),
                 ShowReferenceOptionsTool.GetApiToolDefinition(),
                 ShowPlanStepsTool.GetApiToolDefinition()
             };
@@ -635,6 +599,40 @@ namespace ADDGH
                 new
                 {
                     file_name = ToolSchemaFactory.String("Reference JSON file name under reference/. .json is optional."),
+                    summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                    summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                },
+                new[] { "file_name", "summary" });
+        }
+
+        private static object GetCreateGhSkillToolDefinition()
+        {
+            return ToolSchemaFactory.Function(
+                "create_gh_skill",
+                "Create a new reusable skill markdown file. Use only in explicit skill-authoring or self-training workflows after behavior is validated.",
+                new
+                {
+                    file_name = ToolSchemaFactory.String("Markdown file name under skills/. Must be a safe file name; .md is optional."),
+                    name = ToolSchemaFactory.String("Skill name for YAML frontmatter."),
+                    description = ToolSchemaFactory.String("Short trigger description explaining when the skill should be used."),
+                    content = ToolSchemaFactory.String("Skill markdown body with concrete procedure, constraints, and verification guidance."),
+                    summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                    summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                },
+                new[] { "file_name", "name", "description", "content", "summary" });
+        }
+
+        private static object GetImportReferenceGhToolDefinition()
+        {
+            return ToolSchemaFactory.Function(
+                "import_reference_gh",
+                "Import a saved .gh or .ghx reference file into the active Grasshopper canvas. Use only when the user wants to reuse/reference an existing saved canvas.",
+                new
+                {
+                    file_name = ToolSchemaFactory.String("Reference .gh or .ghx file name under reference/."),
+                    offset_x = ToolSchemaFactory.Number("Optional X offset applied to imported objects."),
+                    offset_y = ToolSchemaFactory.Number("Optional Y offset applied to imported objects."),
+                    group_name = ToolSchemaFactory.String("Optional group name for imported objects."),
                     summary = ToolSchemaFactory.String(ToolSummaryDescription),
                     summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
                 },

@@ -356,3 +356,21 @@ ADDGH\bin\Debug\net48\ADDGH.gha
 2. `query_gh_components`、`get_component_context`、`read_component_script`;
 3. C# Script 创建/编辑工具；
 4. GH canvas mutation 工具。
+
+## 13. 2026-06-15 追加落地：Skill / Reference 写入工具 schema 迁移
+
+本轮继续迁移工具 schema：
+
+- `create_gh_skill` 改为通过 `ToolSchemaFactory.Function(...)` 生成。
+- `import_reference_gh` 改为通过 `ToolSchemaFactory.Function(...)` 生成。
+- 与第一批保持一致，参数语义不变，新增统一的 `additionalProperties=false`。
+
+迁移后，skill/reference 边界相关工具已有：
+
+- `read_skill_file`
+- `create_gh_skill`
+- `read_reference_json`
+- `import_reference_gh`
+- `web_research`
+
+下一批建议迁移只读查询工具：`query_gh_components`、`get_component_context`、`read_component_script`。
