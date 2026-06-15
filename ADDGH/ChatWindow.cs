@@ -42,7 +42,10 @@ namespace ADDGH
         private const double HistorySidebarWidth = 320;
         private const double ChatContentMaxWidth = 900;
         private const double ChatContentCollapsedMaxWidth = 780;
-        private const double ChatScrollbarGutter = 0;
+        private const double ChatScrollbarGutter = 14;
+        private const double ChatOuterInset = 20;
+        private const double ChatMessageLeftInset = 14;
+        private const double ChatMessageRightInset = 14;
         private static double _widthBeforeCodeView = double.NaN;
         private static StackPanel _chatPanel;
         private static ScrollViewer _chatScroll;
@@ -1341,8 +1344,7 @@ namespace ADDGH
                 ? _chatCol.ActualWidth
                 : (_isCodeVisible ? Math.Max(ChatPaneMinWidth, fallbackWidth / 3.0) : fallbackWidth);
             double maxContentWidth = _isCodeVisible ? ChatContentMaxWidth : ChatContentCollapsedMaxWidth;
-            double contentWidth = Math.Max(0, Math.Min(maxContentWidth, availableWidth - 24));
-
+            double contentWidth = Math.Max(0, Math.Min(maxContentWidth, availableWidth - ChatOuterInset));
             if (Math.Abs(_lastAppliedChatContentWidth - contentWidth) >= 0.75)
             {
                 _lastAppliedChatContentWidth = contentWidth;
@@ -1363,8 +1365,8 @@ namespace ADDGH
             double inputHeight = _inputAreaBorder != null && _inputAreaBorder.ActualHeight > 0
                 ? _inputAreaBorder.ActualHeight
                 : 170;
-            double bottomInset = inputHeight + 18;
-            _chatPanel.Margin = new Thickness(18, 10, 18, bottomInset);
+            double bottomInset = inputHeight + 14;
+            _chatPanel.Margin = new Thickness(ChatMessageLeftInset, 8, ChatMessageRightInset, bottomInset);
         }
 
         private static bool IsVisibleChatEmpty()
@@ -1390,8 +1392,8 @@ namespace ADDGH
             bool isEmpty = forceEmpty ?? IsVisibleChatEmpty();
             _inputAreaBorder.VerticalAlignment = isEmpty ? VerticalAlignment.Center : VerticalAlignment.Bottom;
             _inputAreaBorder.Padding = isEmpty
-                ? new Thickness(18, 12, 18, 12)
-                : new Thickness(18, 12, 18, 24);
+                ? new Thickness(ChatMessageLeftInset, 10, ChatMessageRightInset, 10)
+                : new Thickness(ChatMessageLeftInset, 10, ChatMessageRightInset, 18);
 
             if (_emptyChatPrompt != null)
                 _emptyChatPrompt.Visibility = isEmpty ? Visibility.Visible : Visibility.Collapsed;
@@ -1772,7 +1774,7 @@ namespace ADDGH
             <Setter Property=""Background"" Value=""Transparent""/>
             <Setter Property=""MinWidth"" Value=""0""/>
             <Setter Property=""MinHeight"" Value=""0""/>
-            <Setter Property=""Opacity"" Value=""0.28""/>
+            <Setter Property=""Opacity"" Value=""0""/>
             <Setter Property=""Template"">
                 <Setter.Value>
                     <ControlTemplate TargetType=""ScrollBar"">
@@ -2001,7 +2003,7 @@ namespace ADDGH
                     <RowDefinition Height=""0"" x:Name=""LibraryRow""/>
                 </Grid.RowDefinitions>
 
-                <Grid Grid.Row=""0"" Grid.Column=""0"" Grid.ColumnSpan=""4"" x:Name=""ChatToolbar"" Panel.ZIndex=""12"" Margin=""16,8,16,8"" MinHeight=""52"">
+                <Grid Grid.Row=""0"" Grid.Column=""0"" Grid.ColumnSpan=""4"" x:Name=""ChatToolbar"" Panel.ZIndex=""12"" Margin=""10,6,10,6"" MinHeight=""52"">
                     <StackPanel Orientation=""Horizontal"" HorizontalAlignment=""Left"" VerticalAlignment=""Center"">
                         <Button x:Name=""BtnToggleHistory"" Style=""{StaticResource ToolbarIconButtonStyle}"" ToolTip=""对话历史"">
                             <Viewbox Width=""{DynamicResource ToolbarIconSize}"" Height=""{DynamicResource ToolbarIconSize}"">
@@ -2066,15 +2068,15 @@ namespace ADDGH
                     </Grid>
                 </Border>
 
-                <ScrollViewer Grid.Row=""1"" Grid.Column=""1"" Grid.RowSpan=""2"" x:Name=""ChatScroll"" HorizontalAlignment=""Center"" Margin=""0,10,0,0"" VerticalScrollBarVisibility=""Auto"" PanningMode=""VerticalOnly"">
-                    <StackPanel x:Name=""ChatPanel"" Margin=""18,10,18,0""/>
+                <ScrollViewer Grid.Row=""1"" Grid.Column=""1"" Grid.RowSpan=""2"" x:Name=""ChatScroll"" HorizontalAlignment=""Center"" Margin=""0,6,0,0"" VerticalScrollBarVisibility=""Auto"" PanningMode=""VerticalOnly"">
+                    <StackPanel x:Name=""ChatPanel"" Margin=""14,8,14,0""/>
                 </ScrollViewer>
 
-                <Border x:Name=""StickyUserMessageHost"" Grid.Row=""1"" Grid.RowSpan=""2"" Grid.Column=""1"" Panel.ZIndex=""7"" HorizontalAlignment=""Center"" VerticalAlignment=""Top"" Margin=""0,10,0,0"" Padding=""18,10,18,0"" Background=""Transparent"" Visibility=""Collapsed"" IsHitTestVisible=""False"" ClipToBounds=""False"">
+                <Border x:Name=""StickyUserMessageHost"" Grid.Row=""1"" Grid.RowSpan=""2"" Grid.Column=""1"" Panel.ZIndex=""7"" HorizontalAlignment=""Center"" VerticalAlignment=""Top"" Margin=""0,6,0,0"" Padding=""14,8,14,0"" Background=""Transparent"" Visibility=""Collapsed"" IsHitTestVisible=""False"" ClipToBounds=""False"">
                     <Grid x:Name=""StickyUserMessageStack"" ClipToBounds=""False""/>
                 </Border>
 
-                <Border Grid.Row=""1"" Grid.RowSpan=""2"" Grid.Column=""1"" Panel.ZIndex=""8"" Background=""{x:Null}"" CornerRadius=""0"" Padding=""18,12,18,24"" x:Name=""InputAreaBorder"" HorizontalAlignment=""Center"" VerticalAlignment=""Bottom"">
+                <Border Grid.Row=""1"" Grid.RowSpan=""2"" Grid.Column=""1"" Panel.ZIndex=""8"" Background=""{x:Null}"" CornerRadius=""0"" Padding=""14,10,14,18"" x:Name=""InputAreaBorder"" HorizontalAlignment=""Center"" VerticalAlignment=""Bottom"">
                 <StackPanel>
                     <TextBlock x:Name=""EmptyChatPrompt"" Text=""要用Maipo创造什么？"" Foreground=""#F3F3F3"" FontSize=""24"" FontWeight=""SemiBold"" TextAlignment=""Center"" HorizontalAlignment=""Center"" Margin=""0,0,0,24""/>
 
