@@ -32,7 +32,7 @@ namespace ADDGH.Agent
                 "official", "docs", "documentation", "api doc", "verify", "check api",
                 "官方", "文档", "查证", "核实", "确认 api", "api签名", "api 签名");
             signals.UserAskedWebResearch = ContainsAny(lower,
-                "web", "url", "http", "search", "latest", "联网", "网页", "搜索", "最新");
+                "url", "http", "docs", "documentation", "official", "search", "api doc", "文档", "网页", "搜索", "官方");
 
             signals.UserAskedReferenceImport = ContainsAny(lower, "import reference", "import_reference", "导入参考", "复用参考", "参考画布");
             signals.UserAskedReferenceLookup = ContainsAny(lower, "reference", "查参考", "读取参考", "参考");

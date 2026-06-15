@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Net;
-using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -118,48 +118,6 @@ namespace ADDGH
             return result;
         }
 
-        private static bool IsAllowedWebUrl(string url, List<string> allowedDomains, out Uri uri, out string error)
-        {
-            uri = null;
-            error = null;
-            if (string.IsNullOrWhiteSpace(url))
-            {
-                error = "url is required.";
-                return false;
-            }
-            if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out uri))
-            {
-                error = "url is not an absolute URL.";
-                return false;
-            }
-            if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
-            {
-                error = "only http/https URLs are allowed.";
-                return false;
-            }
-            if (!string.IsNullOrWhiteSpace(uri.UserInfo))
-            {
-                error = "URLs with credentials are not allowed.";
-                return false;
-            }
-            string host = uri.Host.ToLowerInvariant();
-            if (host == "localhost" || host == "127.0.0.1" || host == "::1")
-            {
-                error = "localhost URLs are not allowed for web research.";
-                return false;
-            }
-            if (allowedDomains != null && allowedDomains.Count > 0)
-            {
-                bool ok = allowedDomains.Any(d => host == d || host.EndsWith("." + d, StringComparison.OrdinalIgnoreCase));
-                if (!ok)
-                {
-                    error = "host is outside allowed_domains.";
-                    return false;
-                }
-            }
-            return true;
-        }
-
         private static bool ShouldStopWebResearch(WebResearchRunState state, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
@@ -220,7 +178,7 @@ namespace ADDGH
         private static async Task<string> SearchWebAsync(string query, List<string> allowedDomains, int maxResults, int maxChars, CancellationToken ct, WebResearchRunState state)
         {
             if (string.IsNullOrWhiteSpace(query))
-                return "Error: query is required for web search.";
+                return "Error: query is required for local documentation search.";
 
             try
             {
@@ -250,62 +208,17 @@ namespace ADDGH
             }
 
             string effectiveQuery = query.Trim();
-            if (allowedDomains != null && allowedDomains.Count > 0)
-                effectiveQuery += " " + string.Join(" ", allowedDomains.Select(d => "site:" + d));
-
-            var errors = new JArray();
-            var attempts = new[]
-            {
-                new
-                {
-                    Provider = "bing",
-                    Url = "https://www.bing.com/search?q=" + Uri.EscapeDataString(effectiveQuery)
-                }
-            };
-
-            string usedProvider = null;
-            string searchUrl = null;
-            List<JObject> results = null;
-            foreach (var attempt in attempts)
-            {
-                try
-                {
-                    string html = await DownloadTextAsync(attempt.Url, ct, state).ConfigureAwait(false);
-                    results = ParseBingResults(html, allowedDomains, maxResults);
-                    usedProvider = attempt.Provider;
-                    searchUrl = attempt.Url;
-                    if (results.Count > 0)
-                        break;
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    errors.Add(new JObject
-                    {
-                        ["provider"] = attempt.Provider,
-                        ["url"] = attempt.Url,
-                        ["error"] = ex.Message
-                    });
-                }
-            }
-
-            if (results == null)
-                results = new List<JObject>();
+            var results = SearchLocalDocumentation(effectiveQuery, allowedDomains, maxResults, ct, state);
 
             var payload = new JObject
             {
                 ["mode"] = "search",
                 ["query"] = query.Trim(),
-                ["provider"] = usedProvider ?? "",
-                ["search_url"] = searchUrl,
+                ["provider"] = "local_documentation",
+                ["search_url"] = "",
                 ["result_count"] = results.Count,
                 ["results"] = new JArray(results)
             };
-            if (errors.Count > 0)
-                payload["fallback_errors"] = errors;
 
             string json = payload.ToString(Formatting.None);
             return json.Length <= maxChars ? json : json.Substring(0, maxChars) + "...";
@@ -375,8 +288,8 @@ namespace ADDGH
 
                 stageResults.Add(new JObject
                 {
-                    ["stage"] = "fallback_site_search",
-                    ["provider"] = "bing_site_search",
+                    ["stage"] = "fallback_local_documentation_search",
+                    ["provider"] = "local_documentation",
                     ["result_count"] = fallbackResults.Count,
                     ["results"] = new JArray(fallbackResults.Values.Take(maxResults))
                 });
@@ -526,6 +439,7 @@ namespace ADDGH
             public string Name;
             public string BaseUrl;
             public string RootUrl;
+            public string LocalHtmlRoot;
             public string[] NamespaceHints;
         }
 
@@ -593,6 +507,7 @@ namespace ADDGH
                     Name = "RhinoCommon",
                     BaseUrl = "https://mcneel.github.io/rhinocommon-api-docs/api/RhinoCommon/html/",
                     RootUrl = "https://mcneel.github.io/rhinocommon-api-docs/api/RhinoCommon/html/R_Project_RhinoCommon.htm",
+                    LocalHtmlRoot = GetLocalDocumentationPath("rhinocommon-api-docs-gh-pages", "api", "RhinoCommon", "html"),
                     NamespaceHints = new[] { "Rhino", "Rhino.Geometry", "Rhino.DocObjects", "Rhino.DocObjects.Tables", "Rhino.Display", "Rhino.FileIO" }
                 });
             }
@@ -604,6 +519,7 @@ namespace ADDGH
                     Name = "Grasshopper",
                     BaseUrl = "https://mcneel.github.io/grasshopper-api-docs/api/grasshopper/html/",
                     RootUrl = "https://mcneel.github.io/grasshopper-api-docs/api/grasshopper/html/723c01da-9986-4db2-8f53-6f3a7494df75.htm",
+                    LocalHtmlRoot = GetLocalDocumentationPath("grasshopper-api-docs-gh-pages", "api", "grasshopper", "html"),
                     NamespaceHints = new[] { "Grasshopper", "Grasshopper.Kernel", "Grasshopper.Kernel.Data", "Grasshopper.Kernel.Types" }
                 });
             }
@@ -883,12 +799,261 @@ namespace ADDGH
                 candidates[candidate.Url] = candidate;
         }
 
+        private sealed class LocalDocRoot
+        {
+            public string Name;
+            public string Host;
+            public string BaseUrl;
+            public string LocalRoot;
+        }
+
+        private sealed class LocalDocHit
+        {
+            public string Title;
+            public string Url;
+            public string Snippet;
+            public int Score;
+        }
+
+        private static string GetLocalDocumentationPath(params string[] parts)
+        {
+            try
+            {
+                string projectRoot = GetProjectRootDirectory();
+                string parent = Directory.GetParent(projectRoot)?.FullName ?? projectRoot;
+                return Path.Combine(new[] { parent }.Concat(parts ?? new string[0]).ToArray());
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        private static List<LocalDocRoot> GetLocalDocumentationRoots(List<string> allowedDomains)
+        {
+            var roots = new List<LocalDocRoot>
+            {
+                new LocalDocRoot
+                {
+                    Name = "RhinoCommon API",
+                    Host = "mcneel.github.io",
+                    BaseUrl = "https://mcneel.github.io/rhinocommon-api-docs/api/RhinoCommon/html/",
+                    LocalRoot = GetLocalDocumentationPath("rhinocommon-api-docs-gh-pages", "api", "RhinoCommon", "html")
+                },
+                new LocalDocRoot
+                {
+                    Name = "Grasshopper API",
+                    Host = "mcneel.github.io",
+                    BaseUrl = "https://mcneel.github.io/grasshopper-api-docs/api/grasshopper/html/",
+                    LocalRoot = GetLocalDocumentationPath("grasshopper-api-docs-gh-pages", "api", "grasshopper", "html")
+                },
+                new LocalDocRoot
+                {
+                    Name = "Rhino Developer Docs",
+                    Host = "developer.rhino3d.com",
+                    BaseUrl = "https://developer.rhino3d.com/",
+                    LocalRoot = GetLocalDocumentationPath("developer.rhino3d.com-main", "content")
+                }
+            };
+
+            return roots
+                .Where(r => Directory.Exists(r.LocalRoot))
+                .Where(r => allowedDomains == null
+                    || allowedDomains.Count == 0
+                    || allowedDomains.Any(d => string.Equals(d, r.Host, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+        }
+
+        private static List<JObject> SearchLocalDocumentation(
+            string query,
+            List<string> allowedDomains,
+            int maxResults,
+            CancellationToken ct,
+            WebResearchRunState state)
+        {
+            var tokens = BuildSearchTokens(query);
+            if (tokens.Count == 0)
+                return new List<JObject>();
+
+            var hits = new Dictionary<string, LocalDocHit>(StringComparer.OrdinalIgnoreCase);
+            foreach (var root in GetLocalDocumentationRoots(allowedDomains))
+            {
+                if (ShouldStopWebResearch(state, ct))
+                    break;
+
+                IEnumerable<string> files;
+                try
+                {
+                    files = Directory.EnumerateFiles(root.LocalRoot, "*.*", SearchOption.AllDirectories)
+                        .Where(IsLocalSearchableDocument)
+                        .Take(DeploymentOptions.ApiDocPipelineIndexPageFetchLimit * 20)
+                        .ToList();
+                }
+                catch
+                {
+                    continue;
+                }
+
+                foreach (string file in files)
+                {
+                    if (ShouldStopWebResearch(state, ct))
+                        break;
+
+                    string text = TryReadLocalText(file, state);
+                    if (string.IsNullOrWhiteSpace(text))
+                        continue;
+
+                    string title = ExtractTitle(text);
+                    string plain = HtmlToPlainText(text);
+                    int score = ScoreLocalDocument(file, title, plain, tokens);
+                    if (score <= 0)
+                        continue;
+
+                    string url = BuildLocalDocUrl(root, file);
+                    hits[url] = new LocalDocHit
+                    {
+                        Title = string.IsNullOrWhiteSpace(title) ? Path.GetFileNameWithoutExtension(file) : title,
+                        Url = url,
+                        Snippet = BuildLocalSnippet(plain, tokens),
+                        Score = score
+                    };
+                }
+            }
+
+            return hits.Values
+                .OrderByDescending(h => h.Score)
+                .ThenBy(h => h.Title)
+                .Take(Math.Max(1, Math.Min(maxResults, 10)))
+                .Select(h => new JObject
+                {
+                    ["title"] = h.Title,
+                    ["url"] = h.Url,
+                    ["snippet"] = h.Snippet,
+                    ["source"] = "local_documentation"
+                })
+                .ToList();
+        }
+
+        private static bool IsLocalSearchableDocument(string path)
+        {
+            string ext = Path.GetExtension(path);
+            return string.Equals(ext, ".htm", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(ext, ".html", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(ext, ".md", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(ext, ".txt", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string TryReadLocalText(string path, WebResearchRunState state)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                    return "";
+                if (state != null)
+                    state.RequestCount++;
+                return File.ReadAllText(path);
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        private static int ScoreLocalDocument(string path, string title, string content, List<string> tokens)
+        {
+            string file = Path.GetFileName(path).ToLowerInvariant();
+            string titleLower = (title ?? "").ToLowerInvariant();
+            string contentLower = (content ?? "").ToLowerInvariant();
+            int score = 0;
+            foreach (string token in tokens)
+            {
+                if (file.Contains(token)) score += 8;
+                if (titleLower.Contains(token)) score += 6;
+                if (contentLower.Contains(token)) score += token.Length >= 8 ? 4 : 2;
+            }
+            if (file.StartsWith("T_", StringComparison.OrdinalIgnoreCase)) score += 2;
+            if (file.StartsWith("M_", StringComparison.OrdinalIgnoreCase)) score += 2;
+            return score;
+        }
+
+        private static string BuildLocalSnippet(string content, List<string> tokens)
+        {
+            if (string.IsNullOrWhiteSpace(content))
+                return "";
+            string compact = CleanText(content);
+            int idx = -1;
+            foreach (string token in tokens ?? new List<string>())
+            {
+                idx = compact.IndexOf(token, StringComparison.OrdinalIgnoreCase);
+                if (idx >= 0) break;
+            }
+            if (idx < 0) idx = 0;
+            int start = Math.Max(0, idx - 120);
+            int length = Math.Min(360, compact.Length - start);
+            return compact.Substring(start, length);
+        }
+
+        private static string BuildLocalDocUrl(LocalDocRoot root, string file)
+        {
+            string relative = "";
+            try
+            {
+                string rootPath = Path.GetFullPath(root.LocalRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                string full = Path.GetFullPath(file);
+                if (full.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase))
+                    relative = full.Substring(rootPath.Length).Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
+            }
+            catch
+            {
+                relative = Path.GetFileName(file);
+            }
+            return (root.BaseUrl ?? "").TrimEnd('/') + "/" + relative;
+        }
+
+        private static bool TryResolveLocalDocumentationPath(string url, out string path)
+        {
+            path = null;
+            if (string.IsNullOrWhiteSpace(url))
+                return false;
+
+            if (File.Exists(url))
+            {
+                path = Path.GetFullPath(url);
+                return true;
+            }
+
+            if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out Uri uri))
+                return false;
+
+            string absolute = uri.AbsoluteUri;
+            foreach (var root in GetLocalDocumentationRoots(null))
+            {
+                string baseUrl = (root.BaseUrl ?? "").TrimEnd('/') + "/";
+                if (!absolute.StartsWith(baseUrl, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                string relative = Uri.UnescapeDataString(absolute.Substring(baseUrl.Length))
+                    .Replace('/', Path.DirectorySeparatorChar);
+                string candidate = Path.GetFullPath(Path.Combine(root.LocalRoot, relative));
+                string rootPath = Path.GetFullPath(root.LocalRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                if (candidate.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase) && File.Exists(candidate))
+                {
+                    path = candidate;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private static async Task<string> FetchWebPageAsync(string url, List<string> allowedDomains, int maxChars, CancellationToken ct, WebResearchRunState state)
         {
-            if (!IsAllowedWebUrl(url, allowedDomains, out Uri uri, out string error))
-                return "Error: " + error;
+            if (string.IsNullOrWhiteSpace(url))
+                return "Error: url is required.";
+            if (!TryResolveLocalDocumentationPath(url, out string localPath))
+                return "Error: URL is not available in the local documentation mirror.";
 
-            string html = await DownloadTextAsync(uri.AbsoluteUri, ct, state).ConfigureAwait(false);
+            string html = await DownloadTextAsync(url, ct, state).ConfigureAwait(false);
             string title = ExtractTitle(html);
             string text = HtmlToPlainText(html);
             if (text.Length > maxChars)
@@ -897,7 +1062,8 @@ namespace ADDGH
             return new JObject
             {
                 ["mode"] = "fetch",
-                ["url"] = uri.AbsoluteUri,
+                ["url"] = url,
+                ["local_path"] = localPath,
                 ["title"] = title,
                 ["content"] = text
             }.ToString(Formatting.None);
@@ -908,69 +1074,11 @@ namespace ADDGH
             if (ShouldStopWebResearch(state, ct))
                 throw new OperationCanceledException(ct);
 
-            if (state != null)
-                state.RequestCount++;
+            if (!TryResolveLocalDocumentationPath(url, out string localPath))
+                throw new InvalidOperationException("Local documentation mirror does not contain URL: " + url);
 
-            using (var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
-            {
-                TimeSpan requestTimeout = TimeSpan.FromSeconds(Math.Max(1, DeploymentOptions.WebResearchRequestTimeoutSeconds));
-                if (state != null && state.Remaining < requestTimeout)
-                    requestTimeout = state.Remaining;
-                if (requestTimeout <= TimeSpan.Zero)
-                    throw new OperationCanceledException(ct);
-
-                linkedCts.CancelAfter(requestTimeout);
-                CancellationToken requestToken = linkedCts.Token;
-
-            using (var request = new HttpRequestMessage(HttpMethod.Get, url))
-            {
-                request.Headers.UserAgent.ParseAdd("Mozilla/5.0 ADDGH-WebResearch/1.0");
-                request.Headers.Accept.ParseAdd("text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5");
-                using (var response = await GetConfiguredHttpClient(GetProviderRuntimeSettings()).SendAsync(request, HttpCompletionOption.ResponseHeadersRead, requestToken).ConfigureAwait(false))
-                {
-                    string body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                    if (!response.IsSuccessStatusCode)
-                        throw new InvalidOperationException("HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase + "\n" + ClampDiagDetail(body, 1000));
-                    return body ?? "";
-                }
-            }
-            }
-        }
-
-        private static List<JObject> ParseBingResults(string html, List<string> allowedDomains, int maxResults)
-        {
-            var results = new List<JObject>();
-            if (string.IsNullOrWhiteSpace(html))
-                return results;
-
-            var matches = Regex.Matches(
-                html,
-                "<li[^>]+class=\"[^\"]*b_algo[^\"]*\"[\\s\\S]*?<h2[^>]*>[\\s\\S]*?<a[^>]+href=\"(?<href>[^\"]+)\"[^>]*>(?<title>[\\s\\S]*?)</a>[\\s\\S]*?</h2>(?<tail>[\\s\\S]*?)(?=<li[^>]+class=\"[^\"]*b_algo|</ol>)",
-                RegexOptions.IgnoreCase | RegexOptions.Singleline);
-
-            foreach (Match match in matches)
-            {
-                string href = WebUtility.HtmlDecode(match.Groups["href"].Value ?? "").Trim();
-                string title = CleanText(match.Groups["title"].Value);
-                if (!IsAllowedWebUrl(href, allowedDomains, out Uri uri, out _))
-                    continue;
-
-                string snippet = "";
-                string tail = match.Groups["tail"].Value ?? "";
-                var snippetMatch = Regex.Match(tail, "<p[^>]*>(?<snippet>[\\s\\S]*?)</p>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
-                if (snippetMatch.Success)
-                    snippet = CleanText(snippetMatch.Groups["snippet"].Value);
-
-                results.Add(new JObject
-                {
-                    ["title"] = title,
-                    ["url"] = uri.AbsoluteUri,
-                    ["snippet"] = snippet
-                });
-                if (results.Count >= maxResults)
-                    break;
-            }
-            return results;
+            string text = TryReadLocalText(localPath, state);
+            return await Task.FromResult(text ?? "").ConfigureAwait(false);
         }
 
         private static string ExtractTitle(string html)

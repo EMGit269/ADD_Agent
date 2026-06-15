@@ -508,13 +508,13 @@ namespace ADDGH
         {
             return ToolSchemaFactory.Function(
                 "web_research",
-                "Search or open web documentation/current information when local knowledge is insufficient or the user asks for latest/external information. For RhinoCommon/Grasshopper API signature lookup, prefer mode=api_pipeline before generic search.",
+                "Search or open local mirrored documentation when local knowledge is insufficient. This tool does not access the public internet. For RhinoCommon/Grasshopper API signature lookup, prefer mode=api_pipeline before local search.",
                 new
                 {
-                    mode = ToolSchemaFactory.String("Research mode: api_pipeline for RhinoCommon/Grasshopper API lookup, search for general web search, or fetch for a known URL."),
+                    mode = ToolSchemaFactory.String("Research mode: api_pipeline for RhinoCommon/Grasshopper API lookup, search for local documentation search, or fetch for a known mirrored documentation URL."),
                     query = ToolSchemaFactory.String("Search/API query. For api_pipeline include candidate type/method names and concept words, for example Brep.CreateFromRevolution surface of revolution."),
-                    url = ToolSchemaFactory.String("Direct URL when mode=fetch."),
-                    allowed_domains = ToolSchemaFactory.StringArray("Optional domain allowlist for focused/official-source research."),
+                    url = ToolSchemaFactory.String("Mirrored documentation URL when mode=fetch. Only URLs available in the local documentation mirror can be fetched."),
+                    allowed_domains = ToolSchemaFactory.StringArray("Optional domain allowlist for focused local documentation lookup, such as developer.rhino3d.com or mcneel.github.io."),
                     max_results = ToolSchemaFactory.Integer("Maximum search results to retrieve."),
                     max_chars = ToolSchemaFactory.Integer("Maximum returned text characters; keep modest unless detailed source context is required."),
                     summary = ToolSchemaFactory.String(ToolSummaryDescription),

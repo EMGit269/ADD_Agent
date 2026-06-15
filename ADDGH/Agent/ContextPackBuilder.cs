@@ -73,16 +73,18 @@ namespace ADDGH.Agent
         {
             return "## API Documentation Lookup Pack\n"
                 + "- If RhinoCommon/Grasshopper type, method, constructor, overload, parameter, or return type is uncertain, call web_research with mode=api_pipeline.\n"
-                + "- After api_pipeline returns candidates, fetch the selected official URL before relying on an API signature.\n"
+                + "- web_research reads local mirrored documentation only; it does not access the public internet.\n"
+                + "- After api_pipeline returns candidates, fetch the selected mirrored official URL before relying on an API signature.\n"
                 + "- Treat no candidate as name-mismatch evidence, not proof that an API does not exist.";
         }
 
         private static string RenderWebResearchGuidance()
         {
             return "## Web Research Pack\n"
-                + "- Prefer mode=fetch when an official URL is known.\n"
-                + "- Prefer focused official domains and small max_results.\n"
-                + "- Do not use web results as canvas-state evidence.";
+                + "- web_research is a local documentation lookup tool, not a public internet search tool.\n"
+                + "- Prefer mode=fetch when a mirrored official URL is known.\n"
+                + "- Prefer focused documentation domains and small max_results.\n"
+                + "- Do not use documentation search results as canvas-state evidence.";
         }
 
         private static string Compact(string value, int maxChars)

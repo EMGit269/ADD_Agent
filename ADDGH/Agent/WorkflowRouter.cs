@@ -133,7 +133,7 @@ namespace ADDGH.Agent
 
         private static WorkflowRoute WebResearchRoute()
         {
-            var route = WorkflowRoute.Create(WorkflowIntent.WebResearch, 0.82, "User requested web/latest/external verification.");
+            var route = WorkflowRoute.Create(WorkflowIntent.WebResearch, 0.82, "User requested local documentation lookup or mirrored URL verification.");
             route.RequiredTools.Add("web_research");
             route.ContextPacks.Add("web-research");
             return route;

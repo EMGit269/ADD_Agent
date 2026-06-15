@@ -92,7 +92,7 @@ namespace ADDGH.Agent
             yield return Tool("show_reference_options", "Ask user to choose among reference options", true, false, false,
                 WorkflowIntent.ReferenceLookup, WorkflowIntent.ReferenceImport);
 
-            yield return Tool("web_research", "Fetch/search web documentation or current information", true, false, false,
+            yield return Tool("web_research", "Fetch/search local mirrored documentation", true, false, false,
                 WorkflowIntent.WebResearch, WorkflowIntent.ApiDocLookup, WorkflowIntent.CSharpScriptCreate, WorkflowIntent.CSharpScriptFix);
             yield return Tool("show_plan_steps", "Render plan steps in Plan mode", true, false, false,
                 WorkflowIntent.GeneralChat, WorkflowIntent.GrasshopperCreate, WorkflowIntent.GrasshopperModify);
