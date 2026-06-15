@@ -742,6 +742,7 @@ namespace ADDGH
                     System.IO.File.WriteAllText(filePath, referenceJson, System.Text.Encoding.UTF8);
 
                     string result = UpdateReferenceIndexSkill(description, fileName, skillFileName);
+                    RefreshReferenceCatalog();
 
                     AppendSystemMessage($"参考已保存：{fileName}\n{result}\nJSON：{filePath}\n索引：{indexPath}");
                 } catch (Exception ex) {
@@ -1376,6 +1377,7 @@ namespace ADDGH
                 .ToList();
 
             WriteReferenceIndexEntries(remaining);
+            RefreshReferenceCatalog();
 
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
                 UpdateSkillLibraryUI();

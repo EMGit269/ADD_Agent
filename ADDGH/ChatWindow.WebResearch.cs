@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -31,13 +33,70 @@ namespace ADDGH
             maxResults = Math.Max(1, Math.Min(maxResults <= 0 ? 5 : maxResults, 10));
             maxChars = Math.Max(800, Math.Min(maxChars <= 0 ? 6000 : maxChars, 16000));
             var domains = ReadAllowedDomains(allowedDomains);
+            int timeoutSeconds = GetWebResearchTimeoutSeconds(normalizedMode);
+            var state = new WebResearchRunState(normalizedMode, timeoutSeconds);
 
-            if (normalizedMode == "fetch")
-                return await FetchWebPageAsync(url, domains, maxChars, ct).ConfigureAwait(false);
-            if (normalizedMode == "api_pipeline")
-                return await ExecuteApiDocPipelineAsync(query, domains, maxResults, maxChars, ct).ConfigureAwait(false);
+            using (var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+            {
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+                CancellationToken runToken = timeoutCts.Token;
 
-            return await SearchWebAsync(query, domains, maxResults, maxChars, ct).ConfigureAwait(false);
+                try
+                {
+                    string result;
+                    if (normalizedMode == "fetch")
+                        result = await FetchWebPageAsync(url, domains, maxChars, runToken, state).ConfigureAwait(false);
+                    else if (normalizedMode == "api_pipeline")
+                        result = await ExecuteApiDocPipelineAsync(query, domains, maxResults, maxChars, runToken, state).ConfigureAwait(false);
+                    else
+                        result = await SearchWebAsync(query, domains, maxResults, maxChars, runToken, state).ConfigureAwait(false);
+
+                    return AttachWebResearchDiagnostics(result, state, maxChars);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    return BuildWebResearchTimeoutPayload(normalizedMode, query, url, state, maxChars);
+                }
+            }
+        }
+
+        private static int GetWebResearchTimeoutSeconds(string mode)
+        {
+            if (string.Equals(mode, "api_pipeline", StringComparison.OrdinalIgnoreCase))
+                return DeploymentOptions.WebResearchApiPipelineTimeoutSeconds;
+            if (string.Equals(mode, "fetch", StringComparison.OrdinalIgnoreCase))
+                return DeploymentOptions.WebResearchFetchTimeoutSeconds;
+            return DeploymentOptions.WebResearchSearchTimeoutSeconds;
+        }
+
+        private sealed class WebResearchRunState
+        {
+            private readonly Stopwatch _clock = Stopwatch.StartNew();
+            private readonly DateTime _deadlineUtc;
+
+            public WebResearchRunState(string mode, int timeoutSeconds)
+            {
+                Mode = mode ?? "search";
+                TimeoutSeconds = Math.Max(1, timeoutSeconds);
+                _deadlineUtc = DateTime.UtcNow.AddSeconds(TimeoutSeconds);
+            }
+
+            public string Mode { get; private set; }
+            public int TimeoutSeconds { get; private set; }
+            public int RequestCount { get; set; }
+            public int CacheHits { get; set; }
+            public bool PartialTimeout { get; set; }
+            public long ElapsedMs { get { return _clock.ElapsedMilliseconds; } }
+            public bool IsTimedOut { get { return DateTime.UtcNow >= _deadlineUtc; } }
+
+            public TimeSpan Remaining
+            {
+                get
+                {
+                    TimeSpan remaining = _deadlineUtc - DateTime.UtcNow;
+                    return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+                }
+            }
         }
 
         private static List<string> ReadAllowedDomains(JArray allowedDomains)
@@ -101,14 +160,71 @@ namespace ADDGH
             return true;
         }
 
-        private static async Task<string> SearchWebAsync(string query, List<string> allowedDomains, int maxResults, int maxChars, System.Threading.CancellationToken ct)
+        private static bool ShouldStopWebResearch(WebResearchRunState state, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (state != null && state.IsTimedOut)
+            {
+                state.PartialTimeout = true;
+                return true;
+            }
+            return false;
+        }
+
+        private static string AttachWebResearchDiagnostics(string raw, WebResearchRunState state, int maxChars)
+        {
+            if (state == null || string.IsNullOrWhiteSpace(raw))
+                return raw;
+
+            try
+            {
+                var payload = JObject.Parse(raw);
+                if (payload["status"] == null)
+                    payload["status"] = state.PartialTimeout ? "partial_timeout" : "ok";
+                payload["elapsed_ms"] = state.ElapsedMs;
+                payload["timeout_ms"] = state.TimeoutSeconds * 1000;
+                payload["request_count"] = state.RequestCount;
+                payload["cache_hits"] = state.CacheHits;
+
+                string json = payload.ToString(Formatting.None);
+                return json.Length <= maxChars ? json : json.Substring(0, maxChars) + "...";
+            }
+            catch
+            {
+                return raw;
+            }
+        }
+
+        private static string BuildWebResearchTimeoutPayload(string mode, string query, string url, WebResearchRunState state, int maxChars)
+        {
+            if (state != null)
+                state.PartialTimeout = true;
+
+            var payload = new JObject
+            {
+                ["mode"] = mode ?? "search",
+                ["status"] = "timeout",
+                ["query"] = query ?? "",
+                ["url"] = url ?? "",
+                ["elapsed_ms"] = state != null ? state.ElapsedMs : 0,
+                ["timeout_ms"] = state != null ? state.TimeoutSeconds * 1000 : 0,
+                ["request_count"] = state != null ? state.RequestCount : 0,
+                ["cache_hits"] = state != null ? state.CacheHits : 0,
+                ["results"] = new JArray()
+            };
+
+            string json = payload.ToString(Formatting.None);
+            return json.Length <= maxChars ? json : json.Substring(0, maxChars) + "...";
+        }
+
+        private static async Task<string> SearchWebAsync(string query, List<string> allowedDomains, int maxResults, int maxChars, CancellationToken ct, WebResearchRunState state)
         {
             if (string.IsNullOrWhiteSpace(query))
                 return "Error: query is required for web search.";
 
             try
             {
-                var mcneelResults = await SearchMcNeelApiDocsAsync(query, allowedDomains, maxResults, ct).ConfigureAwait(false);
+                var mcneelResults = await SearchMcNeelApiDocsAsync(query, allowedDomains, maxResults, ct, state).ConfigureAwait(false);
                 if (mcneelResults.Count > 0)
                 {
                     var mcneelPayload = new JObject
@@ -123,6 +239,10 @@ namespace ADDGH
                     string mcneelJson = mcneelPayload.ToString(Formatting.None);
                     return mcneelJson.Length <= maxChars ? mcneelJson : mcneelJson.Substring(0, maxChars) + "...";
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -150,12 +270,16 @@ namespace ADDGH
             {
                 try
                 {
-                    string html = await DownloadTextAsync(attempt.Url, ct).ConfigureAwait(false);
+                    string html = await DownloadTextAsync(attempt.Url, ct, state).ConfigureAwait(false);
                     results = ParseBingResults(html, allowedDomains, maxResults);
                     usedProvider = attempt.Provider;
                     searchUrl = attempt.Url;
                     if (results.Count > 0)
                         break;
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {
@@ -192,13 +316,16 @@ namespace ADDGH
             List<string> allowedDomains,
             int maxResults,
             int maxChars,
-            System.Threading.CancellationToken ct)
+            CancellationToken ct,
+            WebResearchRunState state)
         {
             if (string.IsNullOrWhiteSpace(query))
                 return "Error: query is required for api_pipeline.";
 
             var normalizedDomains = NormalizeApiDocDomains(allowedDomains);
-            var expandedQueries = BuildApiDocPipelineQueries(query).Take(8).ToList();
+            var expandedQueries = BuildApiDocPipelineQueries(query)
+                .Take(Math.Max(1, DeploymentOptions.ApiDocPipelineExpandedQueryLimit))
+                .ToList();
             var stageResults = new JArray();
 
             stageResults.Add(new JObject
@@ -214,9 +341,14 @@ namespace ADDGH
             var mcneelDomains = new List<string> { "mcneel.github.io" };
             foreach (string q in expandedQueries)
             {
-                var candidates = await SearchMcNeelApiDocsAsync(q, mcneelDomains, maxResults, ct).ConfigureAwait(false);
+                if (ShouldStopWebResearch(state, ct))
+                    break;
+
+                var candidates = await SearchMcNeelApiDocsAsync(q, mcneelDomains, maxResults, ct, state).ConfigureAwait(false);
                 foreach (var candidate in candidates)
                     UpsertPipelineCandidate(allCandidates, candidate, "mcneel_api_index", q);
+                if (allCandidates.Count >= maxResults)
+                    break;
             }
 
             stageResults.Add(new JObject
@@ -230,9 +362,12 @@ namespace ADDGH
             if (allCandidates.Count == 0)
             {
                 var fallbackResults = new Dictionary<string, JObject>(StringComparer.OrdinalIgnoreCase);
-                foreach (string q in expandedQueries.Take(3))
+                foreach (string q in expandedQueries.Take(Math.Max(1, DeploymentOptions.ApiDocPipelineFallbackQueryLimit)))
                 {
-                    string raw = await SearchWebAsync(q, normalizedDomains, maxResults, maxChars, ct).ConfigureAwait(false);
+                    if (ShouldStopWebResearch(state, ct))
+                        break;
+
+                    string raw = await SearchWebAsync(q, normalizedDomains, maxResults, maxChars, ct, state).ConfigureAwait(false);
                     TryMergePipelineSearchResults(fallbackResults, raw, q);
                     if (fallbackResults.Count >= maxResults)
                         break;
@@ -251,7 +386,7 @@ namespace ADDGH
             }
 
             string diagnosis = allCandidates.Count > 0
-                ? "candidate_docs_found"
+                ? (state != null && state.PartialTimeout ? "candidate_docs_found_partial" : "candidate_docs_found")
                 : "no_candidate_docs_found";
 
             var payload = new JObject
@@ -259,6 +394,7 @@ namespace ADDGH
                 ["mode"] = "api_pipeline",
                 ["query"] = query.Trim(),
                 ["diagnosis"] = diagnosis,
+                ["status"] = state != null && state.PartialTimeout ? "partial_timeout" : "ok",
                 ["result_count"] = allCandidates.Count,
                 ["stages"] = stageResults,
                 ["next_actions"] = BuildApiPipelineNextActions(allCandidates.Count)
@@ -405,7 +541,8 @@ namespace ADDGH
             string query,
             List<string> allowedDomains,
             int maxResults,
-            System.Threading.CancellationToken ct)
+            CancellationToken ct,
+            WebResearchRunState state)
         {
             if (string.IsNullOrWhiteSpace(query))
                 return new List<JObject>();
@@ -475,6 +612,9 @@ namespace ADDGH
             var allCandidates = new Dictionary<string, ApiDocCandidate>(StringComparer.OrdinalIgnoreCase);
             foreach (var root in roots)
             {
+                if (ShouldStopWebResearch(state, ct))
+                    break;
+
                 var pagesToFetch = new List<string> { root.RootUrl };
 
                 foreach (string ns in ExtractNamespaces(normalized))
@@ -488,7 +628,7 @@ namespace ADDGH
                 foreach (string directTypeUrl in BuildDirectTypeUrls(root, normalized))
                     pagesToFetch.Add(directTypeUrl);
 
-                string rootHtml = await TryDownloadTextAsync(root.RootUrl, ct).ConfigureAwait(false);
+                string rootHtml = await TryDownloadTextAsync(root.RootUrl, ct, state).ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(rootHtml))
                 {
                     var rootLinks = ParseApiDocLinks(rootHtml, root.RootUrl, root.BaseUrl, queryTokens, includeZeroScore: true);
@@ -507,9 +647,14 @@ namespace ADDGH
                 }
 
                 var parsed = new List<ApiDocCandidate>();
-                foreach (string pageUrl in pagesToFetch.Distinct(StringComparer.OrdinalIgnoreCase).Take(80))
+                foreach (string pageUrl in pagesToFetch
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Take(Math.Max(1, DeploymentOptions.ApiDocPipelineIndexPageFetchLimit)))
                 {
-                    string html = await TryDownloadTextAsync(pageUrl, ct).ConfigureAwait(false);
+                    if (ShouldStopWebResearch(state, ct))
+                        break;
+
+                    string html = await TryDownloadTextAsync(pageUrl, ct, state).ConfigureAwait(false);
                     if (string.IsNullOrWhiteSpace(html))
                         continue;
                     parsed.AddRange(ParseApiDocLinks(html, pageUrl, root.BaseUrl, queryTokens, includeZeroScore: false));
@@ -521,9 +666,12 @@ namespace ADDGH
                 foreach (var typePage in parsed
                     .Where(c => c.Score > 0 && IsApiTypePage(c.Url))
                     .OrderByDescending(c => c.Score)
-                    .Take(6))
+                    .Take(Math.Max(1, DeploymentOptions.ApiDocPipelineTypePageFetchLimit)))
                 {
-                    string html = await TryDownloadTextAsync(typePage.Url, ct).ConfigureAwait(false);
+                    if (ShouldStopWebResearch(state, ct))
+                        break;
+
+                    string html = await TryDownloadTextAsync(typePage.Url, ct, state).ConfigureAwait(false);
                     if (string.IsNullOrWhiteSpace(html))
                         continue;
                     foreach (var child in ParseApiDocLinks(html, typePage.Url, root.BaseUrl, queryTokens, includeZeroScore: false))
@@ -545,7 +693,7 @@ namespace ADDGH
                 .ToList();
         }
 
-        private static async Task<string> TryDownloadTextAsync(string url, System.Threading.CancellationToken ct)
+        private static async Task<string> TryDownloadTextAsync(string url, CancellationToken ct, WebResearchRunState state)
         {
             try
             {
@@ -555,10 +703,13 @@ namespace ADDGH
                 lock (_webResearchTextCacheLock)
                 {
                     if (_webResearchTextCache.TryGetValue(url, out string cached))
+                    {
+                        if (state != null) state.CacheHits++;
                         return cached;
+                    }
                 }
 
-                string text = await DownloadTextAsync(url, ct).ConfigureAwait(false);
+                string text = await DownloadTextAsync(url, ct, state).ConfigureAwait(false);
                 if (!string.IsNullOrEmpty(text)
                     && Uri.TryCreate(url, UriKind.Absolute, out Uri uri)
                     && string.Equals(uri.Host, "mcneel.github.io", StringComparison.OrdinalIgnoreCase))
@@ -571,6 +722,15 @@ namespace ADDGH
                     }
                 }
                 return text;
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                if (state != null) state.PartialTimeout = true;
+                return "";
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch
             {
@@ -723,12 +883,12 @@ namespace ADDGH
                 candidates[candidate.Url] = candidate;
         }
 
-        private static async Task<string> FetchWebPageAsync(string url, List<string> allowedDomains, int maxChars, System.Threading.CancellationToken ct)
+        private static async Task<string> FetchWebPageAsync(string url, List<string> allowedDomains, int maxChars, CancellationToken ct, WebResearchRunState state)
         {
             if (!IsAllowedWebUrl(url, allowedDomains, out Uri uri, out string error))
                 return "Error: " + error;
 
-            string html = await DownloadTextAsync(uri.AbsoluteUri, ct).ConfigureAwait(false);
+            string html = await DownloadTextAsync(uri.AbsoluteUri, ct, state).ConfigureAwait(false);
             string title = ExtractTitle(html);
             string text = HtmlToPlainText(html);
             if (text.Length > maxChars)
@@ -743,19 +903,37 @@ namespace ADDGH
             }.ToString(Formatting.None);
         }
 
-        private static async Task<string> DownloadTextAsync(string url, System.Threading.CancellationToken ct)
+        private static async Task<string> DownloadTextAsync(string url, CancellationToken ct, WebResearchRunState state)
         {
+            if (ShouldStopWebResearch(state, ct))
+                throw new OperationCanceledException(ct);
+
+            if (state != null)
+                state.RequestCount++;
+
+            using (var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+            {
+                TimeSpan requestTimeout = TimeSpan.FromSeconds(Math.Max(1, DeploymentOptions.WebResearchRequestTimeoutSeconds));
+                if (state != null && state.Remaining < requestTimeout)
+                    requestTimeout = state.Remaining;
+                if (requestTimeout <= TimeSpan.Zero)
+                    throw new OperationCanceledException(ct);
+
+                linkedCts.CancelAfter(requestTimeout);
+                CancellationToken requestToken = linkedCts.Token;
+
             using (var request = new HttpRequestMessage(HttpMethod.Get, url))
             {
                 request.Headers.UserAgent.ParseAdd("Mozilla/5.0 ADDGH-WebResearch/1.0");
                 request.Headers.Accept.ParseAdd("text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5");
-                using (var response = await GetConfiguredHttpClient(GetProviderRuntimeSettings()).SendAsync(request, HttpCompletionOption.ResponseContentRead, ct).ConfigureAwait(false))
+                using (var response = await GetConfiguredHttpClient(GetProviderRuntimeSettings()).SendAsync(request, HttpCompletionOption.ResponseHeadersRead, requestToken).ConfigureAwait(false))
                 {
                     string body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                     if (!response.IsSuccessStatusCode)
                         throw new InvalidOperationException("HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase + "\n" + ClampDiagDetail(body, 1000));
                     return body ?? "";
                 }
+            }
             }
         }
 

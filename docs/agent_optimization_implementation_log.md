@@ -292,3 +292,23 @@ ADDGH\bin\Debug\net48\ADDGH.gha
 4. 给 `ToolRegistry` 补齐所有实际工具，减少 unknown tool 依赖。
 5. 改写 `ChatWindow.ToolDefinitions.cs` 中占位或弱描述的 tool schema description。
 6. 在 `ChatMessageHelpers` 中引入可开关的大结果压缩，把 `ToolResultCompactor` 从旁路升级为实际 context 成本控制。
+## 9. 2026-06-15 追加落地：ContextPackBuilder / ReferenceCatalog / ApiDocLookup
+
+本轮追加完成：
+
+- 新增 `ADDGH/Agent/WorkflowSignals.cs` 与 `ADDGH/Agent/WorkflowSignalExtractor.cs`：把 workflow 判断从简单关键词命中升级为结构化信号评分。
+- 重构 `ADDGH/Agent/WorkflowRouter.cs`：`ApiDocLookup` 通过 API member pattern、RhinoCommon/Grasshopper symbol、C# 编译错误、签名/重载意图等多信号评分进入；C# create/fix route 在 API 风险中等时保留 `web_research` optional affordance，允许 agent 自主查证。
+- 新增 `ADDGH/Agent/ContextPackBuilder.cs`：根据 `WorkflowRoute.ContextPacks` 渲染 route、canvas-state、reference-index、api-doc-lookup、web-research 等小型上下文包。
+- 新增 `ADDGH/Agent/ReferenceCatalog.cs` 与 `ReferenceIndexModels.cs`：从 `skills/reference_index.md` 和 `reference/*.json` 构建结构化 `reference.index.json`，为 reference 摘要常驻、正文按需读取做准备。
+- 新增 `ADDGH/ChatWindow.AgentReferences.cs`：集中封装 reference catalog summary 与刷新逻辑。
+- `ChatWindow.AgentRouting.cs` 接入 `_contextPackBuilder`，发送前将当前 route 的 context packs 注入 system prompt；可用 `ADDGH_USE_CONTEXT_PACK_PROMPT=0` 回退。
+- `ChatWindow.ChatRendering.cs`、`ChatWindow.SkillTools.cs` 在保存、删除、读取、导入 reference 后刷新 reference catalog。
+- `ChatWindow.WebResearch.cs` 增加 web research 专属 timeout、request budget、API doc pipeline 查询/页面预算、elapsed/request/cache 诊断字段。
+
+当前仍未完成：
+
+- `ToolSchemaFactory` 尚未替换 `ChatWindow.ToolDefinitions.cs` 的手写 schema。
+- `ToolRegistry` 还没有覆盖并校验所有实际工具。
+- `ToolSurfacePolicy` 默认仍关闭，尚未做真实用户场景回归。
+- `ContextPackBuilder` 目前只增量注入 route-specific packs，尚未替换全量 skill summary 注入策略。
+- 还没有独立测试项目覆盖 WorkflowRouter / ReferenceCatalog / ContextPackBuilder。

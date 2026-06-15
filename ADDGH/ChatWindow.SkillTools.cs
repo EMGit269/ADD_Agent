@@ -53,6 +53,7 @@ namespace ADDGH
 
                 string json = System.IO.File.ReadAllText(filePath, Encoding.UTF8);
                 _contextLedger.RecordReference(Path.GetFileNameWithoutExtension(safeName), safeName, ToolResultCompactor.Compact(json, 240));
+                RefreshReferenceCatalog();
                 return json;
             } catch (Exception ex) {
                 return "Error: " + ex.Message;
@@ -186,7 +187,10 @@ namespace ADDGH
                     }
                 }));
                 if (!result.StartsWith("Error:", StringComparison.OrdinalIgnoreCase))
+                {
                     _contextLedger.RecordReference(Path.GetFileNameWithoutExtension(name), name, result);
+                    RefreshReferenceCatalog();
+                }
                 return result;
             }
             catch (Exception ex)

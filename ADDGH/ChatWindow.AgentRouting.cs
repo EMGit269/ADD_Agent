@@ -11,7 +11,9 @@ namespace ADDGH
         private static readonly ToolSurfacePolicy _toolSurfacePolicy = new ToolSurfacePolicy(new ToolRegistry());
         private static readonly ContextLedger _contextLedger = new ContextLedger();
         private static readonly ContextCompactionPlanner _contextCompactionPlanner = new ContextCompactionPlanner();
+        private static readonly ContextPackBuilder _contextPackBuilder = new ContextPackBuilder();
         private static WorkflowRoute _currentWorkflowRoute = WorkflowRoute.Fallback();
+        private static CanvasStateSummary _currentAgentCanvasState = null;
 
         private static void PrepareAgentWorkflowRoute(string userInput, string modelInput, List<AttachmentItem> attachmentsToSend)
         {
@@ -41,6 +43,7 @@ namespace ADDGH
         private static AgentTurnContext BuildAgentTurnContext(string userInput, string modelInput, List<AttachmentItem> attachmentsToSend)
         {
             var canvas = CaptureAgentCanvasStateSummary();
+            _currentAgentCanvasState = canvas;
             var attachments = attachmentsToSend ?? new List<AttachmentItem>();
 
             return new AgentTurnContext
@@ -94,12 +97,33 @@ namespace ADDGH
             }
         }
 
+        private static string BuildAgentContextPackPrompt()
+        {
+            if (!DeploymentOptions.UseContextPackPrompt) return "";
+            try
+            {
+                string rendered = _contextPackBuilder.Build(
+                    _currentWorkflowRoute,
+                    _currentAgentCanvasState,
+                    BuildSkillCatalogSummary,
+                    BuildReferenceCatalogSummary,
+                    DeploymentOptions.ContextPackPromptMaxChars);
+                return string.IsNullOrWhiteSpace(rendered) ? "" : "\n\n" + rendered.Trim();
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Warn("BuildAgentContextPackPrompt failed: " + ex.Message);
+                return "";
+            }
+        }
+
         private static void ResetAgentContextLedger()
         {
             try
             {
                 _contextLedger.ResetForNewConversation();
                 _currentWorkflowRoute = WorkflowRoute.Fallback();
+                _currentAgentCanvasState = null;
             }
             catch (Exception ex)
             {

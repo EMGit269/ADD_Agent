@@ -88,5 +88,24 @@ namespace ADDGH
 
         /// <summary>ContextLedger 注入 system prompt 的最大字符数。</summary>
         public const int ContextLedgerPromptMaxChars = 4000;
+
+        public static bool UseContextPackPrompt =>
+            !string.Equals(Environment.GetEnvironmentVariable("ADDGH_USE_CONTEXT_PACK_PROMPT"), "0", StringComparison.OrdinalIgnoreCase);
+
+        public static bool UseReferenceCatalogIndex =>
+            !string.Equals(Environment.GetEnvironmentVariable("ADDGH_USE_REFERENCE_CATALOG_INDEX"), "0", StringComparison.OrdinalIgnoreCase);
+
+        public const int ContextPackPromptMaxChars = 10000;
+
+        // Web research uses its own budgets so LLM/image transport timeouts can
+        // stay generous while tool calls remain responsive inside an agent turn.
+        public const int WebResearchSearchTimeoutSeconds = 15;
+        public const int WebResearchFetchTimeoutSeconds = 15;
+        public const int WebResearchApiPipelineTimeoutSeconds = 35;
+        public const int WebResearchRequestTimeoutSeconds = 8;
+        public const int ApiDocPipelineExpandedQueryLimit = 5;
+        public const int ApiDocPipelineFallbackQueryLimit = 2;
+        public const int ApiDocPipelineIndexPageFetchLimit = 30;
+        public const int ApiDocPipelineTypePageFetchLimit = 4;
     }
 }

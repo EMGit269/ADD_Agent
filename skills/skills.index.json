@@ -1,0 +1,427 @@
+﻿{
+  "Version": 1,
+  "Skills": [
+    {
+      "Id": "general-modeling",
+      "Path": "general_modeling.md",
+      "FileName": "general_modeling.md",
+      "Title": "general-modeling",
+      "Description": "负责规范电池布局、Slider 命名规范和原点管理。",
+      "Tags": [
+        "grasshopper",
+        "csharp",
+        "visual"
+      ],
+      "Workflows": [
+        3,
+        4,
+        6,
+        5,
+        1,
+        2
+      ],
+      "Quality": "experimental",
+      "Verified": false,
+      "LastVerifiedAt": "",
+      "TokenEstimate": 337
+    },
+    {
+      "Id": "grasshopper-脚本类电池",
+      "Path": "gh_script_catalog.md",
+      "FileName": "gh_script_catalog.md",
+      "Title": "Grasshopper 脚本类电池",
+      "Description": "如何用 ADDGH 工具按名称添加脚本/表达式电池（必要时再用 GUID），并写入代码；以当前 Rhino 中的组件库为准。",
+      "Tags": [
+        "grasshopper",
+        "csharp",
+        "reference"
+      ],
+      "Workflows": [
+        3,
+        4,
+        10,
+        11,
+        1,
+        2
+      ],
+      "Quality": "experimental",
+      "Verified": false,
+      "LastVerifiedAt": "",
+      "TokenEstimate": 590
+    },
+    {
+      "Id": "graph-mapper-hints",
+      "Path": "graph_mapper_hints.md",
+      "FileName": "graph_mapper_hints.md",
+      "Title": "graph-mapper-hints",
+      "Description": "Graph Mapper 电池如何通过 set_gh_component_value 切换图/曲线类型（graph_mapper_type），及排错要点。",
+      "Tags": [
+        "grasshopper",
+        "csharp",
+        "web"
+      ],
+      "Workflows": [
+        3,
+        4,
+        14,
+        1,
+        2
+      ],
+      "Quality": "experimental",
+      "Verified": false,
+      "LastVerifiedAt": "",
+      "TokenEstimate": 393
+    },
+    {
+      "Id": "official-grasshopper-visualization-preview",
+      "Path": "official_grasshopper_visualization_preview.md",
+      "FileName": "official_grasshopper_visualization_preview.md",
+      "Title": "official-grasshopper-visualization-preview",
+      "Description": "官方可视化 reference。用于在 Grasshopper 中为几何结果建立可调颜色预览，优先使用 Custom Preview 与 Colour RGB/HSV/HSL/CMYK 等可参数化颜色电池；不要使用 Colour Swatch。",
+      "Tags": [
+        "grasshopper",
+        "csharp",
+        "visual",
+        "reference"
+      ],
+      "Workflows": [
+        3,
+        4,
+        6,
+        5,
+        10,
+        11,
+        1,
+        2
+      ],
+      "Quality": "official",
+      "Verified": true,
+      "LastVerifiedAt": "",
+      "TokenEstimate": 1078
+    },
+    {
+      "Id": "official-rhinocommon-api-reference",
+      "Path": "official_rhinocommon_api_reference.md",
+      "FileName": "official_rhinocommon_api_reference.md",
+      "Title": "official-rhinocommon-api-reference",
+      "Description": "低频使用的官方 RhinoCommon API 查证 skill。仅当正在编写/修改 C# 且具体 RhinoCommon/Grasshopper SDK 类、方法、构造函数、属性、枚举或参数顺序不确定，已有代码出现 API 编译错误，涉及 RhinoDoc/Bake/图层/标注/Clipping 等高风险文档操作，或用户明确要求查官方 API 时使用；普通 GH 建模、已有 reference/skill 可复用、基础几何逻辑明确时不要触发。",
+      "Tags": [
+        "grasshopper",
+        "csharp",
+        "visual",
+        "reference",
+        "web"
+      ],
+      "Workflows": [
+        3,
+        4,
+        6,
+        5,
+        10,
+        11,
+        14,
+        1,
+        2
+      ],
+      "Quality": "official",
+      "Verified": true,
+      "LastVerifiedAt": "",
+      "TokenEstimate": 1453
+    },
+    {
+      "Id": "official-rhino-axis-csharp",
+      "Path": "official_rhino_axis_csharp.md",
+      "FileName": "official_rhino_axis_csharp.md",
+      "Title": "official-rhino-axis-csharp",
+      "Description": "官方 reference。用于只创建建筑轴网轴线的 Grasshopper C# Script 画布；当用户说创建轴网、生成轴线、建筑轴线、结构轴网、只有轴线、不需要尺寸标注，或要求复用 reference/01 axis.gh 时使用。若用户要求轴号泡泡、引线、逐跨尺寸或总尺寸，应优先使用 official-rhino-axis-with-dimensions-csharp 和 reference/00 axis with dimensions.gh。",
+      "Tags": [
+        "grasshopper",
+        "csharp",
+        "reference"
+      ],
+      "Workflows": [
+        3,
+        4,
+        10,
+        11,
+        1,
+        2
+      ],
+      "Quality": "official",
+      "Verified": true,
+      "LastVerifiedAt": "",
+      "TokenEstimate": 797
+    },
+    {
+      "Id": "official-rhino-axis-dimension-adjust-csharp",
+      "Path": "official_rhino_axis_dimension_adjust_csharp.md",
+      "FileName": "official_rhino_axis_dimension_adjust_csharp.md",
+      "Title": "official-rhino-axis-dimension-adjust-csharp",
+      "Description": "官方 reference。用于 Rhino LinearDimension 轴网尺寸标注的二次调整；当任务明确涉及 reference/dimension.gh、reference/axis.gh 生成的 AxisDimensions 输出、AdjustedDimensions、尺寸文字高度、模型空间比例、尺寸线与对象距离、内外尺寸线间距，或需要调整 Rhino 原生尺寸对象时使用。普通正交“轴网并标注/5*5轴网并标注”默认优先使用 official-rhino-axis-with-dimensions-csharp 和 reference/00...",
+      "Tags": [
+        "grasshopper",
+        "csharp",
+        "reference"
+      ],
+      "Workflows": [
+        3,
+        4,
+        10,
+        11,
+        1,
+        2
+      ],
+      "Quality": "official",
+      "Verified": true,
+      "LastVerifiedAt": "",
+      "TokenEstimate": 1305
+    },
+    {
+      "Id": "official-rhino-axis-grid-csharp",
+      "Path": "official_rhino_axis_grid_csharp.md",
+      "FileName": "official_rhino_axis_grid_csharp.md",
+      "Title": "official-rhino-axis-grid-csharp",
+      "Description": "官方 reference。用于 Rhino 标注对象体系的建筑轴网生成；当任务明确需要 reference/axis.gh、斜交轴网、AxisAngleDeg、AxisDimensions、Rhino 原生 LinearDimension、轴网尺寸对象后续调整，或需要和 reference/dimension.gh 联动时使用。普通正交“轴网并标注/5*5轴网并标注”默认优先使用 official-rhino-axis-with-dimensions-csharp 和 reference/00 axis with dimensions.gh。",
+      "Tags": [
+        "grasshopper",
+        "csharp",
+        "reference"
+      ],
+      "Workflows": [
+        3,
+        4,
+        10,
+        11,
+        1,
+        2
+      ],
+      "Quality": "official",
+      "Verified": true,
+      "LastVerifiedAt": "",
+      "TokenEstimate": 1274
+    },
+    {
+      "Id": "official-rhino-axis-number-csharp",
+      "Path": "official_rhino_axis_number_csharp.md",
+      "FileName": "official_rhino_axis_number_csharp.md",
+      "Title": "official-rhino-axis-number-csharp",
+      "Description": "官方 reference。用于创建建筑轴网轴号泡泡、轴号文字和引线的 Grasshopper C# Script 画布；当用户说添加轴号、轴号泡泡、轴线编号、轴网编号、只要轴号、轴号圆、轴号引线，或要求复用 reference/03 axis number.gh 时使用。若用户要一次性创建轴线、尺寸和轴号，应优先使用 official-rhino-axis-with-dimensions-csharp 和 reference/00 axis with dimensions.gh。",
+      "Tags": [
+        "grasshopper",
+        "csharp",
+        "reference"
+      ],
+      "Workflows": [
+        3,
+        4,
+        10,
+        11,
+        1,
+        2
+      ],
+      "Quality": "official",
+      "Verified": true,
+      "LastVerifiedAt": "",
+      "TokenEstimate": 1279
+    },
+    {
+      "Id": "official-rhino-axis-with-dimensions-csharp",
+      "Path": "official_rhino_axis_with_dimensions_csharp.md",
+      "FileName": "official_rhino_axis_with_dimensions_csharp.md",
+      "Title": "official-rhino-axis-with-dimensions-csharp",
+      "Description": "官方 reference。用于一体化创建建筑轴网、轴号、引线、逐跨尺寸和总尺寸的 Grasshopper C# Script 画布；当用户说创建轴网、5*5轴网、轴网并标注、建筑轴线标注、轴号泡泡、尺寸标注，或要求复用 reference/00 axis with dimensions.gh 时使用。优先导入这个一体化 reference，而不是拆分重写 C#。",
+      "Tags": [
+        "grasshopper",
+        "csharp",
+        "reference"
+      ],
+      "Workflows": [
+        3,
+        4,
+        10,
+        11,
+        1,
+        2
+      ],
+      "Quality": "official",
+      "Verified": true,
+      "LastVerifiedAt": "",
+      "TokenEstimate": 1309
+    },
+    {
+      "Id": "official-rhino-batch-bake-csharp",
+      "Path": "official_rhino_batch_bake_csharp.md",
+      "FileName": "official_rhino_batch_bake_csharp.md",
+      "Title": "official-rhino-batch-bake-csharp",
+      "Description": "官方内置 C# Script。把多个 Grasshopper 输入中的 Rhino Geometry 批量 Bake 到指定 Rhino 图层；当任务需要按构件类别批量烘焙到轴线、柱子、玻璃立面、楼板、杆件、屋顶柱、梁等图层时读取。",
+      "Tags": [
+        "grasshopper",
+        "csharp"
+      ],
+      "Workflows": [
+        3,
+        4,
+        1,
+        2
+      ],
+      "Quality": "official",
+      "Verified": true,
+      "LastVerifiedAt": "",
+      "TokenEstimate": 1866
+    },
+    {
+      "Id": "official-rhino-dimensions-csharp",
+      "Path": "official_rhino_dimensions_csharp.md",
+      "FileName": "official_rhino_dimensions_csharp.md",
+      "Title": "official-rhino-dimensions-csharp",
+      "Description": "官方 reference。用于创建建筑轴网的逐跨尺寸和总尺寸标注 Grasshopper C# Script 画布；当用户说给轴网加尺寸、只要尺寸标注、逐跨尺寸、总尺寸、轴线尺寸、尺寸线和尺寸文字，或要求复用 reference/02 dimensions.gh 时使用。若用户要一次性创建轴线、轴号和尺寸，应优先使用 official-rhino-axis-with-dimensions-csharp 和 reference/00 axis with dimensions.gh。",
+      "Tags": [
+        "grasshopper",
+        "csharp",
+        "reference"
+      ],
+      "Workflows": [
+        3,
+        4,
+        10,
+        11,
+        1,
+        2
+      ],
+      "Quality": "official",
+      "Verified": true,
+      "LastVerifiedAt": "",
+      "TokenEstimate": 1178
+    },
+    {
+      "Id": "reference-index",
+      "Path": "reference_index.md",
+      "FileName": "reference_index.md",
+      "Title": "reference-index",
+      "Description": "在完成初步 GH 建模逻辑规划之后查阅；仅当条目与已定方案相关时，再调用 read_reference_json 读取 JSON 对照实现。若 reference_metadata.csharp_scripts 存在，应优先检查其中 C# 代码。",
+      "Tags": [
+        "grasshopper",
+        "csharp",
+        "reference",
+        "web",
+        "self-training"
+      ],
+      "Workflows": [
+        3,
+        4,
+        10,
+        11,
+        14,
+        12,
+        1,
+        2
+      ],
+      "Quality": "official",
+      "Verified": true,
+      "LastVerifiedAt": "",
+      "TokenEstimate": 1851
+    },
+    {
+      "Id": "system-csharp-mode",
+      "Path": "system_csharp_mode.md",
+      "FileName": "system_csharp_mode.md",
+      "Title": "system-csharp-mode",
+      "Description": "System skill for C# priority mode. Use when core Grasshopper logic must stay inside one or a few C# Script components, with only Params and Display helpers around them.",
+      "Tags": [
+        "grasshopper",
+        "csharp",
+        "reference",
+        "web"
+      ],
+      "Workflows": [
+        3,
+        4,
+        10,
+        11,
+        14,
+        1,
+        2
+      ],
+      "Quality": "official",
+      "Verified": true,
+      "LastVerifiedAt": "",
+      "TokenEstimate": 1792
+    },
+    {
+      "Id": "system-mixed-mode",
+      "Path": "system_mixed_mode.md",
+      "FileName": "system_mixed_mode.md",
+      "Title": "system-mixed-mode",
+      "Description": "System skill for mixed mode. Use when the agent should deliberately choose between native Grasshopper batteries and C# Script based on complexity, clarity, and maintainability.",
+      "Tags": [
+        "grasshopper",
+        "csharp",
+        "visual",
+        "web"
+      ],
+      "Workflows": [
+        3,
+        4,
+        6,
+        5,
+        14,
+        1,
+        2
+      ],
+      "Quality": "official",
+      "Verified": true,
+      "LastVerifiedAt": "",
+      "TokenEstimate": 1173
+    },
+    {
+      "Id": "trained-parametric-rectangular-window-genera-20260612-1659",
+      "Path": "trained_parametric_rectangular_window_genera_20260612_1659.md",
+      "FileName": "trained_parametric_rectangular_window_genera_20260612_1659.md",
+      "Title": "trained-parametric-rectangular-window-genera-20260612_1659",
+      "Description": "参数化矩形窗户生成。适用于类似任务：做一个外边缘可以吸附任何矩形形状的带框的窗户",
+      "Tags": [
+        "grasshopper",
+        "csharp",
+        "visual",
+        "self-training"
+      ],
+      "Workflows": [
+        3,
+        4,
+        6,
+        5,
+        12,
+        1,
+        2
+      ],
+      "Quality": "trained",
+      "Verified": false,
+      "LastVerifiedAt": "",
+      "TokenEstimate": 509
+    },
+    {
+      "Id": "workflow-optimization",
+      "Path": "workflow_optimization.md",
+      "FileName": "workflow_optimization.md",
+      "Title": "workflow-optimization",
+      "Description": "专注于提高批量构建效率、优化画布清理逻辑和提升响应速度。",
+      "Tags": [
+        "grasshopper",
+        "csharp",
+        "reference"
+      ],
+      "Workflows": [
+        3,
+        4,
+        10,
+        11,
+        1,
+        2
+      ],
+      "Quality": "experimental",
+      "Verified": false,
+      "LastVerifiedAt": "",
+      "TokenEstimate": 256
+    }
+  ]
+}
