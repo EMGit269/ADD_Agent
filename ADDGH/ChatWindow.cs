@@ -376,18 +376,21 @@ namespace ADDGH
 
 [Current layout mode: C# Priority]
 1. All core modeling logic must be implemented in one or more C# Script components. Keep the number of scripts small, but do not replace core logic with ordinary GH battery chains.
-2. Non-script components are limited to Params or Display categories, and only as inputs, outputs, previews, inspection, or debugging helpers.
-3. Do not propose or build ordinary Grasshopper components for geometry, math, data-tree, list-processing, transform, curve, surface, brep, mesh, or similar core logic in this mode.
-4. Use `create_csharp_script_component` for new core logic. Do not use `create_component_graph` or `create_script_component_graph` as a substitute for the core implementation.
-5. Existing C# Script logic must be edited with `edit_csharp_script_component`. Do not write C# source through generic value-setting tools.
-6. The C# body must contain only the RunScript method body. Do not include using statements, class declarations, full templates, or a custom RunScript signature.
-7. Requested C# outputs should use valid, explicit output names. Assign to those variables in the body.
-8. Do not use `modify_gh_component_ports` for C# Script components. Normal C# interface changes must be made through C# script creation/editing tools.
-9. Use Rhino C# Script menu type hint names for real port hints; list-like names such as curve[] or circle[] are ADD Agent conversion hints only, not native Rhino port hints.
-10. If port changes temporarily desync the script signature, recompute and then fix the method body. Do not rewrite the full source template to work around it.
-11. For each new user requirement, prefer extending the canvas with a new C# Script component that owns the new responsibility, instead of folding fresh logic into an existing healthy script.
-12. Starting with the second C# Script component in a solution, avoid dense inter-script wiring. If a script has many ports, connect only the 1-2 upstream data ports that are necessary and set the rest with safe internal defaults or local helper inputs.
-13. Treat an existing correct C# Script component as stable by default. Do not modify it unless required by bug fixing, shared interface changes, or a clearly better script boundary that reduces overall complexity.";
+2. Params and Display components may be added directly as inputs, outputs, panels, previews, or diagnostics around C# Script.
+3. Other non-script GH components are allowed only when there is a clear reason: `component_more_efficient` or `user_requested_component`.
+4. Do not propose or build ordinary Grasshopper components for geometry, math, data-tree, list-processing, transform, curve, surface, brep, mesh, or similar core logic unless one of those two reasons truly applies.
+5. Use `create_csharp_script_component` for new core logic. Do not use `create_component_graph` or `create_script_component_graph` as a substitute for the core implementation.
+6. Existing C# Script logic must be edited with `edit_csharp_script_component`. Do not write C# source through generic value-setting tools.
+7. The C# body must contain only the RunScript method body. Do not include using statements, class declarations, full templates, or a custom RunScript signature.
+8. Requested C# outputs should use valid, explicit output names. Assign to those variables in the body.
+9. Do not use `modify_gh_component_ports` for C# Script components. Normal C# interface changes must be made through C# script creation/editing tools.
+10. Use Rhino C# Script menu type hint names for real port hints; list-like names such as curve[] or circle[] are ADD Agent conversion hints only, not native Rhino port hints.
+11. If port changes temporarily desync the script signature, recompute and then fix the method body. Do not rewrite the full source template to work around it.
+12. For each new user requirement, prefer extending the canvas with a new C# Script component that owns the new responsibility, instead of folding fresh logic into an existing healthy script.
+13. Starting with the second C# Script component in a solution, avoid dense inter-script wiring. If a script has many ports, connect only the 1-2 upstream data ports that are necessary and set the rest with safe internal defaults or local helper inputs.
+14. Treat an existing correct C# Script component as stable by default. Do not modify it unless required by bug fixing, shared interface changes, or a clearly better script boundary that reduces overall complexity.
+15. When using `add_gh_component` or `create_component_graph` for non-Params/non-Display components in C# priority mode, choose `csharp_first_helper_reason`: `component_more_efficient` or `user_requested_component`, and explain it in `summary` or `csharp_first_helper_reason_detail`.
+16. If the reason is not one of those two, do not call helper component tools; write or edit C# instead.";
             }
 
             if (mode == LayoutMode.Battery)
