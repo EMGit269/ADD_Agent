@@ -1112,34 +1112,62 @@ namespace ADDGH
             "我看看..."
         };
 
+        private static void ApplyShimmerTextEffect(TextBlock text)
+        {
+            if (text == null) return;
+
+            var transform = new TranslateTransform(-1.2, 0);
+            var brush = new LinearGradientBrush
+            {
+                StartPoint = new Point(0, 0.5),
+                EndPoint = new Point(1, 0.5),
+                MappingMode = BrushMappingMode.RelativeToBoundingBox,
+                SpreadMethod = GradientSpreadMethod.Pad,
+                RelativeTransform = transform
+            };
+            brush.GradientStops.Add(new GradientStop(ThemeColor(Color.FromRgb(112, 118, 130), Color.FromRgb(96, 96, 96)), 0.00));
+            brush.GradientStops.Add(new GradientStop(ThemeColor(Color.FromRgb(112, 118, 130), Color.FromRgb(96, 96, 96)), 0.26));
+            brush.GradientStops.Add(new GradientStop(ThemeColor(Color.FromRgb(160, 168, 180), Color.FromRgb(150, 150, 150)), 0.40));
+            brush.GradientStops.Add(new GradientStop(ThemeColor(Color.FromRgb(200, 206, 216), Color.FromRgb(188, 188, 188)), 0.50));
+            brush.GradientStops.Add(new GradientStop(ThemeColor(Color.FromRgb(160, 168, 180), Color.FromRgb(150, 150, 150)), 0.60));
+            brush.GradientStops.Add(new GradientStop(ThemeColor(Color.FromRgb(112, 118, 130), Color.FromRgb(96, 96, 96)), 0.74));
+            brush.GradientStops.Add(new GradientStop(ThemeColor(Color.FromRgb(112, 118, 130), Color.FromRgb(96, 96, 96)), 1.00));
+            text.Foreground = brush;
+
+            var shimmer = new DoubleAnimation
+            {
+                From = -1.35,
+                To = 1.35,
+                Duration = TimeSpan.FromSeconds(2.2),
+                RepeatBehavior = RepeatBehavior.Forever
+            };
+            transform.BeginAnimation(TranslateTransform.XProperty, shimmer, HandoffBehavior.SnapshotAndReplace);
+        }
+
         private static void ShowThinkingAnimation(string status = "思考中...")
         {
             status = NormalizeThinkingStatus(status);
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
                 if (_thinkingBubble != null) {
                     var tb = _thinkingBubble.Child as TextBlock;
-                    if (tb != null) tb.Text = status;
+                    if (tb != null)
+                    {
+                        tb.Text = status;
+                        ApplyShimmerTextEffect(tb);
+                    }
                     return;
                 }
 
                 var text = new TextBlock {
                     Text = status,
-                    Foreground = ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(125, 125, 125)),
                     FontSize = 12,
                     Margin = new Thickness(5, 0, 0, 18),
                     VerticalAlignment = VerticalAlignment.Center,
                     FontWeight = FontWeights.Normal
                 };
+                ApplyShimmerTextEffect(text);
 
-                var breathingAnim = new DoubleAnimation {
-                    From = 1.0, To = 0.3,
-                    Duration = TimeSpan.FromSeconds(1),
-                    AutoReverse = true,
-                    RepeatBehavior = RepeatBehavior.Forever
-                };
-                text.BeginAnimation(UIElement.OpacityProperty, breathingAnim);
-
-                _thinkingBubble = new Border { Child = text, Opacity = 0.8, Margin = new Thickness(0, 2, 0, 2) };
+                _thinkingBubble = new Border { Child = text, Opacity = 1.0, Margin = new Thickness(0, 2, 0, 2) };
                 _chatPanel.Children.Add(_thinkingBubble);
                 _chatScroll.ScrollToEnd();
             }));

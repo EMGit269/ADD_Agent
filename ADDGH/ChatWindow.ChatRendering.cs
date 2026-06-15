@@ -274,26 +274,15 @@ namespace ADDGH
                 var headerGrid = new Grid { Cursor = Cursors.Hand, Background = Brushes.Transparent, Margin = new Thickness(0, 0, 0, 5) };
                 headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                 headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-                var statusIcon = new WpfPath {
-                    Data = Geometry.Parse("M5,9 A4,4 0 1 1 13,9 A4,4 0 1 1 5,9"),
-                    Fill = ThemeBrush(Color.FromRgb(122, 128, 140), Color.FromRgb(125, 125, 125)),
-                    Width = 18,
-                    Height = 18,
-                    Stretch = Stretch.None,
-                    Margin = new Thickness(0, 0, 6, 0),
-                    VerticalAlignment = VerticalAlignment.Center
-                };
                 var headerText = new TextBlock {
                     Text = string.IsNullOrWhiteSpace(title) ? "\u5df2\u601d\u8003" : title,
-                    Foreground = ThemeBrush(Color.FromRgb(92, 98, 110), Color.FromRgb(125, 125, 125)),
+                    Foreground = ThemeBrush(Color.FromRgb(112, 118, 130), Color.FromRgb(100, 100, 100)),
                     FontSize = 12,
                     VerticalAlignment = VerticalAlignment.Center
                 };
                 var toggleIcon = new WpfPath {
                     Data = Geometry.Parse("M4,6 L8,10 L12,6"),
-                    Stroke = ThemeBrush(Color.FromRgb(122, 128, 140), Color.FromRgb(105, 105, 105)),
+                    Stroke = ThemeBrush(Color.FromRgb(122, 128, 140), Color.FromRgb(96, 96, 96)),
                     StrokeThickness = 1.6,
                     StrokeStartLineCap = PenLineCap.Round,
                     StrokeEndLineCap = PenLineCap.Round,
@@ -306,14 +295,12 @@ namespace ADDGH
                     VerticalAlignment = VerticalAlignment.Center
                 };
 
-                Grid.SetColumn(statusIcon, 0);
-                Grid.SetColumn(headerText, 1);
-                Grid.SetColumn(toggleIcon, 2);
-                headerGrid.Children.Add(statusIcon);
+                Grid.SetColumn(headerText, 0);
+                Grid.SetColumn(toggleIcon, 1);
                 headerGrid.Children.Add(headerText);
                 headerGrid.Children.Add(toggleIcon);
 
-                var logPanel = new StackPanel { Margin = new Thickness(22, 4, 0, 0), Visibility = Visibility.Collapsed };
+                var logPanel = new StackPanel { Margin = new Thickness(0, 4, 0, 0), Visibility = Visibility.Collapsed };
 
                 var contentBorder = new Border {
                     Background = ThemeBrush(Color.FromRgb(248, 249, 251), Color.FromRgb(22, 22, 22)),
