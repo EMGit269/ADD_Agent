@@ -1713,6 +1713,39 @@ namespace ADDGH
                 || string.Equals(category, "Display", StringComparison.OrdinalIgnoreCase);
         }
 
+        private static bool IsCSharpFirstDirectComponent(Grasshopper.Kernel.IGH_DocumentObject obj)
+        {
+            string category = obj?.Category ?? "";
+            return string.Equals(category, "Params", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(category, "Display", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsValidCSharpFirstHelperReason(string reason)
+        {
+            return string.Equals(reason?.Trim(), "component_more_efficient", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(reason?.Trim(), "user_requested_component", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool ValidateCSharpFirstComponentCreation(Grasshopper.Kernel.IGH_DocumentObject obj, string requestedName, string reason, out string error)
+        {
+            error = null;
+            if (_layoutMode != LayoutMode.CSharpFirst)
+                return true;
+
+            if (IsCSharpFirstDirectComponent(obj))
+                return true;
+
+            if (IsValidCSharpFirstHelperReason(reason))
+                return true;
+
+            string displayName = !string.IsNullOrWhiteSpace(requestedName) ? requestedName : (obj?.Name ?? "component");
+            string category = string.IsNullOrWhiteSpace(obj?.Category) ? "Unknown" : obj.Category;
+            error = "Error: C# priority mode allows Params and Display components directly. "
+                + displayName + " belongs to " + category
+                + " and requires csharp_first_helper_reason: component_more_efficient or user_requested_component.";
+            return false;
+        }
+
         private static string BuildScriptModeAuxiliaryComponentError(Grasshopper.Kernel.IGH_DocumentObject obj, string requestedName)
         {
             string displayName = !string.IsNullOrWhiteSpace(requestedName) ? requestedName : (obj?.Name ?? "该电池");
@@ -1721,7 +1754,7 @@ namespace ADDGH
                 + displayName + " 属于 " + category + "，已拒绝创建。核心建模逻辑请写入 C# Script 电池。";
         }
 
-        private static string ExecuteAddGhComponent(string name, float x, float y, string label = null, string componentGuid = null, string graphMapperType = null, string value = null, double? min = null, double? max = null, int? decimals = null)
+        private static string ExecuteAddGhComponent(string name, float x, float y, string label = null, string componentGuid = null, string graphMapperType = null, string value = null, double? min = null, double? max = null, int? decimals = null, string csharpFirstHelperReason = null, string csharpFirstHelperReasonDetail = null)
         {
             string result = "";
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
@@ -1738,9 +1771,9 @@ namespace ADDGH
                     return;
                 }
 
-                if (!IsScriptModeAuxiliaryComponentAllowed(obj))
+                if (!ValidateCSharpFirstComponentCreation(obj, name, csharpFirstHelperReason, out string csharpFirstReasonError))
                 {
-                    result = BuildScriptModeAuxiliaryComponentError(obj, name);
+                    result = csharpFirstReasonError;
                     return;
                 }
 
@@ -4213,7 +4246,7 @@ namespace ADDGH
             return result;
         }
 
-        private static string ExecuteCreateComponentGraph(JArray components, JArray connections, string groupName = null)
+        private static string ExecuteCreateComponentGraph(JArray components, JArray connections, string groupName = null, string csharpFirstHelperReason = null, string csharpFirstHelperReasonDetail = null)
         {
             string result = "";
             Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
@@ -4244,6 +4277,12 @@ namespace ADDGH
                         var obj = InstantiateDocumentObjectFromLibrary(name ?? "", cguid);
 
                         if (obj != null) {
+                            if (!ValidateCSharpFirstComponentCreation(obj, name ?? alias, csharpFirstHelperReason, out string csharpFirstReasonError))
+                            {
+                                result = csharpFirstReasonError;
+                                return;
+                            }
+
                             obj.CreateAttributes();
                             obj.Attributes.Pivot = new System.Drawing.PointF(x, y);
                             if (!string.IsNullOrEmpty(label)) obj.NickName = label;

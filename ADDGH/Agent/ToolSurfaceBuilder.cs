@@ -92,7 +92,6 @@ namespace ADDGH.Agent
             }
             else if (IsMode(request.LayoutMode, "CSharpFirst"))
             {
-                blocked.Add("create_component_graph");
                 blocked.Add("create_script_component_graph");
                 blocked.Add("gh_native_script_editor");
                 blocked.Add("modify_gh_component_ports");
@@ -156,8 +155,17 @@ namespace ADDGH.Agent
                 JObject jo = JObject.FromObject(toolDefinition);
                 var fn = jo["function"] as JObject;
                 if (fn != null)
-                    fn["description"] = "C# priority mode helper tool: only add Params or Display components as inputs, outputs, preview, or debugging helpers for C# Script. Do not create core modeling components here; put core logic in create_csharp_script_component.";
-                return jo;
+                    fn["description"] = "C# priority mode controlled helper tool. Params and Display components may be added directly as inputs, outputs, panels, previews, or diagnostics around C# Script. Other Grasshopper components are allowed only when explicitly justified with csharp_first_helper_reason. Do not replace core C# modeling logic with ordinary GH chains.";
+                return AddCSharpFirstHelperReasonFields(jo);
+            }
+
+            if (string.Equals(name, "create_component_graph", StringComparison.OrdinalIgnoreCase))
+            {
+                JObject jo = JObject.FromObject(toolDefinition);
+                var fn = jo["function"] as JObject;
+                if (fn != null)
+                    fn["description"] = "C# priority mode controlled batch helper tool. Params and Display components may be created directly around C# Script. Any other GH component in the batch requires csharp_first_helper_reason. Keep non-script graph logic small and justified; put main modeling logic in create_csharp_script_component.";
+                return AddCSharpFirstHelperReasonFields(jo);
             }
 
             if (string.Equals(name, "set_gh_component_value", StringComparison.OrdinalIgnoreCase))
@@ -177,6 +185,27 @@ namespace ADDGH.Agent
                     fn["description"] = "C# priority fallback repair tool for dynamic ports. Do not use this as the normal way to change C# Script inputs or outputs; prefer create_csharp_script_component for new scripts and edit_csharp_script_component for existing script logic. Use only when a C# Script or other variable-parameter component is visibly out of sync and a direct port repair is required.";
                 return jo;
             }
+
+            return toolDefinition;
+        }
+
+        private static JObject AddCSharpFirstHelperReasonFields(JObject toolDefinition)
+        {
+            var parameters = toolDefinition["function"]?["parameters"] as JObject;
+            var properties = parameters?["properties"] as JObject;
+            if (properties == null) return toolDefinition;
+
+            properties["csharp_first_helper_reason"] = new JObject
+            {
+                ["type"] = "string",
+                ["enum"] = new JArray("component_more_efficient", "user_requested_component"),
+                ["description"] = "Required in C# priority mode only when adding non-Params/non-Display GH components. Choose exactly one reason: component_more_efficient, or user_requested_component."
+            };
+            properties["csharp_first_helper_reason_detail"] = new JObject
+            {
+                ["type"] = "string",
+                ["description"] = "Optional short Chinese explanation of why this non-script component/graph is justified."
+            };
 
             return toolDefinition;
         }

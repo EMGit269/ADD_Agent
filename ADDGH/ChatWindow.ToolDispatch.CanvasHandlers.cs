@@ -41,6 +41,12 @@ namespace ADDGH
         {
             if (funcName == "add_gh_component")
             {
+                if (!ValidateOptionalCSharpFirstHelperReason(argsObj, out string reasonError))
+                {
+                    result.ToolResult = reasonError;
+                    return true;
+                }
+
                 string label = argsObj["label"]?.ToString();
                 string name = argsObj["name"]?.ToString();
                 string cguid = argsObj["component_guid"]?.ToString();
@@ -60,7 +66,9 @@ namespace ADDGH
                         argsObj["value"]?.ToString(),
                         argsObj["min"]?.ToObject<double?>(),
                         argsObj["max"]?.ToObject<double?>(),
-                        argsObj["decimals"]?.ToObject<int?>());
+                        argsObj["decimals"]?.ToObject<int?>(),
+                        argsObj["csharp_first_helper_reason"]?.ToString(),
+                        argsObj["csharp_first_helper_reason_detail"]?.ToString());
                     if (!result.ToolResult.StartsWith("Error:")) result.AddComp++;
                 }
                 return true;
@@ -112,6 +120,12 @@ namespace ADDGH
 
             if (funcName == "create_component_graph")
             {
+                if (!ValidateOptionalCSharpFirstHelperReason(argsObj, out string reasonError))
+                {
+                    result.ToolResult = reasonError;
+                    return true;
+                }
+
                 bool autoGroup = argsObj["auto_group"]?.ToObject<bool>() ?? false;
                 string groupName = argsObj["group_name"]?.ToString();
                 if (string.IsNullOrEmpty(groupName))
@@ -119,7 +133,9 @@ namespace ADDGH
                 result.ToolResult = ExecuteCreateComponentGraph(
                     argsObj["components"] as JArray,
                     argsObj["connections"] as JArray,
-                    groupName);
+                    groupName,
+                    argsObj["csharp_first_helper_reason"]?.ToString(),
+                    argsObj["csharp_first_helper_reason_detail"]?.ToString());
                 if (!result.ToolResult.StartsWith("Error:", StringComparison.OrdinalIgnoreCase))
                 {
                     result.AddComp += ReadResultInt(result.ToolResult, "created_components");
@@ -139,6 +155,27 @@ namespace ADDGH
             }
 
             return false;
+        }
+
+        private static bool ValidateOptionalCSharpFirstHelperReason(JObject argsObj, out string error)
+        {
+            error = null;
+            if (_layoutMode != LayoutMode.CSharpFirst)
+                return true;
+
+            string reason = argsObj?["csharp_first_helper_reason"]?.ToString();
+            if (string.IsNullOrWhiteSpace(reason))
+                return true;
+
+            switch (reason.Trim())
+            {
+                case "component_more_efficient":
+                case "user_requested_component":
+                    return true;
+                default:
+                    error = "Error: invalid csharp_first_helper_reason. Choose one of: component_more_efficient, user_requested_component.";
+                    return false;
+            }
         }
     }
 }
