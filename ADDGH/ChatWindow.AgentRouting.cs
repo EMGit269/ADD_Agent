@@ -161,13 +161,17 @@ namespace ADDGH
                 return _toolSurfaceBuilder.Build(new ToolSurfaceRequest
                 {
                     ToolDefinitions = toolDefinitions,
+                    UseModeFilters = true,
+                    LayoutMode = _layoutMode.ToString(),
+                    AgentMode = _agentMode.ToString(),
+                    ShowPlanStepsToolName = ShowPlanStepsTool.FunctionName,
+                    ShowReferenceOptionsToolName = ShowReferenceOptionsTool.FunctionName,
+                    GetToolName = GetToolDefinitionName,
                     WorkflowFilter = ApplyWorkflowToolSurfacePolicy,
                     UseWorkflowFilter = DeploymentOptions.UseToolSurfacePolicy,
                     Route = _currentWorkflowRoute,
                     LogDebug = msg => AddGhLog.Debug(msg)
                 }
-                .AddPreFilter(FilterToolsForLayoutMode)
-                .AddPreFilter(FilterToolsForAgentMode)
                 .AddPreFilter(FilterToolsForVisionContext));
             }
             catch (Exception ex)

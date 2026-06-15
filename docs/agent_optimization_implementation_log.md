@@ -323,3 +323,20 @@ ADDGH\bin\Debug\net48\ADDGH.gha
 - `ChatWindow.cs` 的 `BuildInitialSystemMessages()` 不再直接拼装多个上下文来源，改为调用 `_contextPipeline.BuildInitialSystemMessages(...)`。
 
 这一步的目标不是改变行为，而是先把 tool surface 和 context assembly 两个策略出口从 `ChatWindow` 主体中收束出来，为后续迁移 `ToolSchemaFactory`、`ToolExecutor`、`ToolResultPipeline` 打基础。
+
+## 11. 2026-06-15 追加落地：ToolSurfaceBuilder 接管 mode filter
+
+本轮继续收束工具面策略：
+
+- `ADDGH/Agent/ToolSurfaceBuilder.cs` 接管 layout mode / agent mode 工具过滤规则。
+- 原 `ChatWindow.ToolDefinitions.cs` 中的 `FilterToolsForLayoutMode`、`FilterToolsForAgentMode`、`RestrictAddComponentToolForScriptMode` 已删除。
+- `ChatWindow.AgentRouting.cs` 只把当前 layout/agent mode、计划工具名、参考选择工具名、tool name resolver 传给 `ToolSurfaceBuilder`。
+
+行为目标保持不变：
+
+- Battery 模式隐藏 C# Script 创建工具。
+- CSharpFirst 模式隐藏批量原生图、legacy script graph、native editor、动态端口修改等工具。
+- Plan 模式只暴露只读/规划相关工具和 `show_plan_steps`。
+- CSharpFirst 模式下 `add_gh_component`、`set_gh_component_value`、`modify_gh_component_ports` 的描述仍按旧逻辑收窄。
+
+这一步让 `ChatWindow.ToolDefinitions.cs` 更接近“只定义工具 schema”，不再承担 mode policy。
