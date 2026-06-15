@@ -887,12 +887,24 @@ namespace ADDGH
             textBuilder.AppendLine("你是结果验收视觉评估器。不要调用工具，不要规划完整建模方案。");
             textBuilder.AppendLine("任务：对比用户原始图像参考/问题图片与当前 Rhino 结果截图，判断当前结果是否满足目标。");
             textBuilder.AppendLine("若没有参考图，或图片本身是在指出问题，则重点判断当前结果是否仍存在明显偏差。");
+            textBuilder.AppendLine("审查标准略严格：先核对轮廓/比例/数量/位置/层级/颜色/可见构件是否与用户目标一致；有明显缺失、错位、比例失真、颜色不符或截图看不清时，不要判为基本达标。");
             textBuilder.AppendLine("按以下标题顺序输出，保持简洁：");
+            textBuilder.AppendLine("【核查依据】");
             textBuilder.AppendLine("【是否达标】");
             textBuilder.AppendLine("【主要偏差】");
             textBuilder.AppendLine("【偏差性质】");
             textBuilder.AppendLine("【给执行模型的反馈】");
-            textBuilder.AppendLine("要求：如果没有明显问题，也要明确写“基本达标”；偏差最多写 5 项，反馈只写局部修正方向。");
+            textBuilder.AppendLine("【是否适合沉淀skill】");
+            textBuilder.AppendLine("【结构化判定JSON】");
+            textBuilder.AppendLine("要求：先在【核查依据】用 2-4 条短句说明你检查了哪些可见要点；只有没有明显问题时才写“基本达标”；存在不确定或看不清时写“未达标/需复核”；偏差最多写 5 项，反馈只写局部修正方向。");
+            textBuilder.AppendLine("是否沉淀 skill 由你独立判断：如果当前结果达标、实现过程稳定、对后续相似任务有复用价值，写“适合沉淀skill”；如果任务过于一次性、结果不稳定、仍需人工确认或过程不可复用，写“不适合沉淀skill”。");
+            textBuilder.AppendLine("如果适合沉淀 skill，请你自行提炼一个简短、通用、可复用的 skill_title 和英文小写 skill_slug；不要直接复制用户原始对话，slug 只用 a-z、0-9、下划线，表达任务类型或技术模式。");
+            textBuilder.AppendLine("同时写出具体的 skill_markdown 正文，由你根据用户目标、执行模型结论、GH 检查和截图结果总结，不要写空泛模板。正文必须包含：触发条件、适用任务、推荐工具/电池流程、关键参数、常见失败与修复、视觉检查要点、成功案例摘要。");
+            textBuilder.AppendLine("skill_markdown 应具体到可复用操作经验，例如关键组件、端口连接、C# Script 输出、颜色/slider 控制、数据树/Null 检查、预览和截图核查要点；不要只写“按用户要求执行”。");
+            textBuilder.AppendLine("最后必须输出一个 JSON 代码块，供宿主程序读取，不要省略。格式如下：");
+            textBuilder.AppendLine("```json");
+            textBuilder.AppendLine("{\"pass\":true,\"status\":\"基本达标\",\"skill_suitable\":true,\"skill_title\":\"参数化曲面阵列可视化\",\"skill_slug\":\"parametric_surface_array_visualization\",\"skill_reason\":\"结果达标且流程可复用\",\"skill_markdown\":\"## 触发条件\\n- ...\\n\\n## 推荐工具流程\\n- ...\\n\\n## 关键参数\\n- ...\\n\\n## 常见失败与修复\\n- ...\\n\\n## 视觉检查要点\\n- ...\\n\\n## 成功案例摘要\\n- ...\",\"confidence\":0.85}");
+            textBuilder.AppendLine("```");
 
             if (!string.IsNullOrWhiteSpace(originalInput))
             {
@@ -951,7 +963,7 @@ namespace ADDGH
                     new JObject
                     {
                         ["role"] = "system",
-                        ["content"] = "你是结果验收视觉评估器。你只负责比较图片与当前结果截图，给出是否达标、主要偏差和局部修正方向；不要调用工具，不要输出无关说明。"
+                        ["content"] = "你是偏严格的结果验收视觉评估器。你只负责比较用户要求、参考图和当前结果截图，先给出简短核查依据，再给出是否达标、主要偏差、局部修正方向和是否适合沉淀skill；不要调用工具，不要输出无关说明。"
                     },
                     new JObject
                     {

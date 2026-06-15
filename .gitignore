@@ -10,3 +10,21 @@ CanvasWeb/runtime/
 *.suo
 *.user
 .vs/
+
+# Build / verification output
+ADDGH/obj_verify/
+ADDGH/bin/
+ADDGH/obj/
+
+# Packaged release artifacts should be uploaded to GitHub Releases instead of committed.
+release/ADD_Agent_Install_*/
+release/*.zip
+release/*.rar
+*.zip
+*.rar
+*.7z
+
+# Generated local indexes and temporary logs.
+reference/api_index/
+*.log
+*.tmp

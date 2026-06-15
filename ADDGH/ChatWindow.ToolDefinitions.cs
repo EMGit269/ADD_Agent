@@ -543,7 +543,7 @@ namespace ADDGH
                 ShowReferenceOptionsTool.GetApiToolDefinition(),
                 ShowPlanStepsTool.GetApiToolDefinition()
             };
-            return FilterToolsForVisionContext(FilterToolsForAgentMode(FilterToolsForLayoutMode(toolDefinitions)));
+            return ApplyWorkflowToolSurfacePolicy(FilterToolsForVisionContext(FilterToolsForAgentMode(FilterToolsForLayoutMode(toolDefinitions))));
         }
 
         private static object GetCreateScriptComponentGraphToolDefinition()
@@ -775,6 +775,10 @@ namespace ADDGH
             var blocked = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             blocked.Add("capture_rhino_viewport");
             blocked.Add("prepare_visual_review_preview");
+            if (_agentMode == AgentMode.SelfTrain)
+            {
+                blocked.Add("create_gh_skill");
+            }
             if (_layoutMode == LayoutMode.Battery)
             {
                 blocked.Add("create_csharp_script_component");

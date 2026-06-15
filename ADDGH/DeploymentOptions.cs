@@ -65,5 +65,24 @@ namespace ADDGH
         /// </summary>
         public static bool MergeSkillsIntoSameSystemPromptAsLibraryIndex =>
             string.Equals(Environment.GetEnvironmentVariable("ADDGH_MERGE_TIER0_SYSTEM"), "1", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>启用 workflow router 记录；默认开启，但 P0 只记录 route，不改变工具暴露与执行行为。</summary>
+        public static bool UseWorkflowRouter =>
+            !string.Equals(Environment.GetEnvironmentVariable("ADDGH_USE_WORKFLOW_ROUTER"), "0", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>启用 ContextLedger prompt 注入；默认关闭，避免 P0 改变模型行为。</summary>
+        public static bool UseContextLedgerPrompt =>
+            string.Equals(Environment.GetEnvironmentVariable("ADDGH_USE_CONTEXT_LEDGER_PROMPT"), "1", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>启用结构化 skill 索引；默认开启，可用 ADDGH_USE_SKILL_CATALOG_INDEX=0 回退旧扫描逻辑。</summary>
+        public static bool UseSkillCatalogIndex =>
+            !string.Equals(Environment.GetEnvironmentVariable("ADDGH_USE_SKILL_CATALOG_INDEX"), "0", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>启用 workflow-aware 工具面过滤；默认关闭，避免 P2 初期改变模型行为。</summary>
+        public static bool UseToolSurfacePolicy =>
+            string.Equals(Environment.GetEnvironmentVariable("ADDGH_USE_TOOL_SURFACE_POLICY"), "1", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>ContextLedger 注入 system prompt 的最大字符数。</summary>
+        public const int ContextLedgerPromptMaxChars = 4000;
     }
 }

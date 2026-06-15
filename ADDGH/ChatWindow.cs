@@ -137,6 +137,7 @@ namespace ADDGH
         private static Button _btnThemeSystem;
         private static MenuItem _menuAgentModeCreate;
         private static MenuItem _menuAgentModePlan;
+        private static MenuItem _menuAgentModeSelfTrain;
         private static MenuItem _menuModeBattery;
         private static MenuItem _menuModeCSharp;
         private static MenuItem _menuModeMixed;
@@ -160,7 +161,8 @@ namespace ADDGH
         private enum AgentMode
         {
             Create,
-            Plan
+            Plan,
+            SelfTrain
         }
 
         private enum DisplayMode
@@ -241,8 +243,10 @@ namespace ADDGH
         {
             string prompt = SYSTEM_PROMPT + BuildModePrompt(_layoutMode);
             prompt += GetModeSystemSkillPrompt();
-            if (_agentMode == AgentMode.Create && _layoutMode == LayoutMode.CSharpFirst)
+            if (IsExecutionAgentMode() && _layoutMode == LayoutMode.CSharpFirst)
                 prompt += BuildCSharpDedicatedToolPrompt();
+            if (_agentMode == AgentMode.SelfTrain)
+                prompt += BuildSelfTrainingPrompt();
             return prompt;
         }
 
@@ -263,7 +267,7 @@ namespace ADDGH
                 if (!File.Exists(path))
                     return "";
 
-                string raw = File.ReadAllText(path);
+                string raw = File.ReadAllText(path, Encoding.UTF8);
                 string content = StripSkillFrontmatter(raw).Trim();
                 return string.IsNullOrWhiteSpace(content) ? "" : "\n\n" + content;
             }
@@ -405,13 +409,15 @@ namespace ADDGH
 
         private static string BuildInitialSystemContent()
         {
-            string typedPrompt = _agentMode == AgentMode.Create ? BuildCSharpTypedInputPrompt() : "";
+            string typedPrompt = IsExecutionAgentMode() ? BuildCSharpTypedInputPrompt() : "";
             return BuildSystemPrompt() + typedPrompt + GetSkillsSummary();
         }
 
         private static List<object> BuildInitialSystemMessages()
         {
-            string basePrompt = BuildSystemPrompt() + (_agentMode == AgentMode.Create ? BuildCSharpTypedInputPrompt() : "");
+            string basePrompt = BuildSystemPrompt()
+                + (IsExecutionAgentMode() ? BuildCSharpTypedInputPrompt() : "")
+                + BuildAgentContextLedgerPrompt();
             string skills = GetSkillsSummary();
             var list = new List<object>();
 
@@ -913,6 +919,7 @@ namespace ADDGH
             _visualReviewPreviewComponentId = null;
             _visualReviewTargetSourceId = null;
             _visualReviewTargetOutputIndex = 0;
+            ResetSelfTrainingTransientState();
         }
 
         private static void UpdateLayoutModeButtons()
@@ -948,7 +955,9 @@ namespace ADDGH
 
         private static void UpdateAgentModeButtons()
         {
-            string label = _agentMode == AgentMode.Plan ? "Plan" : "Create";
+            string label = _agentMode == AgentMode.Plan
+                ? "Plan"
+                : (_agentMode == AgentMode.SelfTrain ? "自训练" : "Create");
 
             if (_btnAgentModeDropdown != null)
             {
@@ -961,6 +970,8 @@ namespace ADDGH
                 _menuAgentModeCreate.Header = (_agentMode == AgentMode.Create ? "✓ " : "   ") + "Create";
             if (_menuAgentModePlan != null)
                 _menuAgentModePlan.Header = (_agentMode == AgentMode.Plan ? "✓ " : "   ") + "Plan";
+            if (_menuAgentModeSelfTrain != null)
+                _menuAgentModeSelfTrain.Header = (_agentMode == AgentMode.SelfTrain ? "✓ " : "   ") + "自训练";
         }
 
         private static List<object> _messages = new List<object>();
@@ -2178,6 +2189,7 @@ namespace ADDGH
                                         </ContextMenu.Resources>
                                         <MenuItem x:Name=""MenuAgentModeCreate"" Header=""Create""/>
                                         <MenuItem x:Name=""MenuAgentModePlan"" Header=""Plan""/>
+                                        <MenuItem x:Name=""MenuAgentModeSelfTrain"" Header=""自训练""/>
                                     </ContextMenu>
                                 </Button.ContextMenu>
                             </Button>
@@ -2578,6 +2590,7 @@ namespace ADDGH
             _btnThemeSystem = (Button)_window.FindName("BtnThemeSystem");
             _menuAgentModeCreate = (MenuItem)_window.FindName("MenuAgentModeCreate");
             _menuAgentModePlan = (MenuItem)_window.FindName("MenuAgentModePlan");
+            _menuAgentModeSelfTrain = (MenuItem)_window.FindName("MenuAgentModeSelfTrain");
             _menuModeBattery = (MenuItem)_window.FindName("MenuModeBattery");
             _menuModeCSharp = (MenuItem)_window.FindName("MenuModeCSharp");
             _menuModeMixed = (MenuItem)_window.FindName("MenuModeMixed");
@@ -2605,6 +2618,7 @@ namespace ADDGH
             }
             if (_menuAgentModeCreate != null) _menuAgentModeCreate.Click += (s, e) => SetAgentMode(AgentMode.Create);
             if (_menuAgentModePlan != null) _menuAgentModePlan.Click += (s, e) => SetAgentMode(AgentMode.Plan);
+            if (_menuAgentModeSelfTrain != null) _menuAgentModeSelfTrain.Click += (s, e) => SetAgentMode(AgentMode.SelfTrain);
             if (_btnModeBattery != null) _btnModeBattery.Click += (s, e) => SetLayoutMode(LayoutMode.Battery);
             if (_btnModeMixed != null) _btnModeMixed.Click += (s, e) => SetLayoutMode(LayoutMode.Mixed);
             if (_btnModeCSharp != null) _btnModeCSharp.Click += (s, e) => SetLayoutMode(LayoutMode.CSharpFirst);
@@ -2930,6 +2944,7 @@ namespace ADDGH
             btnNewChat.Click += (s, e) => {
                 _activeHistoryId = null;
                 ResetTransientConversationState();
+                ResetAgentContextLedger();
                 _messages.Clear();
                 _messages.AddRange(BuildInitialSystemMessages());
                 _displayMessages?.Clear();
@@ -3489,10 +3504,10 @@ namespace ADDGH
                 string secondaryPath = System.IO.Path.Combine(directory, "library_secondary.json");
                 string tertiaryPath = System.IO.Path.Combine(directory, "library_tertiary.json");
                 string hiddenPath = System.IO.Path.Combine(directory, "library_hidden.json");
-                System.IO.File.WriteAllText(primaryPath, sbPrimary.ToString());
-                System.IO.File.WriteAllText(secondaryPath, sbSecondary.ToString());
-                System.IO.File.WriteAllText(tertiaryPath, sbTertiary.ToString());
-                System.IO.File.WriteAllText(hiddenPath, sbHidden.ToString());
+                System.IO.File.WriteAllText(primaryPath, sbPrimary.ToString(), System.Text.Encoding.UTF8);
+                System.IO.File.WriteAllText(secondaryPath, sbSecondary.ToString(), System.Text.Encoding.UTF8);
+                System.IO.File.WriteAllText(tertiaryPath, sbTertiary.ToString(), System.Text.Encoding.UTF8);
+                System.IO.File.WriteAllText(hiddenPath, sbHidden.ToString(), System.Text.Encoding.UTF8);
 
                 // CSV文件
                 string csvPrimaryPath = System.IO.Path.Combine(directory, "library_primary.csv");
@@ -3769,6 +3784,9 @@ namespace ADDGH
             _currentTurnAttachments = CloneAttachments(attachmentsToSend);
             _activeImageInputRoute = ResolveImageInputRoute(input, attachmentsToSend);
             ResetVisualWorkflowState(input, attachmentsToSend);
+            ResetSelfTrainingState(input);
+            string modelInput = BuildSelfTrainingModelInput(input);
+            PrepareAgentWorkflowRoute(input, modelInput, attachmentsToSend);
             if (hasImageAttachments && !string.IsNullOrWhiteSpace(_queuedImmediateSendVisionSourceInputOverride))
                 _finalVisualReviewSourceInput = _queuedImmediateSendVisionSourceInputOverride;
             _queuedImmediateSendVisionSourceInputOverride = null;
@@ -3788,13 +3806,13 @@ namespace ADDGH
                 string imageContextNote = includeImagesInPrimaryMessage
                     ? null
                     : BuildPrimaryModelImageContextNote(_activeImageInputRoute, attachmentsToSend);
-                var contentArr = BuildUserMessageContent(input, attachmentsToSend, includeImagesInPrimaryMessage, imageContextNote);
+                var contentArr = BuildUserMessageContent(modelInput, attachmentsToSend, includeImagesInPrimaryMessage, imageContextNote);
                 var userMessage = new { role = "user", content = contentArr };
                 _messages.Add(userMessage);
                 AddDisplayMessage(userMessage);
                 AppendUserMessageWithAttachments(displayInput, attachmentsToSend);
             } else {
-                var userMessage = new { role = "user", content = input };
+                var userMessage = new { role = "user", content = modelInput };
                 _messages.Add(userMessage);
                 AddDisplayMessage(userMessage);
                 AppendBubble(displayInput, true);
@@ -3815,7 +3833,7 @@ namespace ADDGH
 
             try {
                 ShowThinkingAnimation();
-                if (!await PrepareImageDrivenExecutionContextAsync(input, attachmentsToSend, _cts.Token))
+                if (!await PrepareImageDrivenExecutionContextAsync(modelInput, attachmentsToSend, _cts.Token))
                     return;
 
                 string apiKey = GetProviderRuntimeSettings().ApiKey;
@@ -5036,6 +5054,7 @@ namespace ADDGH
 
                         if (dispatch.EndApiRoundAwaitingUser)
                         {
+                            RecordAgentToolEvidence(funcName, dispatch.ToolResult ?? "");
                             if (operationCards.Count > 0)
                                 messageNode["tool_operation_summaries"] = BuildToolOperationSummaryArray(operationCards);
                             SyncActiveHistoryConversation();
@@ -5059,6 +5078,7 @@ namespace ADDGH
                             latestStatsUndoId = dispatch.UndoId;
                         }
 
+                        RecordAgentToolEvidence(funcName, toolResult);
                         var toolMessage = new { role = "tool", tool_call_id = callId, name = funcName, content = toolResult };
                         _messages.Add(toolMessage);
                         AddDisplayMessage(toolMessage);
@@ -5076,7 +5096,11 @@ namespace ADDGH
                         AppendColoredStatsMessage(addComp, delComp, addConn, delConn, addCodeLines, delCodeLines, latestStatsUndoId);
                     }
 
-                    if (turnMutatedGrasshopperCanvas
+                    if (turnMutatedGrasshopperCanvas && IsSelfTrainingMode())
+                    {
+                        MarkSelfTrainingCanvasMutationForReview(operationCards);
+                    }
+                    else if (turnMutatedGrasshopperCanvas
                         && _agentMode == AgentMode.Create
                         && _finalVisualReviewSourceImages != null
                         && _finalVisualReviewSourceImages.Any(a => a.Kind == AttachmentKind.Image && !string.IsNullOrEmpty(a.Base64)))
@@ -5163,7 +5187,7 @@ namespace ADDGH
                     string fileName = System.IO.Path.GetFileName(file);
                     if (fileName.Equals("index.md", StringComparison.OrdinalIgnoreCase)) continue;
 
-                    string content = System.IO.File.ReadAllText(file);
+                    string content = System.IO.File.ReadAllText(file, Encoding.UTF8);
                     var match = System.Text.RegularExpressions.Regex.Match(content, @"---\s*name:\s*(.*?)\s*description:\s*(.*?)\s*---", System.Text.RegularExpressions.RegexOptions.Singleline);
 
                     string name = fileName;
@@ -5205,6 +5229,10 @@ namespace ADDGH
         private static string GetSkillsSummary()
         {
             try {
+                string catalogSummary = BuildSkillCatalogSummary();
+                if (catalogSummary != null)
+                    return catalogSummary;
+
                 string skillsPath = GetSkillsDirectory();
                 if (!System.IO.Directory.Exists(skillsPath)) return "";
 
@@ -5213,7 +5241,7 @@ namespace ADDGH
                     string fileName = System.IO.Path.GetFileName(file);
                     if (fileName.Equals("index.md", StringComparison.OrdinalIgnoreCase)) continue;
 
-                    string content = System.IO.File.ReadAllText(file);
+                    string content = System.IO.File.ReadAllText(file, Encoding.UTF8);
                     // 匹配 YAML Frontmatter: --- name: xxx description: xxx ---
                     var match = System.Text.RegularExpressions.Regex.Match(content, @"---\s*name:\s*(.*?)\s*description:\s*(.*?)\s*---", System.Text.RegularExpressions.RegexOptions.Singleline);
 

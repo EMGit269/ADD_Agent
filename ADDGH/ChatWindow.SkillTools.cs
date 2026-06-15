@@ -4,6 +4,7 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Text;
+using ADDGH.Agent;
 using Grasshopper.Kernel;
 using Grasshopper.Kernel.Special;
 using Newtonsoft.Json.Linq;
@@ -15,12 +16,17 @@ namespace ADDGH
         private static string ExecuteReadSkillFile(string fileName)
         {
             try {
+                string catalogResult = ExecuteReadSkillFileWithCatalog(fileName);
+                if (catalogResult != null)
+                    return catalogResult;
+
                 string skillsPath = GetSkillsDirectory();
                 if (!fileName.EndsWith(".md")) fileName += ".md";
                 string filePath = System.IO.Path.GetFullPath(System.IO.Path.Combine(skillsPath, System.IO.Path.GetFileName(fileName)));
 
                 if (System.IO.File.Exists(filePath)) {
-                    return System.IO.File.ReadAllText(filePath);
+                    _contextLedger.RecordLoadedSkill(Path.GetFileNameWithoutExtension(fileName), Path.GetFileName(fileName), "read_skill_file legacy path");
+                    return System.IO.File.ReadAllText(filePath, Encoding.UTF8);
                 }
                 return $"Error: 找不到技能文件 {fileName}";
             } catch (Exception ex) {
@@ -45,7 +51,9 @@ namespace ADDGH
                 if (!System.IO.File.Exists(filePath))
                     return $"Error: 找不到参考 JSON 文件 {safeName}";
 
-                return System.IO.File.ReadAllText(filePath, Encoding.UTF8);
+                string json = System.IO.File.ReadAllText(filePath, Encoding.UTF8);
+                _contextLedger.RecordReference(Path.GetFileNameWithoutExtension(safeName), safeName, ToolResultCompactor.Compact(json, 240));
+                return json;
             } catch (Exception ex) {
                 return "Error: " + ex.Message;
             }
@@ -177,6 +185,8 @@ namespace ADDGH
                         result = "Error: " + ex.Message;
                     }
                 }));
+                if (!result.StartsWith("Error:", StringComparison.OrdinalIgnoreCase))
+                    _contextLedger.RecordReference(Path.GetFileNameWithoutExtension(name), name, result);
                 return result;
             }
             catch (Exception ex)
@@ -195,6 +205,7 @@ namespace ADDGH
 
                 string fileContent = $"---\nname: {name}\ndescription: {description}\n---\n\n{content}";
                 System.IO.File.WriteAllText(filePath, fileContent, Encoding.UTF8);
+                UpsertSkillCatalogEntry(System.IO.Path.GetFileName(filePath), "experimental", false);
 
                 Rhino.RhinoApp.InvokeOnUiThread((Action)(() => {
                     UpdateSkillLibraryUI();

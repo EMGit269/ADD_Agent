@@ -68,7 +68,7 @@ namespace ADDGH
             if (IsVisualReviewTemporarilyDisabled())
                 return false;
 
-            if (_agentMode == AgentMode.Plan)
+            if (_agentMode != AgentMode.SelfTrain)
                 return false;
 
             return (fullToolCalls == null || fullToolCalls.Count == 0)
@@ -80,7 +80,7 @@ namespace ADDGH
 
         private static bool IsVisualReviewTemporarilyDisabled()
         {
-            return true;
+            return false;
         }
 
         private static async Task<ApiResponse> TryContinueWithFinalVisualReviewAsync(string apiKey, int depth, string fullContent, System.Threading.CancellationToken ct)
@@ -89,9 +89,13 @@ namespace ADDGH
                 return null;
 
             _finalVisualReviewAttempted = true;
+            string ghCheck = IsSelfTrainingMode() ? ExecuteCheckGhErrors() : null;
             string finalVisualReview = await RunFinalVisualReviewAsync(fullContent, ct);
             if (string.IsNullOrWhiteSpace(finalVisualReview))
                 return null;
+
+            if (IsSelfTrainingMode())
+                return await ContinueSelfTrainingAfterVisualReviewAsync(apiKey, depth, fullContent, finalVisualReview, ghCheck, ct);
 
             _finalVisualReviewCompleted = true;
             _pendingFinalVisualReview = false;
@@ -103,6 +107,85 @@ namespace ADDGH
             _messages.Add(new { role = "user", content = BuildFinalVisualReviewExecutionUserText(fullContent, finalVisualReview) });
             EnforceChatHistoryLimit();
             SyncActiveHistoryConversation();
+            ct.ThrowIfCancellationRequested();
+            return await CallLLMAPI(apiKey, depth + 1, ct);
+        }
+
+        private static async Task<ApiResponse> ContinueSelfTrainingAfterVisualReviewAsync(
+            string apiKey,
+            int depth,
+            string fullContent,
+            string finalVisualReview,
+            string ghCheck,
+            System.Threading.CancellationToken ct)
+        {
+            _selfTrainingIteration++;
+            bool ghClean = IsGhCheckClean(ghCheck);
+            SelfTrainingVisualDecision visualDecision = ParseSelfTrainingVisualDecision(finalVisualReview);
+            bool visualPass = visualDecision.Pass.HasValue
+                ? visualDecision.Pass.Value
+                : VisualReviewLooksPassing(finalVisualReview);
+            bool skillSuitable = visualDecision.SkillSuitable.HasValue
+                ? visualDecision.SkillSuitable.Value
+                : VisualReviewAllowsSkill(finalVisualReview);
+            bool canWriteSkill = visualPass && ghClean && skillSuitable;
+            string decisionSummary = "视觉=" + (visualPass ? "达标" : "未达标")
+                + "；GH=" + (ghClean ? "干净" : "有问题")
+                + "；模型判断skill=" + (skillSuitable ? "适合" : "不适合");
+            if (!string.IsNullOrWhiteSpace(visualDecision.Status))
+                decisionSummary += "；状态=" + visualDecision.Status;
+            if (!string.IsNullOrWhiteSpace(visualDecision.SkillReason))
+                decisionSummary += "；原因=" + visualDecision.SkillReason;
+
+            _selfTrainingRecords.Add(new SelfTrainingIterationRecord
+            {
+                Iteration = _selfTrainingIteration,
+                ToolSummary = fullContent,
+                GhCheck = ghCheck,
+                VisualReview = finalVisualReview,
+                Decision = canWriteSkill ? "达标，等待 skill 写入" : decisionSummary
+            });
+
+            AppendSelfTrainingCard("视觉反馈", finalVisualReview);
+            if (!string.IsNullOrWhiteSpace(ghCheck))
+                AppendSelfTrainingCard("第 " + _selfTrainingIteration + " 轮 GH 检查", ghCheck);
+            AppendSelfTrainingCard("自训练判定", decisionSummary);
+
+            if (canWriteSkill)
+            {
+                _finalVisualReviewCompleted = true;
+                _pendingFinalVisualReview = false;
+                SyncActiveHistoryConversation();
+                return CompleteSelfTrainingWithSkill(finalVisualReview, ghCheck, visualDecision);
+            }
+
+            if (_selfTrainingIteration >= _selfTrainingMaxIterations)
+            {
+                _finalVisualReviewCompleted = true;
+                _pendingFinalVisualReview = false;
+                string stop = "自训练已达到最大迭代次数（" + _selfTrainingMaxIterations + "），未写入 skill。"
+                    + (ghClean ? "" : "\nGH 检查仍存在问题：\n" + ghCheck)
+                    + "\n最后视觉反馈：\n" + finalVisualReview;
+                AppendSelfTrainingCard("修复/停止原因", stop);
+                AppendSystemMessage(stop);
+                SyncActiveHistoryConversation();
+                return new ApiResponse { Content = stop };
+            }
+
+            _finalVisualReviewCompleted = false;
+            _finalVisualReviewAttempted = false;
+            _pendingFinalVisualReview = false;
+            string repairPrompt = BuildSelfTrainingRepairPrompt(finalVisualReview, ghCheck, _selfTrainingIteration + 1, _selfTrainingMaxIterations);
+
+            _messages.Add(new JObject
+            {
+                ["role"] = "assistant",
+                ["content"] = fullContent ?? ""
+            });
+            _messages.Add(new { role = "user", content = repairPrompt });
+            EnforceChatHistoryLimit();
+            SyncActiveHistoryConversation();
+            AppendSelfTrainingCard("修复/停止原因", "未达标，已进入第 " + (_selfTrainingIteration + 1) + " 轮局部修复。");
             ct.ThrowIfCancellationRequested();
             return await CallLLMAPI(apiKey, depth + 1, ct);
         }
@@ -137,18 +220,20 @@ namespace ADDGH
                 return null;
 
             var sourceImages = _finalVisualReviewSourceImages ?? new List<AttachmentItem>();
-            if (sourceImages.Count == 0)
+            if (sourceImages.Count == 0 && !IsSelfTrainingMode())
                 return null;
 
-            EnsureVisualReviewPreviewReady();
-
-            try
+            bool hasDedicatedPreview = EnsureVisualReviewPreviewReady();
+            if (hasDedicatedPreview)
             {
-                string previewCleanup = ExecuteSetAllCSharpScriptPreviews(false);
-            }
-            catch (Exception ex)
-            {
-                AddGhLog.Debug("Final visual review preview cleanup failed: " + ex.Message);
+                try
+                {
+                    string previewCleanup = ExecuteSetAllCSharpScriptPreviews(false);
+                }
+                catch (Exception ex)
+                {
+                    AddGhLog.Debug("Final visual review preview cleanup failed: " + ex.Message);
+                }
             }
 
             string captureJson = ExecuteCaptureRhinoViewport("auto", 1600, 900, 0.12);

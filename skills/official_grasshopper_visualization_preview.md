@@ -13,6 +13,7 @@ description: 官方可视化 reference。用于在 Grasshopper 中为几何结�
 - 几何输入接入 `Custom Preview` 的 `G` 端。
 - 颜色/材质输入接入 `Custom Preview` 的 `M` 端。
 - 颜色应由 `Colour RGB`、`Colour RGB (f)`、`Colour HSV`、`Colour HSL`、`Colour CMYK` 等可参数化颜色电池生成。
+- 使用 `Colour RGB`、`Colour RGB (f)`、`Colour HSV`、`Colour HSL`、`Colour CMYK` 等颜色电池时，必须在这些电池的每个颜色参数输入端口创建并连接 `Number Slider`；不要让颜色通道停留在电池默认值，也不要只放一个未接 slider 的颜色电池。
 - 不要使用 `Colour Swatch` 作为默认方案，因为它不能方便地由 Slider 调整颜色。
 
 ## 推荐电池
@@ -77,6 +78,7 @@ description: 官方可视化 reference。用于在 Grasshopper 中为几何结�
 ## Agent 操作要求
 
 - 创建可视化工作流时，优先搜索或添加 `Custom Preview` 与 Colour 系列电池。
+- 一旦添加 `Colour RGB` / `Colour HSV` / `Colour HSL` / `Colour CMYK` 等颜色电池，必须同步为 R/G/B、H/S/V、H/S/L、C/M/Y/K、Alpha 等输入端口添加并连接 `Number Slider`，让颜色参数可见、可调、可复核。
 - 有材质需求时，使用 `Create Material` 生成材质并接到 `Custom Preview.M`。
 - 不要为了调颜色创建 C# Script；颜色通道用 Slider + Colour 电池表达。
 - 不要把颜色参数直接写死在 Panel 或脚本里，除非用户明确要求固定色。
@@ -87,6 +89,7 @@ description: 官方可视化 reference。用于在 Grasshopper 中为几何结�
 
 - 是否至少有一个 `Custom Preview` 作为最终预览出口。
 - 是否使用 `Colour RGB` / `Colour RGB (f)` / `Colour HSV` / `Colour HSL` / `Colour CMYK` 之一提供颜色。
+- 每个颜色电池的颜色参数输入端口是否都已连接清晰命名的 `Number Slider`，而不是依赖默认值或未接线输入。
 - 如果用户要求材质，是否使用 `Create Material` 而不是只接纯色。
 - 是否避免了默认 `Colour Swatch`。
 - Slider 是否有清晰中文 label、范围和默认值。
