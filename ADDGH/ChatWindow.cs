@@ -407,12 +407,6 @@ namespace ADDGH
 4. 需要修改已有 C# Script 时使用专用编辑工具，保持现有模板和端口约定。";
         }
 
-        private static string BuildInitialSystemContent()
-        {
-            string typedPrompt = IsExecutionAgentMode() ? BuildCSharpTypedInputPrompt() : "";
-            return BuildSystemPrompt() + typedPrompt + GetSkillsSummary();
-        }
-
         private static List<object> BuildInitialSystemMessages()
         {
             return _contextPipeline.BuildInitialSystemMessages(new ADDGH.Agent.ContextPipelineRequest
