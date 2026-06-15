@@ -374,3 +374,15 @@ ADDGH\bin\Debug\net48\ADDGH.gha
 - `web_research`
 
 下一批建议迁移只读查询工具：`query_gh_components`、`get_component_context`、`read_component_script`。
+
+## 14. 2026-06-15 追加落地：只读组件查询工具 schema 迁移
+
+本轮迁移只读查询类工具：
+
+- `query_gh_components`
+- `get_component_context`
+- `read_component_script`
+
+这些工具已改为通过 `ToolSchemaFactory.Function(...)` 生成。参数名称、描述和 required 语义保持不变，并统一获得 `additionalProperties=false`。
+
+下一批可以继续迁移搜索/目录类工具，例如 `search_component_library`、`search_gh_component_catalog`，或者开始准备 `ToolExecutor` 的 registry 化。

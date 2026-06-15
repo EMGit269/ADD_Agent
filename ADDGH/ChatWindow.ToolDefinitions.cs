@@ -397,63 +397,9 @@ namespace ADDGH
                     }
                 },
                 GetWebResearchToolDefinition(),
-                new {
-                    type = "function",
-                    function = new {
-                        name = "query_gh_components",
-                        description = "Query a focused subset of current Grasshopper components by id, name, error state, script status, connection state, or port name.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                id = new { type = "string", description = "Optional exact public id or GUID to query." },
-                                name_contains = new { type = "string", description = "Optional substring filter for component name/nickname." },
-                                has_errors = new { type = "boolean", description = "Optional filter for components with runtime errors." },
-                                is_script = new { type = "boolean", description = "Optional filter for script components." },
-                                has_connections = new { type = "boolean", description = "Optional filter for components with any wires." },
-                                port_name_contains = new { type = "string", description = "Optional substring filter for input/output port names." },
-                                max_results = new { type = "integer", description = "Maximum matching components to return." },
-                                neighbor_depth = new { type = "integer", description = "Optional neighbor traversal depth around matches." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "summary" }
-                        }
-                    }
-                },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "get_component_context",
-                        description = "Read focused context around one component, including nearby components, ports, connections, and optionally script bodies.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                id = new { type = "string", description = "Target component public id or GUID." },
-                                depth = new { type = "integer", description = "Neighbor traversal depth. Use 1 for focused repair unless more graph context is needed." },
-                                include_script_bodies = new { type = "boolean", description = "Whether to include full script bodies. Set true only when code content is needed." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "id", "summary" }
-                        }
-                    }
-                },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "read_component_script",
-                        description = "Read the source/body of an existing script component. Use before editing or debugging an existing C# Script.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                id = new { type = "string", description = "Target script component public id or GUID." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "id", "summary" }
-                        }
-                    }
-                },
+                GetQueryGhComponentsToolDefinition(),
+                GetComponentContextToolDefinition(),
+                GetReadComponentScriptToolDefinition(),
                 GetCreateGhSkillToolDefinition(),
                 GetReadSkillFileToolDefinition(),
                 GetReadReferenceJsonToolDefinition(),
@@ -575,6 +521,57 @@ namespace ADDGH
                     summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
                 },
                 new[] { "summary" });
+        }
+
+        private static object GetQueryGhComponentsToolDefinition()
+        {
+            return ToolSchemaFactory.Function(
+                "query_gh_components",
+                "Query a focused subset of current Grasshopper components by id, name, error state, script status, connection state, or port name.",
+                new
+                {
+                    id = ToolSchemaFactory.String("Optional exact public id or GUID to query."),
+                    name_contains = ToolSchemaFactory.String("Optional substring filter for component name/nickname."),
+                    has_errors = ToolSchemaFactory.Boolean("Optional filter for components with runtime errors."),
+                    is_script = ToolSchemaFactory.Boolean("Optional filter for script components."),
+                    has_connections = ToolSchemaFactory.Boolean("Optional filter for components with any wires."),
+                    port_name_contains = ToolSchemaFactory.String("Optional substring filter for input/output port names."),
+                    max_results = ToolSchemaFactory.Integer("Maximum matching components to return."),
+                    neighbor_depth = ToolSchemaFactory.Integer("Optional neighbor traversal depth around matches."),
+                    summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                    summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                },
+                new[] { "summary" });
+        }
+
+        private static object GetComponentContextToolDefinition()
+        {
+            return ToolSchemaFactory.Function(
+                "get_component_context",
+                "Read focused context around one component, including nearby components, ports, connections, and optionally script bodies.",
+                new
+                {
+                    id = ToolSchemaFactory.String("Target component public id or GUID."),
+                    depth = ToolSchemaFactory.Integer("Neighbor traversal depth. Use 1 for focused repair unless more graph context is needed."),
+                    include_script_bodies = ToolSchemaFactory.Boolean("Whether to include full script bodies. Set true only when code content is needed."),
+                    summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                    summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                },
+                new[] { "id", "summary" });
+        }
+
+        private static object GetReadComponentScriptToolDefinition()
+        {
+            return ToolSchemaFactory.Function(
+                "read_component_script",
+                "Read the source/body of an existing script component. Use before editing or debugging an existing C# Script.",
+                new
+                {
+                    id = ToolSchemaFactory.String("Target script component public id or GUID."),
+                    summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                    summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                },
+                new[] { "id", "summary" });
         }
 
         private static object GetReadSkillFileToolDefinition()
