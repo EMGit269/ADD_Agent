@@ -3817,6 +3817,10 @@ namespace ADDGH
                 AppendBubble(displayInput, true);
             }
 
+            await _window.Dispatcher.InvokeAsync(
+                () => { },
+                System.Windows.Threading.DispatcherPriority.Render);
+
             SyncActiveHistoryConversation(string.IsNullOrWhiteSpace(displayInput)
                 ? (attachmentsToSend.FirstOrDefault()?.FileName ?? "附件对话")
                 : displayInput);
