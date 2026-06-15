@@ -399,13 +399,13 @@ namespace ADDGH
                     type = "function",
                     function = new {
                         name = "web_research",
-                        description = "Search or open web documentation/current information when local knowledge is insufficient or the user asks for latest/external information. Prefer official/primary sources when possible.",
+                        description = "Search or open web documentation/current information when local knowledge is insufficient or the user asks for latest/external information. For RhinoCommon/Grasshopper API signature lookup, prefer mode=api_pipeline before generic search.",
                         parameters = new {
                             type = "object",
                             properties = new {
-                                mode = new { type = "string", description = "Research mode, such as search or open_url." },
-                                query = new { type = "string", description = "Search query when mode searches the web." },
-                                url = new { type = "string", description = "Direct URL when opening a specific page." },
+                                mode = new { type = "string", description = "Research mode: api_pipeline for RhinoCommon/Grasshopper API lookup, search for general web search, or fetch for a known URL." },
+                                query = new { type = "string", description = "Search/API query. For api_pipeline include candidate type/method names and concept words, for example Brep.CreateFromRevolution surface of revolution." },
+                                url = new { type = "string", description = "Direct URL when mode=fetch." },
                                 allowed_domains = new { type = "array", items = new { type = "string" }, description = "Optional domain allowlist for focused/official-source research." },
                                 max_results = new { type = "integer", description = "Maximum search results to retrieve." },
                                 max_chars = new { type = "integer", description = "Maximum returned text characters; keep modest unless detailed source context is required." },

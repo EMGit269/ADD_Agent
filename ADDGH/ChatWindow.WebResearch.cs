@@ -25,7 +25,7 @@ namespace ADDGH
             System.Threading.CancellationToken ct)
         {
             string normalizedMode = (mode ?? "").Trim().ToLowerInvariant();
-            if (normalizedMode != "fetch")
+            if (normalizedMode != "fetch" && normalizedMode != "api_pipeline")
                 normalizedMode = "search";
 
             maxResults = Math.Max(1, Math.Min(maxResults <= 0 ? 5 : maxResults, 10));
@@ -34,6 +34,8 @@ namespace ADDGH
 
             if (normalizedMode == "fetch")
                 return await FetchWebPageAsync(url, domains, maxChars, ct).ConfigureAwait(false);
+            if (normalizedMode == "api_pipeline")
+                return await ExecuteApiDocPipelineAsync(query, domains, maxResults, maxChars, ct).ConfigureAwait(false);
 
             return await SearchWebAsync(query, domains, maxResults, maxChars, ct).ConfigureAwait(false);
         }
@@ -183,6 +185,204 @@ namespace ADDGH
 
             string json = payload.ToString(Formatting.None);
             return json.Length <= maxChars ? json : json.Substring(0, maxChars) + "...";
+        }
+
+        private static async Task<string> ExecuteApiDocPipelineAsync(
+            string query,
+            List<string> allowedDomains,
+            int maxResults,
+            int maxChars,
+            System.Threading.CancellationToken ct)
+        {
+            if (string.IsNullOrWhiteSpace(query))
+                return "Error: query is required for api_pipeline.";
+
+            var normalizedDomains = NormalizeApiDocDomains(allowedDomains);
+            var expandedQueries = BuildApiDocPipelineQueries(query).Take(8).ToList();
+            var stageResults = new JArray();
+
+            stageResults.Add(new JObject
+            {
+                ["stage"] = "parse_api_intent",
+                ["input_query"] = query.Trim(),
+                ["candidate_symbols"] = new JArray(ExtractApiSymbolCandidates(query)),
+                ["expanded_queries"] = new JArray(expandedQueries),
+                ["official_domains"] = new JArray(normalizedDomains)
+            });
+
+            var allCandidates = new Dictionary<string, JObject>(StringComparer.OrdinalIgnoreCase);
+            var mcneelDomains = new List<string> { "mcneel.github.io" };
+            foreach (string q in expandedQueries)
+            {
+                var candidates = await SearchMcNeelApiDocsAsync(q, mcneelDomains, maxResults, ct).ConfigureAwait(false);
+                foreach (var candidate in candidates)
+                    UpsertPipelineCandidate(allCandidates, candidate, "mcneel_api_index", q);
+            }
+
+            stageResults.Add(new JObject
+            {
+                ["stage"] = "search_official_api_index",
+                ["provider"] = "mcneel_api_index",
+                ["result_count"] = allCandidates.Count,
+                ["results"] = new JArray(allCandidates.Values.Take(maxResults))
+            });
+
+            if (allCandidates.Count == 0)
+            {
+                var fallbackResults = new Dictionary<string, JObject>(StringComparer.OrdinalIgnoreCase);
+                foreach (string q in expandedQueries.Take(3))
+                {
+                    string raw = await SearchWebAsync(q, normalizedDomains, maxResults, maxChars, ct).ConfigureAwait(false);
+                    TryMergePipelineSearchResults(fallbackResults, raw, q);
+                    if (fallbackResults.Count >= maxResults)
+                        break;
+                }
+
+                stageResults.Add(new JObject
+                {
+                    ["stage"] = "fallback_site_search",
+                    ["provider"] = "bing_site_search",
+                    ["result_count"] = fallbackResults.Count,
+                    ["results"] = new JArray(fallbackResults.Values.Take(maxResults))
+                });
+
+                foreach (var pair in fallbackResults)
+                    allCandidates[pair.Key] = pair.Value;
+            }
+
+            string diagnosis = allCandidates.Count > 0
+                ? "candidate_docs_found"
+                : "no_candidate_docs_found";
+
+            var payload = new JObject
+            {
+                ["mode"] = "api_pipeline",
+                ["query"] = query.Trim(),
+                ["diagnosis"] = diagnosis,
+                ["result_count"] = allCandidates.Count,
+                ["stages"] = stageResults,
+                ["next_actions"] = BuildApiPipelineNextActions(allCandidates.Count)
+            };
+
+            string json = payload.ToString(Formatting.None);
+            return json.Length <= maxChars ? json : json.Substring(0, maxChars) + "...";
+        }
+
+        private static List<string> NormalizeApiDocDomains(List<string> allowedDomains)
+        {
+            var domains = new List<string>();
+            if (allowedDomains != null)
+            {
+                foreach (string domain in allowedDomains)
+                {
+                    if (!string.IsNullOrWhiteSpace(domain) && !domains.Contains(domain, StringComparer.OrdinalIgnoreCase))
+                        domains.Add(domain);
+                }
+            }
+
+            if (!domains.Contains("developer.rhino3d.com", StringComparer.OrdinalIgnoreCase))
+                domains.Add("developer.rhino3d.com");
+            if (!domains.Contains("mcneel.github.io", StringComparer.OrdinalIgnoreCase))
+                domains.Add("mcneel.github.io");
+            return domains;
+        }
+
+        private static IEnumerable<string> BuildApiDocPipelineQueries(string query)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            Action<string> add = q =>
+            {
+                q = (q ?? "").Trim();
+                if (!string.IsNullOrWhiteSpace(q)) seen.Add(q);
+            };
+
+            add(query);
+            string lower = (query ?? "").ToLowerInvariant();
+
+            foreach (string symbol in ExtractApiSymbolCandidates(query))
+                add(symbol + " RhinoCommon");
+
+            if (lower.Contains("revolution") || lower.Contains("revsurface") || lower.Contains("revsurface") || lower.Contains("rev surface"))
+            {
+                add("RhinoCommon RevSurface Create");
+                add("Rhino.Geometry.RevSurface Create");
+                add("RhinoCommon Brep CreateFromRevSurface");
+                add("surface of revolution RhinoCommon Brep");
+            }
+
+            if (lower.Contains("brep"))
+            {
+                add("Rhino.Geometry.Brep methods RhinoCommon");
+                add("Brep Create RhinoCommon");
+            }
+
+            if (lower.Contains("curve"))
+                add("Rhino.Geometry.Curve RhinoCommon methods");
+
+            foreach (string q in seen)
+                yield return q;
+        }
+
+        private static IEnumerable<string> ExtractApiSymbolCandidates(string query)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (Match match in Regex.Matches(query ?? "", @"\b(?:Rhino|Grasshopper)(?:\.[A-Za-z_][A-Za-z0-9_]*)+"))
+            {
+                string value = match.Value.Trim('.');
+                if (seen.Add(value)) yield return value;
+            }
+
+            foreach (Match match in Regex.Matches(query ?? "", @"\b[A-Z][A-Za-z0-9_]+\.[A-Z][A-Za-z0-9_]+\b"))
+            {
+                string value = match.Value.Trim('.');
+                if (seen.Add(value)) yield return value;
+            }
+        }
+
+        private static void UpsertPipelineCandidate(Dictionary<string, JObject> map, JObject candidate, string provider, string query)
+        {
+            if (map == null || candidate == null) return;
+            string url = candidate["url"]?.ToString();
+            if (string.IsNullOrWhiteSpace(url)) return;
+            var clone = (JObject)candidate.DeepClone();
+            clone["provider"] = provider;
+            clone["matched_query"] = query;
+            if (!map.ContainsKey(url))
+                map[url] = clone;
+        }
+
+        private static void TryMergePipelineSearchResults(Dictionary<string, JObject> map, string rawJson, string query)
+        {
+            try
+            {
+                var root = JObject.Parse(rawJson);
+                var results = root["results"] as JArray;
+                if (results == null) return;
+                foreach (var item in results.OfType<JObject>())
+                    UpsertPipelineCandidate(map, item, root["provider"]?.ToString() ?? "site_search", query);
+            }
+            catch
+            {
+                // Search failures are represented by empty fallback results.
+            }
+        }
+
+        private static JArray BuildApiPipelineNextActions(int resultCount)
+        {
+            var actions = new JArray();
+            if (resultCount > 0)
+            {
+                actions.Add("Pick the closest type/member candidate from stages[].results.");
+                actions.Add("Call web_research with mode=fetch on the selected official URL before relying on a signature.");
+                actions.Add("If candidate names differ from the guessed API, prefer the documented symbol and explain the correction.");
+            }
+            else
+            {
+                actions.Add("Classify as no_direct_hit or possible_api_name_mismatch, not as proof the API does not exist.");
+                actions.Add("Retry api_pipeline with broader concept terms and candidate type names.");
+                actions.Add("Use local compile/error feedback if available before generating final C#.");
+            }
+            return actions;
         }
 
         private sealed class ApiDocRoot

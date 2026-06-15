@@ -93,7 +93,7 @@ namespace ADDGH.Agent
                 WorkflowIntent.ReferenceLookup, WorkflowIntent.ReferenceImport);
 
             yield return Tool("web_research", "Fetch/search web documentation or current information", true, false, false,
-                WorkflowIntent.WebResearch, WorkflowIntent.CSharpScriptFix);
+                WorkflowIntent.WebResearch, WorkflowIntent.ApiDocLookup, WorkflowIntent.CSharpScriptCreate, WorkflowIntent.CSharpScriptFix);
             yield return Tool("show_plan_steps", "Render plan steps in Plan mode", true, false, false,
                 WorkflowIntent.GeneralChat, WorkflowIntent.GrasshopperCreate, WorkflowIntent.GrasshopperModify);
         }

@@ -17,6 +17,7 @@ namespace ADDGH.Agent
         ReferenceLookup,
         ReferenceImport,
         SelfTraining,
+        ApiDocLookup,
         WebResearch
     }
 }
