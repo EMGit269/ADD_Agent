@@ -10,6 +10,7 @@ namespace ADDGH
         private static readonly WorkflowRouter _workflowRouter = new WorkflowRouter();
         private static readonly ToolSurfacePolicy _toolSurfacePolicy = new ToolSurfacePolicy(new ToolRegistry());
         private static readonly ContextLedger _contextLedger = new ContextLedger();
+        private static readonly ContextCompactionPlanner _contextCompactionPlanner = new ContextCompactionPlanner();
         private static WorkflowRoute _currentWorkflowRoute = WorkflowRoute.Fallback();
 
         private static void PrepareAgentWorkflowRoute(string userInput, string modelInput, List<AttachmentItem> attachmentsToSend)
@@ -141,6 +142,19 @@ namespace ADDGH
             catch (Exception ex)
             {
                 AddGhLog.Debug("RecordAgentToolEvidence failed: " + ex.Message);
+            }
+        }
+
+        private static void LogContextCompactionPlan(IList<object> messages, int keepRecent)
+        {
+            try
+            {
+                var plan = _contextCompactionPlanner.Plan(messages, keepRecent);
+                AddGhLog.Debug("Context compaction plan: " + plan.ToLogLine());
+            }
+            catch (Exception ex)
+            {
+                AddGhLog.Debug("LogContextCompactionPlan failed: " + ex.Message);
             }
         }
     }

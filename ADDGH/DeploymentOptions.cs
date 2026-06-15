@@ -36,6 +36,10 @@ namespace ADDGH
         /// <summary>用于估算「是否触发压缩」的全局预算（近似 token，启发式）。</summary>
         public const int ContextBudgetTokens = 128000;
 
+        // Reserved output budget used by ADDGH.Agent.ContextBudget. Keep modest for
+        // current providers; provider-specific dynamic windows can replace this later.
+        public const int ContextReservedOutputTokens = 8192;
+
         /// <summary>达到预算的该比例时尝试 LLM 摘要（预留 headroom 给摘要请求与回复）。</summary>
         public const double ContextCompressTriggerRatio = 0.72;
 

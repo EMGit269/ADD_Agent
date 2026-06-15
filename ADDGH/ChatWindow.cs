@@ -3683,12 +3683,23 @@ namespace ADDGH
             {
                 if (_messages == null || _messages.Count == 0) return;
                 int projected = ChatMessageHelpers.EstimateProjectedMessageListTokens(_messages);
-                int trigger = (int)Math.Round(DeploymentOptions.ContextBudgetTokens * DeploymentOptions.ContextCompressTriggerRatio);
-                if (projected < trigger) return;
+                var budget = ADDGH.Agent.ContextBudget.Create(
+                    DeploymentOptions.ContextBudgetTokens,
+                    projected,
+                    DeploymentOptions.ContextReservedOutputTokens,
+                    DeploymentOptions.ContextCompressTriggerRatio);
+                AddGhLog.Debug("Context budget before compression: " + budget.ToLogLine());
+                if (!budget.ShouldCompact()) return;
+                LogContextCompactionPlan(_messages, DeploymentOptions.ContextVerbatimTailCount);
 
                 TryApplyRollingSummaryInPlace();
                 projected = ChatMessageHelpers.EstimateProjectedMessageListTokens(_messages);
-                if (projected < trigger)
+                budget = ADDGH.Agent.ContextBudget.Create(
+                    DeploymentOptions.ContextBudgetTokens,
+                    projected,
+                    DeploymentOptions.ContextReservedOutputTokens,
+                    DeploymentOptions.ContextCompressTriggerRatio);
+                if (!budget.ShouldCompact())
                 {
                     ChatMessageHelpers.TrimMessageHistory(_messages, DeploymentOptions.MaxPersistedChatMessages);
                     return;
