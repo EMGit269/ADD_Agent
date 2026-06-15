@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Text.RegularExpressions;
+using ADDGH.Agent;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -28,14 +29,23 @@ namespace ADDGH
                 var msg = fullMessages[i];
                 if (IsGetGhToolMessage(msg) && i != lastCanvasStateIndex)
                 {
-                    compressed.Add(CloneToolPlaceholder(msg, "get_gh_components", "[历史画布状态已折叠以节省 Token]"));
+                    compressed.Add(CloneToolPlaceholder(msg, "get_gh_components", BuildFoldedToolSummary("get_gh_components", TryGetToolContentString(msg))));
                 }
                 else
                 {
-                    compressed.Add(msg);
+                    compressed.Add(CloneMessageForProjection(msg));
                 }
             }
+            ApplyLargeToolFoldInPlace(compressed, DeploymentOptions.LargeToolFoldMinChars);
             return compressed;
+        }
+
+        private static object CloneMessageForProjection(object msg)
+        {
+            if (msg is JObject jo) return (JObject)jo.DeepClone();
+            if (msg is JArray ja) return (JArray)ja.DeepClone();
+            if (msg is JToken jt) return jt.DeepClone();
+            return msg;
         }
 
         /// <summary>就地折叠历史 get_gh_components（摘要失败时的机械回退）。</summary>
@@ -47,7 +57,7 @@ namespace ADDGH
             for (int i = 0; i < messages.Count; i++)
             {
                 if (i == lastIdx || !IsGetGhToolMessage(messages[i])) continue;
-                ReplaceToolContentInPlace(messages, i, "[历史画布状态已折叠以节省 Token]");
+                ReplaceToolContentInPlace(messages, i, BuildFoldedToolSummary("get_gh_components", TryGetToolContentString(messages[i])));
             }
         }
 
@@ -72,7 +82,32 @@ namespace ADDGH
                 if (!lastLargeByName.TryGetValue(name, out int keep) || keep == i) continue;
                 int len = TryGetToolContentLength(messages[i]);
                 if (len < minChars) continue;
-                ReplaceToolContentInPlace(messages, i, "[大型工具输出已折叠以节省 Token]");
+                ReplaceToolContentInPlace(messages, i, BuildFoldedToolSummary(name, TryGetToolContentString(messages[i])));
+            }
+        }
+
+        private static string BuildFoldedToolSummary(string toolName, string rawContent)
+        {
+            try
+            {
+                var envelope = ToolResultCompactor.BuildEnvelope(toolName, rawContent);
+                var jo = new JObject
+                {
+                    ["folded_tool_result"] = true,
+                    ["tool_name"] = envelope.ToolName ?? toolName ?? "",
+                    ["success"] = envelope.Success,
+                    ["summary"] = envelope.Summary ?? "",
+                    ["raw_char_count"] = envelope.RawCharCount,
+                    ["result_kind"] = envelope.ResultKind ?? ""
+                };
+                if (!string.IsNullOrWhiteSpace(envelope.ArtifactPath))
+                    jo["artifact_path"] = envelope.ArtifactPath;
+                return jo.ToString(Formatting.None);
+            }
+            catch
+            {
+                string compact = ToolResultCompactor.Compact(rawContent, 320);
+                return "[folded tool result: " + (toolName ?? "unknown") + "; " + compact + "]";
             }
         }
 
