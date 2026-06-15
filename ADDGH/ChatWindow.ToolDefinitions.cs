@@ -15,387 +15,230 @@ namespace ADDGH
         {
             object[] toolDefinitions = new object[]
             {
-                new {
-                    type = "function",
-                    function = new {
-                        name = "create_ai_image",
-                        description = "Generate or edit an AI image from the user's prompt and optional uploaded images. Use only for image creation/editing tasks, not for Grasshopper canvas modeling.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                prompt = new { type = "string", description = "Image generation/editing prompt. Include subject, style, constraints, and what to preserve from uploaded images when relevant." },
-                                intent = new { type = "string", description = "Task intent, for example generate, edit, variation, reference, or background." },
-                                use_uploaded_images = new { type = "boolean", description = "Whether uploaded images should be used as visual references or edit sources. Default true when images are attached." },
-                                aspect_ratio = new { type = "string", description = "Optional output aspect ratio such as 1:1, 16:9, 4:3, 3:2, or 9:16." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "prompt", "intent", "summary" }
-                        }
-                    }
-                },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "ensure_gh_canvas",
-                        description = "Ensure an active Grasshopper canvas/document exists before creating or modifying GH objects. Call before mutating tools when canvas availability is uncertain.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "summary" }
-                        }
-                    }
-                },
+                ToolSchemaFactory.Function(
+                    "create_ai_image",
+                    "Generate or edit an AI image from the user's prompt and optional uploaded images. Use only for image creation/editing tasks, not for Grasshopper canvas modeling.",
+                    new
+                    {
+                        prompt = ToolSchemaFactory.String("Image generation/editing prompt. Include subject, style, constraints, and what to preserve from uploaded images when relevant."),
+                        intent = ToolSchemaFactory.String("Task intent, for example generate, edit, variation, reference, or background."),
+                        use_uploaded_images = ToolSchemaFactory.Boolean("Whether uploaded images should be used as visual references or edit sources. Default true when images are attached."),
+                        aspect_ratio = ToolSchemaFactory.String("Optional output aspect ratio such as 1:1, 16:9, 4:3, 3:2, or 9:16."),
+                        summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                        summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                    },
+                    new[] { "prompt", "intent", "summary" }),
+                ToolSchemaFactory.Function(
+                    "ensure_gh_canvas",
+                    "Ensure an active Grasshopper canvas/document exists before creating or modifying GH objects. Call before mutating tools when canvas availability is uncertain.",
+                    new
+                    {
+                        summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                        summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                    },
+                    new[] { "summary" }),
                 GetCreateCSharpScriptComponentToolDefinition(),
                 GetEditCSharpScriptComponentToolDefinition(),
                 GetCreateScriptComponentGraphToolDefinition(),
-                new {
-                    type = "function",
-                    function = new {
-                        name = "get_gh_components",
-                        description = "Inspect the current Grasshopper canvas: component ids, names, ports, connections, errors, groups, and script summaries. Use before modifying existing canvas objects.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "summary" }
-                        }
-                    }
-                },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "add_gh_component",
-                        description = "Add one Grasshopper component or value helper. Prefer create_component_graph for creating multiple related components and connections in one step.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                name = new { type = "string", description = "Grasshopper component name or ADD helper type. Use when component_guid is unknown." },
-                                component_guid = new { type = "string", description = "Exact Grasshopper component GUID when known. Prefer this over ambiguous names." },
-                                x = new { type = "number", description = "Canvas X coordinate." },
-                                y = new { type = "number", description = "Canvas Y coordinate." },
-                                label = new { type = "string", description = "Optional display nickname for the created component/helper." },
-                                graph_mapper_type = new { type = "string", description = "Optional Graph Mapper type when creating or configuring a graph mapper." },
-                                value = new { type = "string", description = "Optional initial value for sliders, panels, value lists, or other value helpers." },
-                                min = new { type = "number", description = "Optional slider or graph mapper minimum." },
-                                max = new { type = "number", description = "Optional slider or graph mapper maximum." },
-                                decimals = new { type = "integer", description = "Optional numeric precision for slider-like helpers." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "x", "y", "summary" }
-                        }
-                    }
-                },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "connect_gh_components",
-                        description = "Connect output and input ports between existing Grasshopper components. Use ids from get_gh_components or aliases from a batch creation result.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                from_id = new { type = "string", description = "Source component public id or GUID." },
-                                from_index = new { type = "integer", description = "Source output port index. Defaults to 0 when omitted." },
-                                from_port_label = new { type = "string", description = "Optional source port label to resolve when index is ambiguous." },
-                                to_id = new { type = "string", description = "Target component public id or GUID." },
-                                to_index = new { type = "integer", description = "Target input port index. Defaults to 0 when omitted." },
-                                to_port_label = new { type = "string", description = "Optional target port label to resolve when index is ambiguous." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "from_id", "to_id", "summary" }
-                        }
-                    }
-                },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "remove_gh_component",
-                        description = "Remove one existing Grasshopper component or group by id. Inspect first when the target id is uncertain.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                id = new { type = "string", description = "Component/group public id or GUID to remove." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "id", "summary" }
-                        }
-                    }
-                },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "set_gh_component_value",
-                        description = "Set value/configuration on an existing GH helper component such as Slider, Panel, Value List, Boolean Toggle, or Graph Mapper. Do not use to edit C# Script source.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                id = new { type = "string", description = "Target component public id or GUID." },
-                                value = new { type = "string", description = "Value to apply. Format depends on target helper type." },
-                                property = new { type = "string", description = "Optional property name when changing a specific setting instead of the main value." },
-                                graph_mapper_type = new { type = "string", description = "Optional Graph Mapper type to apply." },
-                                min = new { type = "number", description = "Optional slider/mapper minimum." },
-                                max = new { type = "number", description = "Optional slider/mapper maximum." },
-                                decimals = new { type = "integer", description = "Optional numeric precision for slider-like helpers." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "id", "summary" }
-                        }
-                    }
-                },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "remove_gh_connection",
-                        description = "Remove one wire between two existing Grasshopper component ports.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                from_id = new { type = "string", description = "Source component public id or GUID." },
-                                from_index = new { type = "integer", description = "Source output port index." },
-                                to_id = new { type = "string", description = "Target component public id or GUID." },
-                                to_index = new { type = "integer", description = "Target input port index." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "from_id", "from_index", "to_id", "to_index", "summary" }
-                        }
-                    }
-                },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "create_component_graph",
-                        description = "Batch-create a Grasshopper graph from component definitions and connections. Prefer this over repeated add/connect calls for new multi-component workflows.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                components = new {
-                                    type = "array",
-                                    items = new {
-                                        type = "object",
-                                        properties = new {
-                                            alias_id = new { type = "string", description = "Temporary unique id used by connections in this same batch." },
-                                            name = new { type = "string", description = "Grasshopper component name or helper type." },
-                                            component_guid = new { type = "string", description = "Exact Grasshopper component GUID when known." },
-                                            label = new { type = "string", description = "Optional display nickname." },
-                                            x = new { type = "number", description = "Canvas X coordinate." },
-                                            y = new { type = "number", description = "Canvas Y coordinate." },
-                                            value = new { type = "string", description = "Optional initial helper value." },
-                                            graph_mapper_type = new { type = "string", description = "Optional Graph Mapper type." },
-                                            min = new { type = "number", description = "Optional slider/mapper minimum." },
-                                            max = new { type = "number", description = "Optional slider/mapper maximum." },
-                                            decimals = new { type = "integer", description = "Optional numeric precision." }
-                                        },
-                                        required = new[] { "alias_id", "x", "y" }
-                                    }
-                                },
-                                connections = new {
-                                    type = "array",
-                                    items = new {
-                                        type = "object",
-                                        properties = new {
-                                            from_alias = new { type = "string", description = "Source component alias_id from this batch." },
-                                            from_index = new { type = "integer", description = "Source output port index." },
-                                            to_alias = new { type = "string", description = "Target component alias_id from this batch." },
-                                            to_index = new { type = "integer", description = "Target input port index." }
-                                        },
-                                        required = new[] { "from_alias", "from_index", "to_alias", "to_index" }
-                                    }
-                                },
-                                group_name = new { type = "string", description = "Optional group name for created components." },
-                                auto_group = new { type = "boolean", description = "Whether to place created components into an automatic group." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "components", "connections", "summary" }
-                        }
-                    }
-                },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "recompute_gh_canvas",
-                        description = "Recompute the active Grasshopper document after edits and update runtime state/errors.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "summary" }
-                        }
-                    }
-                },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "gh_native_script_editor",
-                        description = "Fallback native script editor integration for an existing script component. Prefer create_csharp_script_component for new scripts and edit_csharp_script_component for normal C# body edits.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                id = new { type = "string", description = "Target script component public id or GUID." },
-                                mode = new { type = "string", description = "Editor action/mode requested." },
-                                code = new { type = "string", description = "Script source when the selected mode writes code." },
-                                language = new { type = "string", description = "Script language, normally csharp." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "id", "mode", "summary" }
-                        }
-                    }
-                },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "check_gh_errors",
-                        description = "Check Grasshopper runtime errors, warnings, invalid components, and script compilation/runtime issues. Use after creating or editing canvas logic.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "summary" }
-                        }
-                    }
-                },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "set_gh_component_status",
-                        description = "Set preview and/or enabled state for one Grasshopper component.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                id = new { type = "string", description = "Target component public id or GUID." },
-                                preview = new { type = "boolean", description = "Optional preview visibility state." },
-                                enabled = new { type = "boolean", description = "Optional enabled/disabled state." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "id", "summary" }
-                        }
-                    }
-                },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "set_all_csharp_script_previews",
-                        description = "Set preview state for all C# Script components. Useful before visual review to show or hide script-generated geometry.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                preview = new { type = "boolean", description = "Preview state to apply to all C# Script components." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "preview", "summary" }
-                        }
-                    }
-                },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "modify_gh_component_ports",
-                        description = "Fallback tool to add, remove, or rename dynamic component ports. For normal C# creation, prefer create_csharp_script_component; use this only to repair an existing variable-parameter component.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                id = new { type = "string", description = "Target component public id or GUID." },
-                                is_input = new { type = "boolean", description = "True for input ports, false for output ports." },
-                                action = new { type = "string", description = "Port operation, such as add, remove, rename, or set_type." },
-                                port_name = new { type = "string", description = "Port name involved in the operation." },
-                                type_hint = new { type = "string", description = "Optional when adding a C# Script port. Prefer Rhino C# Script menu names such as bool, int, string, double, Point3d, Point3dList, Vector3d, Plane, Line, Circle, Arc, Curve, Mesh, Surface, Brep, GeometryBase. Conversion-only helper hints such as curve[], circle[], double[], int[] only refresh ADD Agent aliases and are not native Rhino port hints." },
-                                index = new { type = "integer", description = "Optional target port index." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "id", "is_input", "action", "summary" }
-                        }
-                    }
-                },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "manage_gh_groups",
-                        description = "Create, update, or ungroup Grasshopper Groups. Use action=create to group component ids, add_to_group/remove_from_group to edit members, and ungroup to delete one or more group objects while leaving their member components on the canvas.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                action = new { type = "string", @enum = new[] { "create", "add_to_group", "remove_from_group", "ungroup" }, description = "Group operation to perform." },
-                                ids = new { type = "array", items = new { type = "string" }, description = "For create/add_to_group/remove_from_group: component ids. For ungroup: optional group ids when ungrouping multiple groups." },
-                                group_id = new { type = "string", description = "Target group id for add_to_group/remove_from_group/ungroup. Public ids such as G01 are accepted." },
-                                name = new { type = "string", description = "Group name when action=create." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "action", "summary" }
-                        }
-                    }
-                },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "modify_gh_port_data",
-                        description = "Modify Grasshopper port data access/tree settings on an existing component. Use only when data matching or list/tree access needs repair.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                id = new { type = "string", description = "Target component public id or GUID." },
-                                is_input = new { type = "boolean", description = "True for input port, false for output port." },
-                                index = new { type = "integer", description = "Target port index." },
-                                operation = new { type = "string", description = "Data operation/access setting to apply." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "id", "is_input", "index", "operation", "summary" }
-                        }
-                    }
-                },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "search_component_library",
-                        description = "Search ADD Agent's local component library by keyword when choosing a Grasshopper component name or category.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                keyword = new { type = "string", description = "Component name, category, or modeling concept to search." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "keyword", "summary" }
-                        }
-                    }
-                },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "search_gh_component_catalog",
-                        description = "Search the Grasshopper component catalog when exact component names or GUIDs are unknown. Use before add/create graph when component identity is uncertain.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                query = new { type = "string", description = "Component name, category, keyword, or modeling operation to search." },
-                                max_results = new { type = "integer", description = "Maximum results to return. Use a small value for focused searches." },
-                                category_contains = new { type = "string", description = "Optional category substring filter." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "query", "summary" }
-                        }
-                    }
-                },
+                ToolSchemaFactory.Function(
+                    "get_gh_components",
+                    "Inspect the current Grasshopper canvas: component ids, names, ports, connections, errors, groups, and script summaries. Use before modifying existing canvas objects.",
+                    new
+                    {
+                        summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                        summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                    },
+                    new[] { "summary" }),
+                ToolSchemaFactory.Function(
+                    "add_gh_component",
+                    "Add one Grasshopper component or value helper. Prefer create_component_graph for creating multiple related components and connections in one step.",
+                    new
+                    {
+                        name = ToolSchemaFactory.String("Grasshopper component name or ADD helper type. Use when component_guid is unknown."),
+                        component_guid = ToolSchemaFactory.String("Exact Grasshopper component GUID when known. Prefer this over ambiguous names."),
+                        x = ToolSchemaFactory.Number("Canvas X coordinate."),
+                        y = ToolSchemaFactory.Number("Canvas Y coordinate."),
+                        label = ToolSchemaFactory.String("Optional display nickname for the created component/helper."),
+                        graph_mapper_type = ToolSchemaFactory.String("Optional Graph Mapper type when creating or configuring a graph mapper."),
+                        value = ToolSchemaFactory.String("Optional initial value for sliders, panels, value lists, or other value helpers."),
+                        min = ToolSchemaFactory.Number("Optional slider or graph mapper minimum."),
+                        max = ToolSchemaFactory.Number("Optional slider or graph mapper maximum."),
+                        decimals = ToolSchemaFactory.Integer("Optional numeric precision for slider-like helpers."),
+                        summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                        summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                    },
+                    new[] { "x", "y", "summary" }),
+                ToolSchemaFactory.Function(
+                    "connect_gh_components",
+                    "Connect output and input ports between existing Grasshopper components. Use ids from get_gh_components or aliases from a batch creation result.",
+                    new
+                    {
+                        from_id = ToolSchemaFactory.String("Source component public id or GUID."),
+                        from_index = ToolSchemaFactory.Integer("Source output port index. Defaults to 0 when omitted."),
+                        from_port_label = ToolSchemaFactory.String("Optional source port label to resolve when index is ambiguous."),
+                        to_id = ToolSchemaFactory.String("Target component public id or GUID."),
+                        to_index = ToolSchemaFactory.Integer("Target input port index. Defaults to 0 when omitted."),
+                        to_port_label = ToolSchemaFactory.String("Optional target port label to resolve when index is ambiguous."),
+                        summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                        summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                    },
+                    new[] { "from_id", "to_id", "summary" }),
+                ToolSchemaFactory.Function(
+                    "remove_gh_component",
+                    "Remove one existing Grasshopper component or group by id. Inspect first when the target id is uncertain.",
+                    new
+                    {
+                        id = ToolSchemaFactory.String("Component/group public id or GUID to remove."),
+                        summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                        summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                    },
+                    new[] { "id", "summary" }),
+                ToolSchemaFactory.Function(
+                    "set_gh_component_value",
+                    "Set value/configuration on an existing GH helper component such as Slider, Panel, Value List, Boolean Toggle, or Graph Mapper. Do not use to edit C# Script source.",
+                    new
+                    {
+                        id = ToolSchemaFactory.String("Target component public id or GUID."),
+                        value = ToolSchemaFactory.String("Value to apply. Format depends on target helper type."),
+                        property = ToolSchemaFactory.String("Optional property name when changing a specific setting instead of the main value."),
+                        graph_mapper_type = ToolSchemaFactory.String("Optional Graph Mapper type to apply."),
+                        min = ToolSchemaFactory.Number("Optional slider/mapper minimum."),
+                        max = ToolSchemaFactory.Number("Optional slider/mapper maximum."),
+                        decimals = ToolSchemaFactory.Integer("Optional numeric precision for slider-like helpers."),
+                        summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                        summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                    },
+                    new[] { "id", "summary" }),
+                ToolSchemaFactory.Function(
+                    "remove_gh_connection",
+                    "Remove one wire between two existing Grasshopper component ports.",
+                    new
+                    {
+                        from_id = ToolSchemaFactory.String("Source component public id or GUID."),
+                        from_index = ToolSchemaFactory.Integer("Source output port index."),
+                        to_id = ToolSchemaFactory.String("Target component public id or GUID."),
+                        to_index = ToolSchemaFactory.Integer("Target input port index."),
+                        summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                        summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                    },
+                    new[] { "from_id", "from_index", "to_id", "to_index", "summary" }),
+                GetCreateComponentGraphToolDefinition(),
+                ToolSchemaFactory.Function(
+                    "recompute_gh_canvas",
+                    "Recompute the active Grasshopper document after edits and update runtime state/errors.",
+                    new
+                    {
+                        summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                        summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                    },
+                    new[] { "summary" }),
+                ToolSchemaFactory.Function(
+                    "gh_native_script_editor",
+                    "Fallback native script editor integration for an existing script component. Prefer create_csharp_script_component for new scripts and edit_csharp_script_component for normal C# body edits.",
+                    new
+                    {
+                        id = ToolSchemaFactory.String("Target script component public id or GUID."),
+                        mode = ToolSchemaFactory.String("Editor action/mode requested."),
+                        code = ToolSchemaFactory.String("Script source when the selected mode writes code."),
+                        language = ToolSchemaFactory.String("Script language, normally csharp."),
+                        summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                        summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                    },
+                    new[] { "id", "mode", "summary" }),
+                ToolSchemaFactory.Function(
+                    "check_gh_errors",
+                    "Check Grasshopper runtime errors, warnings, invalid components, and script compilation/runtime issues. Use after creating or editing canvas logic.",
+                    new
+                    {
+                        summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                        summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                    },
+                    new[] { "summary" }),
+                ToolSchemaFactory.Function(
+                    "set_gh_component_status",
+                    "Set preview and/or enabled state for one Grasshopper component.",
+                    new
+                    {
+                        id = ToolSchemaFactory.String("Target component public id or GUID."),
+                        preview = ToolSchemaFactory.Boolean("Optional preview visibility state."),
+                        enabled = ToolSchemaFactory.Boolean("Optional enabled/disabled state."),
+                        summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                        summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                    },
+                    new[] { "id", "summary" }),
+                ToolSchemaFactory.Function(
+                    "set_all_csharp_script_previews",
+                    "Set preview state for all C# Script components. Useful before visual review to show or hide script-generated geometry.",
+                    new
+                    {
+                        preview = ToolSchemaFactory.Boolean("Preview state to apply to all C# Script components."),
+                        summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                        summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                    },
+                    new[] { "preview", "summary" }),
+                ToolSchemaFactory.Function(
+                    "modify_gh_component_ports",
+                    "Fallback tool to add, remove, or rename dynamic component ports. For normal C# creation, prefer create_csharp_script_component; use this only to repair an existing variable-parameter component.",
+                    new
+                    {
+                        id = ToolSchemaFactory.String("Target component public id or GUID."),
+                        is_input = ToolSchemaFactory.Boolean("True for input ports, false for output ports."),
+                        action = ToolSchemaFactory.String("Port operation, such as add, remove, rename, or set_type."),
+                        port_name = ToolSchemaFactory.String("Port name involved in the operation."),
+                        type_hint = ToolSchemaFactory.String("Optional when adding a C# Script port. Prefer Rhino C# Script menu names such as bool, int, string, double, Point3d, Point3dList, Vector3d, Plane, Line, Circle, Arc, Curve, Mesh, Surface, Brep, GeometryBase. Conversion-only helper hints such as curve[], circle[], double[], int[] only refresh ADD Agent aliases and are not native Rhino port hints."),
+                        index = ToolSchemaFactory.Integer("Optional target port index."),
+                        summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                        summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                    },
+                    new[] { "id", "is_input", "action", "summary" }),
+                ToolSchemaFactory.Function(
+                    "manage_gh_groups",
+                    "Create, update, or ungroup Grasshopper Groups. Use action=create to group component ids, add_to_group/remove_from_group to edit members, and ungroup to delete one or more group objects while leaving their member components on the canvas.",
+                    new
+                    {
+                        action = new { type = "string", @enum = new[] { "create", "add_to_group", "remove_from_group", "ungroup" }, description = "Group operation to perform." },
+                        ids = ToolSchemaFactory.StringArray("For create/add_to_group/remove_from_group: component ids. For ungroup: optional group ids when ungrouping multiple groups."),
+                        group_id = ToolSchemaFactory.String("Target group id for add_to_group/remove_from_group/ungroup. Public ids such as G01 are accepted."),
+                        name = ToolSchemaFactory.String("Group name when action=create."),
+                        summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                        summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                    },
+                    new[] { "action", "summary" }),
+                ToolSchemaFactory.Function(
+                    "modify_gh_port_data",
+                    "Modify Grasshopper port data access/tree settings on an existing component. Use only when data matching or list/tree access needs repair.",
+                    new
+                    {
+                        id = ToolSchemaFactory.String("Target component public id or GUID."),
+                        is_input = ToolSchemaFactory.Boolean("True for input port, false for output port."),
+                        index = ToolSchemaFactory.Integer("Target port index."),
+                        operation = ToolSchemaFactory.String("Data operation/access setting to apply."),
+                        summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                        summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                    },
+                    new[] { "id", "is_input", "index", "operation", "summary" }),
+                ToolSchemaFactory.Function(
+                    "search_component_library",
+                    "Search ADD Agent's local component library by keyword when choosing a Grasshopper component name or category.",
+                    new
+                    {
+                        keyword = ToolSchemaFactory.String("Component name, category, or modeling concept to search."),
+                        summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                        summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                    },
+                    new[] { "keyword", "summary" }),
+                ToolSchemaFactory.Function(
+                    "search_gh_component_catalog",
+                    "Search the Grasshopper component catalog when exact component names or GUIDs are unknown. Use before add/create graph when component identity is uncertain.",
+                    new
+                    {
+                        query = ToolSchemaFactory.String("Component name, category, keyword, or modeling operation to search."),
+                        max_results = ToolSchemaFactory.Integer("Maximum results to return. Use a small value for focused searches."),
+                        category_contains = ToolSchemaFactory.String("Optional category substring filter."),
+                        summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                        summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                    },
+                    new[] { "query", "summary" }),
                 GetWebResearchToolDefinition(),
                 GetQueryGhComponentsToolDefinition(),
                 GetComponentContextToolDefinition(),
@@ -408,6 +251,50 @@ namespace ADDGH
                 ShowPlanStepsTool.GetApiToolDefinition()
             };
             return BuildAgentToolSurface(toolDefinitions);
+        }
+
+        private static object GetCreateComponentGraphToolDefinition()
+        {
+            var componentSchema = ToolSchemaFactory.Object(
+                new
+                {
+                    alias_id = ToolSchemaFactory.String("Temporary unique id used by connections in this same batch."),
+                    name = ToolSchemaFactory.String("Grasshopper component name or helper type."),
+                    component_guid = ToolSchemaFactory.String("Exact Grasshopper component GUID when known."),
+                    label = ToolSchemaFactory.String("Optional display nickname."),
+                    x = ToolSchemaFactory.Number("Canvas X coordinate."),
+                    y = ToolSchemaFactory.Number("Canvas Y coordinate."),
+                    value = ToolSchemaFactory.String("Optional initial helper value."),
+                    graph_mapper_type = ToolSchemaFactory.String("Optional Graph Mapper type."),
+                    min = ToolSchemaFactory.Number("Optional slider/mapper minimum."),
+                    max = ToolSchemaFactory.Number("Optional slider/mapper maximum."),
+                    decimals = ToolSchemaFactory.Integer("Optional numeric precision.")
+                },
+                new[] { "alias_id", "x", "y" });
+
+            var connectionSchema = ToolSchemaFactory.Object(
+                new
+                {
+                    from_alias = ToolSchemaFactory.String("Source component alias_id from this batch."),
+                    from_index = ToolSchemaFactory.Integer("Source output port index."),
+                    to_alias = ToolSchemaFactory.String("Target component alias_id from this batch."),
+                    to_index = ToolSchemaFactory.Integer("Target input port index.")
+                },
+                new[] { "from_alias", "from_index", "to_alias", "to_index" });
+
+            return ToolSchemaFactory.Function(
+                "create_component_graph",
+                "Batch-create a Grasshopper graph from component definitions and connections. Prefer this over repeated add/connect calls for new multi-component workflows.",
+                new
+                {
+                    components = ToolSchemaFactory.Array(componentSchema),
+                    connections = ToolSchemaFactory.Array(connectionSchema),
+                    group_name = ToolSchemaFactory.String("Optional group name for created components."),
+                    auto_group = ToolSchemaFactory.Boolean("Whether to place created components into an automatic group."),
+                    summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                    summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                },
+                new[] { "components", "connections", "summary" });
         }
 
         private static object GetCreateScriptComponentGraphToolDefinition()
