@@ -340,3 +340,19 @@ ADDGH\bin\Debug\net48\ADDGH.gha
 - CSharpFirst 模式下 `add_gh_component`、`set_gh_component_value`、`modify_gh_component_ports` 的描述仍按旧逻辑收窄。
 
 这一步让 `ChatWindow.ToolDefinitions.cs` 更接近“只定义工具 schema”，不再承担 mode policy。
+
+## 12. 2026-06-15 追加落地：ToolSchemaFactory 第一批迁移
+
+本轮开始迁移工具 schema 生成：
+
+- `ADDGH/Agent/ToolSchemaFactory.cs` 新增基础 schema helper：`String`、`Integer`、`Number`、`Boolean`、`StringArray`。
+- `ChatWindow.ToolDefinitions.cs` 中 `web_research`、`read_skill_file`、`read_reference_json` 改为通过 `ToolSchemaFactory.Function(...)` 生成。
+- 三个工具的名称、描述、参数字段、required 字段保持原语义。
+- 新 factory 输出带 `additionalProperties=false`，开始向更严格、稳定的 schema 过渡。
+
+后续可按同样方式继续迁移：
+
+1. `import_reference_gh`、`create_gh_skill`;
+2. `query_gh_components`、`get_component_context`、`read_component_script`;
+3. C# Script 创建/编辑工具；
+4. GH canvas mutation 工具。

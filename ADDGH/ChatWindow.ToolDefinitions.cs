@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using ADDGH.Agent;
 using Newtonsoft.Json.Linq;
 
 namespace ADDGH
@@ -395,27 +396,7 @@ namespace ADDGH
                         }
                     }
                 },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "web_research",
-                        description = "Search or open web documentation/current information when local knowledge is insufficient or the user asks for latest/external information. For RhinoCommon/Grasshopper API signature lookup, prefer mode=api_pipeline before generic search.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                mode = new { type = "string", description = "Research mode: api_pipeline for RhinoCommon/Grasshopper API lookup, search for general web search, or fetch for a known URL." },
-                                query = new { type = "string", description = "Search/API query. For api_pipeline include candidate type/method names and concept words, for example Brep.CreateFromRevolution surface of revolution." },
-                                url = new { type = "string", description = "Direct URL when mode=fetch." },
-                                allowed_domains = new { type = "array", items = new { type = "string" }, description = "Optional domain allowlist for focused/official-source research." },
-                                max_results = new { type = "integer", description = "Maximum search results to retrieve." },
-                                max_chars = new { type = "integer", description = "Maximum returned text characters; keep modest unless detailed source context is required." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "summary" }
-                        }
-                    }
-                },
+                GetWebResearchToolDefinition(),
                 new {
                     type = "function",
                     function = new {
@@ -492,38 +473,8 @@ namespace ADDGH
                         }
                     }
                 },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "read_skill_file",
-                        description = "Load the full body of one relevant skill by file name or skill id. Use only after the skill summary indicates relevance; do not bulk-read unrelated skills.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                file_name = new { type = "string", description = "Skill file name or id from the skill summary, for example official_x.md or trained_example.md." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "file_name", "summary" }
-                        }
-                    }
-                },
-                new {
-                    type = "function",
-                    function = new {
-                        name = "read_reference_json",
-                        description = "Read one saved reference JSON from the reference directory after deciding it is relevant from the reference index or user selection.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                file_name = new { type = "string", description = "Reference JSON file name under reference/. .json is optional." },
-                                summary = new { type = "string", description = ToolSummaryDescription },
-                                summary_detail = new { type = "string", description = ToolSummaryDetailDescription }
-                            },
-                            required = new[] { "file_name", "summary" }
-                        }
-                    }
-                },
+                GetReadSkillFileToolDefinition(),
+                GetReadReferenceJsonToolDefinition(),
                 new {
                     type = "function",
                     function = new {
@@ -641,6 +592,53 @@ namespace ADDGH
                     }
                 }
             };
+        }
+
+        private static object GetWebResearchToolDefinition()
+        {
+            return ToolSchemaFactory.Function(
+                "web_research",
+                "Search or open web documentation/current information when local knowledge is insufficient or the user asks for latest/external information. For RhinoCommon/Grasshopper API signature lookup, prefer mode=api_pipeline before generic search.",
+                new
+                {
+                    mode = ToolSchemaFactory.String("Research mode: api_pipeline for RhinoCommon/Grasshopper API lookup, search for general web search, or fetch for a known URL."),
+                    query = ToolSchemaFactory.String("Search/API query. For api_pipeline include candidate type/method names and concept words, for example Brep.CreateFromRevolution surface of revolution."),
+                    url = ToolSchemaFactory.String("Direct URL when mode=fetch."),
+                    allowed_domains = ToolSchemaFactory.StringArray("Optional domain allowlist for focused/official-source research."),
+                    max_results = ToolSchemaFactory.Integer("Maximum search results to retrieve."),
+                    max_chars = ToolSchemaFactory.Integer("Maximum returned text characters; keep modest unless detailed source context is required."),
+                    summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                    summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                },
+                new[] { "summary" });
+        }
+
+        private static object GetReadSkillFileToolDefinition()
+        {
+            return ToolSchemaFactory.Function(
+                "read_skill_file",
+                "Load the full body of one relevant skill by file name or skill id. Use only after the skill summary indicates relevance; do not bulk-read unrelated skills.",
+                new
+                {
+                    file_name = ToolSchemaFactory.String("Skill file name or id from the skill summary, for example official_x.md or trained_example.md."),
+                    summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                    summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                },
+                new[] { "file_name", "summary" });
+        }
+
+        private static object GetReadReferenceJsonToolDefinition()
+        {
+            return ToolSchemaFactory.Function(
+                "read_reference_json",
+                "Read one saved reference JSON from the reference directory after deciding it is relevant from the reference index or user selection.",
+                new
+                {
+                    file_name = ToolSchemaFactory.String("Reference JSON file name under reference/. .json is optional."),
+                    summary = ToolSchemaFactory.String(ToolSummaryDescription),
+                    summary_detail = ToolSchemaFactory.String(ToolSummaryDetailDescription)
+                },
+                new[] { "file_name", "summary" });
         }
 
         private static object GetCreateCSharpScriptComponentToolDefinition()
